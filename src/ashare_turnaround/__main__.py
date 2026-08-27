@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import sys
@@ -25,7 +26,7 @@ from .datasets.production import (
     write_production_validation_report,
 )
 from .datasets.specs import get_dataset_spec
-from .datasets.sync import sample_request_plan, sync_sample
+from .datasets.sync import sample_request_plan, sync_daily, sync_sample
 from .dates import normalize_date_series
 from .pit.financial import (
     canonicalize_financial_frame,
@@ -35,8 +36,24 @@ from .pit.financial import (
     validate_revision_candidate,
 )
 from .providers.tushare import TushareProvider
+from .scanner.daily import (
+    compare_scan_snapshots,
+    read_scan_snapshot,
+    scan_data,
+    write_scan_snapshot,
+)
+from .scanner.evaluation import EvaluationConfig, evaluate_scans, run_ablation
+from .scanner.replay import ReplayConfig, run_replay, write_replay_artifacts
+from .scanner.report import write_candidate_reports
 from .storage.guards import check_disk_space
-from .storage.inventory import build_raw_manifest, format_inventory, write_raw_manifest
+from .storage.inventory import (
+    build_coverage_report,
+    build_raw_manifest,
+    format_coverage,
+    format_inventory,
+    write_coverage_report,
+    write_raw_manifest,
+)
 from .storage.parquet import RawParquetStore
 from .storage.planning import build_capacity_plan, write_capacity_plan
 from .storage.state import BootstrapCheckpointStore, SyncStateStore
@@ -125,6 +142,46 @@ def _parser() -> argparse.ArgumentParser:
 
     inventory = subparsers.add_parser("inventory", help="inventory raw Parquet and write manifest")
     inventory.add_argument("--manifest", default="data/state/raw-manifest.json")
+    inventory.add_argument("--coverage", default="data/state/data-coverage.json")
+    inventory.add_argument("--as-of", default=None, help="bound expected trading-date coverage")
+
+    daily = subparsers.add_parser("sync-daily", help="synchronize one requested trading date")
+    daily.add_argument("--date", dest="requested_date", default=None)
+    daily.add_argument("--page-size", type=int, default=5000)
+    daily.add_argument("--max-pages", type=int, default=100)
+
+    replay = subparsers.add_parser("replay", help="run the scanner at a historical as-of date")
+    replay.add_argument("--data-dir", default="data")
+    replay.add_argument("--as-of", required=True)
+    replay.add_argument("--top", type=int, default=20)
+
+    scan = subparsers.add_parser("scan", help="run and persist the daily Top-N scanner")
+    scan.add_argument("--data-dir", default="data")
+    scan.add_argument("--as-of", default=None)
+    scan.add_argument("--top", type=int, default=20)
+
+    compare = subparsers.add_parser("scan-compare", help="compare two persisted scanner snapshots")
+    compare.add_argument("left")
+    compare.add_argument("right")
+
+    evaluate = subparsers.add_parser("evaluate", help="evaluate frozen scanner snapshots")
+    evaluate.add_argument("--scans", nargs="+", required=True)
+    evaluate.add_argument("--data-dir", default="data")
+    evaluate.add_argument("--benchmark-code", default=None)
+    evaluate.add_argument("--horizons", nargs="+", type=int, default=[20, 60, 120, 250])
+    evaluate.add_argument("--report", default="data/reports/evaluation.json")
+
+    ablate = subparsers.add_parser("ablate", help="compare feature-group ranking variants")
+    ablate.add_argument("variants", nargs="+", help="variant=path.parquet")
+    ablate.add_argument("--top", type=int, default=20)
+    ablate.add_argument("--report", default="data/reports/ablation.json")
+
+    report = subparsers.add_parser("report", help="generate deterministic candidate reports")
+    report.add_argument("--data-dir", default="data")
+    report.add_argument("--as-of", required=True)
+    report.add_argument("--top", type=int, default=20)
+    report.add_argument("--code", action="append", default=None)
+    report.add_argument("--directory", default="data/reports")
     return parser
 
 
@@ -407,9 +464,196 @@ def _inventory(args: argparse.Namespace) -> int:
     settings.ensure_data_dirs()
     manifest = build_raw_manifest(settings.data_dir)
     write_raw_manifest(manifest, args.manifest)
+    coverage = build_coverage_report(settings.data_dir, as_of_date=args.as_of)
+    write_coverage_report(coverage, args.coverage)
     print(format_inventory(manifest))
     print(f"manifest={args.manifest}")
+    print(format_coverage(coverage))
+    print(f"coverage={args.coverage}")
+    return 2 if any(value.status == "FAIL" for value in coverage.datasets) else 0
+
+
+def _sync_daily(args: argparse.Namespace) -> int:
+    settings = load_settings()
+    if not settings.token_configured:
+        print("TUSHARE_TOKEN is not configured; sync-daily was not run", file=sys.stderr)
+        return 2
+    settings.ensure_data_dirs()
+    provider = TushareProvider(
+        settings.token or "",
+        settings.base_url,
+        timeout=settings.timeout,
+        max_retries=settings.max_retries,
+        backoff_seconds=settings.backoff_seconds,
+        backoff_jitter_seconds=settings.backoff_jitter_seconds,
+    )
+    requested = args.requested_date or pd.Timestamp.now().strftime("%Y%m%d")
+    store = RawParquetStore(settings.data_dir)
+    state = SyncStateStore(settings.data_dir / "state" / "sync-log.json", secret=settings.token)
+    try:
+        summary = sync_daily(
+            provider,
+            store,
+            state,
+            requested_date=requested,
+            page_size=args.page_size,
+            max_pages=args.max_pages,
+        )
+    except (ValueError, RuntimeError) as exc:
+        print(f"sync-daily failed: {exc}", file=sys.stderr)
+        return 2
+    print(
+        f"requested_date={summary.requested_date} effective_date={summary.effective_date or '-'} "
+        f"status={summary.status}"
+    )
+    for result in summary.results:
+        error = f" error={result.error}" if result.error else ""
+        print(f"{result.dataset} {result.status} rows={result.rows}{error}")
+    return 2 if summary.failures or summary.status == "partial" else 0
+
+
+def _replay(args: argparse.Namespace) -> int:
+    try:
+        result = run_replay(
+            args.data_dir,
+            as_of_date=args.as_of,
+            config=ReplayConfig(top_n=args.top),
+        )
+        data_path, metadata_path = write_replay_artifacts(
+            result,
+            Path(args.data_dir) / "derived" / "replays",
+        )
+    except (OSError, ValueError, KeyError, RuntimeError) as exc:
+        print(f"replay failed: {exc}", file=sys.stderr)
+        return 2
+    print(
+        f"replay_status={result.status} as_of={result.as_of_date} candidates={len(result.ranked)}"
+    )
+    print(f"replay_data={data_path}")
+    print(f"replay_metadata={metadata_path}")
+    for warning in result.warnings:
+        print(f"warning={warning}")
+    return 0 if result.status == "PASS" else 2
+
+
+def _scan(args: argparse.Namespace) -> int:
+    try:
+        snapshot = scan_data(
+            args.data_dir,
+            as_of_date=args.as_of,
+            top_n=args.top,
+        )
+        snapshot = write_scan_snapshot(
+            snapshot, args.data_dir
+        )
+    except (OSError, ValueError, KeyError, RuntimeError) as exc:
+        print(f"scan failed: {exc}", file=sys.stderr)
+        return 2
+    result = snapshot.result
+    print(f"scan_status={result.status} as_of={result.as_of_date} candidates={len(result.ranked)}")
+    if snapshot.data_path:
+        print(f"snapshot={snapshot.data_path}")
+    if snapshot.metadata_path:
+        print(f"metadata={snapshot.metadata_path}")
+    return 0 if result.status == "PASS" else 2
+
+
+def _scan_compare(args: argparse.Namespace) -> int:
+    try:
+        compared = compare_scan_snapshots(
+            read_scan_snapshot(args.left), read_scan_snapshot(args.right)
+        )
+    except (OSError, ValueError) as exc:
+        print(f"scan-compare failed: {exc}", file=sys.stderr)
+        return 2
+    print(
+        compared.to_json(orient="records", force_ascii=False, indent=2)
+        if not compared.empty
+        else "[]"
+    )
     return 0
+
+
+def _evaluate(args: argparse.Namespace) -> int:
+    try:
+        scans = pd.concat(
+            (read_scan_snapshot(path) for path in args.scans), ignore_index=True, sort=False
+        )
+        store = RawParquetStore(args.data_dir)
+        result = evaluate_scans(
+            scans,
+            store.read("daily"),
+            config=EvaluationConfig(
+                horizons=tuple(args.horizons),
+                benchmark_code=args.benchmark_code,
+            ),
+            stock_basic=store.read("stock_basic"),
+        )
+        destination = Path(args.report)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(
+            json.dumps(
+                {
+                    "config_version": result.config_version,
+                    "status": result.status,
+                    "warnings": list(result.warnings),
+                    "summary": result.summary.to_dict(orient="records"),
+                    "observations": result.observations.to_dict(orient="records"),
+                },
+                ensure_ascii=False,
+                indent=2,
+                default=str,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    except (OSError, ValueError, KeyError, RuntimeError) as exc:
+        print(f"evaluate failed: {exc}", file=sys.stderr)
+        return 2
+    print(f"evaluation_status={result.status} report={args.report}")
+    return 0 if result.status == "PASS" else 2
+
+
+def _ablate(args: argparse.Namespace) -> int:
+    variants: dict[str, pd.DataFrame] = {}
+    try:
+        for item in args.variants:
+            name, separator, path = item.partition("=")
+            if not separator or not name or not path:
+                raise ValueError("variants must use name=path format")
+            variants[name] = read_scan_snapshot(path)
+        result = run_ablation(variants, top_n=args.top)
+        destination = Path(args.report)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(
+            json.dumps(result.to_dict(orient="records"), ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    except (OSError, ValueError, KeyError) as exc:
+        print(f"ablate failed: {exc}", file=sys.stderr)
+        return 2
+    print(f"ablation_rows={len(result)} report={args.report}")
+    return 0
+
+
+def _report(args: argparse.Namespace) -> int:
+    try:
+        result = run_replay(
+            args.data_dir,
+            as_of_date=args.as_of,
+            config=ReplayConfig(top_n=args.top),
+        )
+        json_path, markdown_path = write_candidate_reports(
+            result,
+            args.directory,
+            codes=tuple(args.code) if args.code else None,
+        )
+    except (OSError, ValueError, KeyError, RuntimeError) as exc:
+        print(f"report failed: {exc}", file=sys.stderr)
+        return 2
+    print(f"report_json={json_path}")
+    print(f"report_markdown={markdown_path}")
+    return 0 if result.status == "PASS" else 2
 
 
 def _synthetic_pit_frame() -> pd.DataFrame:
@@ -814,6 +1058,13 @@ def main(argv: list[str] | None = None) -> int:
         "validate-vip-production": _validate_vip_production,
         "bootstrap-financials": _bootstrap_financials,
         "inventory": _inventory,
+        "sync-daily": _sync_daily,
+        "replay": _replay,
+        "scan": _scan,
+        "scan-compare": _scan_compare,
+        "evaluate": _evaluate,
+        "ablate": _ablate,
+        "report": _report,
     }
     try:
         return handlers[args.command](args)
