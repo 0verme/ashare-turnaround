@@ -33,7 +33,7 @@ replay / daily snapshot / evaluation / report
 | #11 | Trend, persistence, acceleration | `features.trend.compute_trend_features` |
 | #12 | Quality gate and false-turnaround flags | `features.quality.compute_quality_features` |
 | #13 | Low-attention proxies | `features.market.compute_attention_features` |
-| #14 | Low-expectation/crowding proxies | `features.market.compute_crowding_features` |
+| #14 | Low-expectation/crowding proxies | `features.market.compute_crowding_features` (v2 benchmark-relative, see `docs/expectation-crowding-v2.md`) |
 | #15 | Weighted transparent score | `scanner.score.score_feature_vector` |
 | #16 | Historical PIT replay | `scanner.replay.run_replay` |
 | #17 | Forward evaluation | `scanner.evaluation.evaluate_scans` |
