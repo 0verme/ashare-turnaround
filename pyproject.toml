@@ -30,6 +30,9 @@ where = ["src"]
 [tool.pytest.ini_options]
 addopts = "-ra"
 testpaths = ["tests"]
+markers = [
+  "integration: opt-in tests against a configured Tushare-compatible endpoint",
+]
 
 [tool.ruff]
 line-length = 100
