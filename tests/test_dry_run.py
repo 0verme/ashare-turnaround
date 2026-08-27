@@ -51,3 +51,39 @@ def test_sync_sample_dry_run_rejects_nonpositive_page_bound(tmp_path, capsys) ->
     assert result == 2
     assert "must be positive" in output.err
     assert not (tmp_path / "data").exists()
+
+
+def test_bootstrap_financials_dry_run_reports_plan_without_contacting_source(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ASHARE_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.delenv("TUSHARE_TOKEN", raising=False)
+
+    def provider_must_not_be_constructed(*_: object, **__: object) -> None:
+        raise AssertionError("dry-run constructed a provider")
+
+    monkeypatch.setattr(__main__, "TushareProvider", provider_must_not_be_constructed)
+
+    result = __main__.main(
+        [
+            "bootstrap-financials",
+            "--dry-run",
+            "--dataset",
+            "balancesheet",
+            "--start-year",
+            "2024",
+            "--end-year",
+            "2024",
+        ]
+    )
+
+    output = capsys.readouterr()
+    assert result == 0
+    assert "Historical bootstrap dry-run" in output.out
+    assert "datasets=balancesheet" in output.out
+    assert "periods=4" in output.out
+    assert "workers=" in output.out
+    assert "requests_planned=4" in output.out
+    # The dry-run is side-effect free: no provider, no local directories.
+    assert not (tmp_path / "data").exists()
