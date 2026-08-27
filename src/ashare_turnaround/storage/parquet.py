@@ -146,6 +146,48 @@ class RawParquetStore:
         )
         return [self._atomic_write(path, output)]
 
+    def write_incremental(
+        self,
+        dataset: str,
+        frame: pd.DataFrame,
+        spec: DatasetSpec | None = None,
+        *,
+        retrieved_at: str | None = None,
+        source: str | None = None,
+    ) -> list[StoredFile]:
+        """Merge an incremental fetch into deterministic partitions atomically.
+
+        Daily jobs may receive only newly disclosed rows while financial data is
+        partitioned by year.  Replacing a year partition with the small fetch
+        would lose history, so this method merges by the declared raw identity
+        and keeps the newest copy of an exact identity.
+        """
+
+        selected_spec = spec or get_dataset_spec(dataset)
+        if selected_spec.name != dataset:
+            raise ValueError("spec.name must match dataset")
+        if not isinstance(frame, pd.DataFrame):
+            raise TypeError("frame must be a pandas DataFrame")
+        output = frame.reset_index(drop=True).copy()
+        if retrieved_at is not None:
+            output["retrieved_at"] = retrieved_at
+        if source is not None:
+            output["source"] = source
+        if output.empty:
+            return []
+
+        stored: list[StoredFile] = []
+        for partition, chunk in self._partitions(output, selected_spec):
+            path = self._partition_path(dataset, selected_spec, partition)
+            if path.exists():
+                existing = pd.read_parquet(path)
+                chunk = pd.concat([existing, chunk], ignore_index=True, sort=False)
+            keys = list(selected_spec.primary_keys)
+            if keys and set(keys).issubset(chunk.columns):
+                chunk = chunk.drop_duplicates(keys, keep="last", ignore_index=True)
+            stored.append(self._atomic_write(path, chunk))
+        return stored
+
     def period_file(self, dataset: str, period: str) -> Path:
         """Return the deterministic period path used by bootstrap checkpoints."""
 
@@ -235,7 +277,10 @@ class RawParquetStore:
             ) as temporary:
                 temporary_path = Path(temporary.name)
             pq.write_table(table, temporary_path, compression="zstd")
-            with temporary_path.open("rb") as written:
+            # Windows does not allow fsync/FlushFileBuffers on a read-only
+            # handle.  Opening the completed file read-write keeps the
+            # durability check portable without changing its contents.
+            with temporary_path.open("r+b") as written:
                 os.fsync(written.fileno())
             os.replace(temporary_path, path)
             # The rename is atomic for readers; fsyncing the parent directory

@@ -26,7 +26,7 @@ Fundamental research must not use information that was published after the histo
 
 ## Current Status
 
-Phase 0 and the Phase 1 foundation are implemented:
+Phase 0/1 and the first complete scanner path are implemented:
 
 - one official Python `tushare` SDK boundary with an optional configurable Base URL;
 - bounded API retries and classified provider errors;
@@ -37,8 +37,15 @@ Phase 0 and the Phase 1 foundation are implemented:
 - financial PIT canonical columns, bounded real revision checks, and synthetic version-chain checks;
 - bounded VIP period probes with schema/PIT-risk evaluation;
 - a cumulative income/cash-flow single-quarter prototype.
+- raw coverage/integrity inventory with missing-partition, duplicate, schema, and
+  checkpoint findings;
+- idempotent date-scoped incremental synchronization for market and disclosure
+  data;
+- a PIT-safe investable universe, independent feature groups, transparent scoring,
+  historical replay, forward evaluation, ablation comparison, and provenance-first
+  candidate reports.
 
-The live source validation report is at [docs/data-source-validation.md](docs/data-source-validation.md), the VIP assessment is at [docs/vip-api-evaluation.md](docs/vip-api-evaluation.md), and the PIT evidence is at [docs/pit-field-mapping.md](docs/pit-field-mapping.md) and [docs/pit-validation.md](docs/pit-validation.md). No full-market historical bootstrap, factors, scanner, dashboard, or trading code is included in this phase.
+The live source validation report is at [docs/data-source-validation.md](docs/data-source-validation.md), the VIP assessment is at [docs/vip-api-evaluation.md](docs/vip-api-evaluation.md), and the PIT evidence is at [docs/pit-field-mapping.md](docs/pit-field-mapping.md) and [docs/pit-validation.md](docs/pit-validation.md). The scanner contracts and issue-to-module mapping are documented in [docs/scanner-contracts.md](docs/scanner-contracts.md). Full-market historical bootstrap remains an explicit, resumable operation; tests use synthetic fixtures and local Parquet only.
 
 ## Architecture
 
@@ -47,6 +54,10 @@ The live source validation report is at [docs/data-source-validation.md](docs/da
 - `src/ashare_turnaround/storage/` — local Parquet and JSON sync state.
 - `src/ashare_turnaround/query/` — in-process DuckDB access.
 - `src/ashare_turnaround/pit/` — financial normalization and as-of selection.
+- `src/ashare_turnaround/features/` — independent fundamental, trend, quality,
+  attention, and crowding feature groups.
+- `src/ashare_turnaround/scanner/` — universe, score, replay, daily snapshot,
+  evaluation, ablation, and explainable report workflows.
 - `data/` — local runtime data; raw/derived/state/reports are ignored by Git.
 
 ## Development
@@ -68,6 +79,12 @@ The minimal CLI is:
 .venv/bin/python -m ashare_turnaround sync-sample --dry-run
 .venv/bin/python -m ashare_turnaround sync-sample
 .venv/bin/python -m ashare_turnaround pit-check
+.venv/bin/python -m ashare_turnaround inventory --as-of 20250630
+.venv/bin/python -m ashare_turnaround sync-daily --date 20250630
+.venv/bin/python -m ashare_turnaround replay --as-of 20250630 --top 20
+.venv/bin/python -m ashare_turnaround scan --top 20
+.venv/bin/python -m ashare_turnaround evaluate --scans data/derived/scans/scan-20250630.parquet
+.venv/bin/python -m ashare_turnaround report --as-of 20250630
 ```
 
 `sync-sample --dry-run` only renders the bounded request plan. It does not
@@ -75,6 +92,13 @@ construct a provider, contact the remote endpoint, create data directories, or
 change Parquet/state files. Paginated reads fail closed when a page bound is
 exhausted or a duplicate page is observed; a failed sample request never
 replaces an existing dataset partition.
+
+`sync-daily` records every dataset outcome as `success`, `not_due`, `pending`,
+`partial`, or `failed`. Empty or pagination-incomplete responses are not treated
+as complete data. `replay` and `scan` accept an explicit `--as-of` for historical
+reproduction; omitting it from `scan` selects the latest open date in the local
+trade calendar. Evaluation reads only prices strictly after each frozen scan
+date.
 
 ## Data Source
 
