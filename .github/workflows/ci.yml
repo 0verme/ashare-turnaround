@@ -1,0 +1,53 @@
+name: CI
+
+# Quality gates for pull requests and the main branch.
+# Fail-closed: the same commands documented for local development run in an
+# isolated runner. Live Tushare validation stays opt-in (ASHARE_RUN_INTEGRATION)
+# so CI never depends on a real TUSHARE_TOKEN, a .env file, or production data.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Quality gates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install package and dev dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ".[dev]"
+
+      - name: Ruff
+        run: ruff check .
+
+      - name: Compile
+        run: python -m compileall -q src tests
+
+      - name: Pytest
+        run: python -m pytest -ra
+        env:
+          # Explicitly opt out of live integration tests. The `integration`
+          # marker requires ASHARE_RUN_INTEGRATION=1 AND a configured token to
+          # run; without both it skips. CI must stay green without secrets.
+          ASHARE_RUN_INTEGRATION: ""
