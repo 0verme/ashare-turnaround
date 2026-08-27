@@ -151,16 +151,32 @@ def build_investable_universe(
         included = True
         name = str(_value(row, "name") or "")
         status = str(_value(row, "list_status", "status") or "L").upper()
+        delist_date = _value(row, "delist_date")
+        parsed_delist = (
+            pd.to_datetime(delist_date, errors="coerce")
+            if delist_date is not None and pd.notna(delist_date)
+            else pd.NaT
+        )
         if settings.exclude_st and name.upper().lstrip("*").startswith("ST"):
             included, reason = False, "st_status"
-        elif settings.exclude_delisting and status not in {"L", "LISTED", "NORMAL"}:
+        elif (
+            settings.exclude_delisting
+            and pd.notna(parsed_delist)
+            and pd.Timestamp(parsed_delist).normalize() <= as_of
+        ):
+            included, reason = False, "delisted_by_as_of"
+        elif settings.exclude_delisting and status in {"D", "DELISTED"} and pd.isna(
+            parsed_delist
+        ):
+            included, reason = False, "delisting_status_missing_date"
+        elif settings.exclude_delisting and status not in {
+            "L",
+            "LISTED",
+            "NORMAL",
+            "D",
+            "DELISTED",
+        }:
             included, reason = False, "delisting_or_non_listed_status"
-        elif settings.exclude_delisting:
-            delist_date = _value(row, "delist_date")
-            if delist_date is not None and pd.notna(delist_date):
-                parsed_delist = pd.to_datetime(delist_date, errors="coerce")
-                if pd.notna(parsed_delist) and pd.Timestamp(parsed_delist).normalize() <= as_of:
-                    included, reason = False, "delisted_by_as_of"
         if included and _is_bse(code, row) and not settings.include_bse:
             included, reason = False, "bse_excluded_by_policy"
         list_date = _value(row, "list_date", "listing_date")
