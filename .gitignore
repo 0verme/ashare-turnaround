@@ -3,25 +3,55 @@
 .env.*
 !.env.example
 
-# Runtime data and local catalogs
+# Local datasets / generated data
+# Keep only directory markers in the repository; runtime contents stay local.
+data/*
+!data/.gitkeep
 data/raw/*
-data/derived/*
-data/state/*
-data/reports/*
 !data/raw/
 !data/raw/.gitkeep
+data/derived/*
 !data/derived/
 !data/derived/.gitkeep
-!data/state/
-!data/state/.gitkeep
+data/reports/*
 !data/reports/
 !data/reports/.gitkeep
-*.duckdb
-*.duckdb.wal
+data/state/*
+!data/state/
+!data/state/.gitkeep
+
+# Root-level data work areas. The source package under src/ remains trackable.
+/datasets/
+/downloads/
+/cache/
+/tmp/
+/raw/
+/staging/
+/warehouse/
+
+# Financial / analytical datasets
 *.parquet
+*.parquet.*
+*.feather
+*.arrow
+*.duckdb
+*.duckdb.*
+*.sqlite
+*.sqlite3
+*.db
+*.db-*
+*.csv
+*.csv.*
+*.jsonl
+*.jsonl.*
+
+# Small checked-in fixtures/samples may be versioned.
+!tests/fixtures/
+!tests/fixtures/**
+!examples/sample/
+!examples/sample/**
 
 # Python
-__pycache__/
 __pycache__/
 *.py[cod]
 *.so
