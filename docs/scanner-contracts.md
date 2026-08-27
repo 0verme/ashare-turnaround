@@ -33,6 +33,7 @@ replay / daily snapshot / evaluation / report
 | #11 | Trend, persistence, acceleration | `features.trend.compute_trend_features` |
 | #12 | Quality gate and false-turnaround flags | `features.quality.compute_quality_features` |
 | #13 | Low-attention proxies | `features.market.compute_attention_features` |
+| #29 | Low-attention v2 calibration (cross-sectional context) | `features.low_attention.compute_low_attention_v2` — research-only; see [docs/low-attention-v2.md](low-attention-v2.md); v1/v2 boundary preserved (production score still reads v1 `attention_score`) |
 | #14 | Low-expectation/crowding proxies | `features.market.compute_crowding_features` |
 | #15 | Weighted transparent score | `scanner.score.score_feature_vector` |
 | #16 | Historical PIT replay | `scanner.replay.run_replay` |
