@@ -9,7 +9,9 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-DEFAULT_BASE_URL = "https://t.xiaodefa.top/"
+# When TUSHARE_BASE_URL is unset, ``None`` defers to the official Tushare SDK
+# default endpoint. No private/compatible endpoint is hard-coded in source.
+DEFAULT_BASE_URL: str | None = None
 DEFAULT_DATA_DIR = Path("./data")
 SOURCE_NAME = "tushare-compatible"
 
@@ -67,8 +69,8 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
         load_dotenv(dotenv_path=dotenv_path, override=False)
 
     token = os.getenv("TUSHARE_TOKEN") or None
-    raw_base_url = os.getenv("TUSHARE_BASE_URL", DEFAULT_BASE_URL)
-    base_url = raw_base_url.strip() or None
+    raw_base_url = os.getenv("TUSHARE_BASE_URL")
+    base_url = (raw_base_url or "").strip() or None
     raw_data_dir = os.getenv("ASHARE_DATA_DIR", str(DEFAULT_DATA_DIR))
 
     return Settings(
