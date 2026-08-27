@@ -131,7 +131,6 @@ def _preflight(_: argparse.Namespace) -> int:
     settings = load_settings()
     print(_settings_without_secret(settings))
     print("provider_client=official tushare Python SDK")
-    print("mcp_data_chain=false")
     return 0
 
 

@@ -71,15 +71,21 @@ The minimal CLI is:
 
 ## Data Source
 
-Production data calls use the official Tushare Python SDK. The SDK client can receive an optional `TUSHARE_BASE_URL` override, so switching to the official endpoint is an environment-only change:
+Production data access uses the official Tushare Python SDK by default.
+
+An optional `TUSHARE_BASE_URL` configuration is available for
+Tushare-compatible endpoints. Leave it unset to use the SDK default endpoint.
 
 ```env
 TUSHARE_TOKEN=
-TUSHARE_BASE_URL=https://t.xiaodefa.top/
+TUSHARE_BASE_URL=
 ASHARE_DATA_DIR=./data
 ```
 
-Copy this to `.env` locally; `.env` and runtime data are ignored. Tokens are never put in reports, logs, fixtures, or Parquet business columns. MCP and a seller-specific HTTP API are not part of the production data chain.
+Copy `.env.example` to `.env` for local development.
+`.env` and runtime data are ignored by Git and must not be committed.
+Tokens and private endpoint configuration are never written to reports, logs,
+fixtures, or Parquet business columns.
 
 ## Disclaimer
 

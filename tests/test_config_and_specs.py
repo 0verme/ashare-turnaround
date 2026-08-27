@@ -9,7 +9,8 @@ def test_settings_redact_token_from_repr_and_support_official_switch() -> None:
     assert settings.token_configured
     assert settings.base_url is None
     assert "secret-token" not in repr(settings)
-    assert DEFAULT_BASE_URL.startswith("https://")
+    # No hard-coded endpoint: an unset Base URL defers to the official SDK default.
+    assert DEFAULT_BASE_URL is None
 
 
 def test_specs_capture_raw_and_pit_fields() -> None:

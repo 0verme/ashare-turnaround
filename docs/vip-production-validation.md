@@ -3,8 +3,8 @@
 - Generated at (UTC): `2026-08-27T05:45:43.050280+00:00`
 - Period: `20251231`
 - Ordinary cross-check sample size: `10` (deterministic random sample)
-- VIP calls use the official Tushare Python SDK through `TushareProvider`; no raw
-  seller HTTP or MCP data path is used.
+- VIP calls use the official Tushare Python SDK through `TushareProvider`.
+- Credentials and private endpoint configuration are never recorded.
 - Page size is recorded in the command/run log; no smoke-test limit was used.
 
 ## Full-market results

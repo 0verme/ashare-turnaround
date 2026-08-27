@@ -298,9 +298,9 @@ def render_validation_markdown(report: ValidationReport) -> str:
         f"- Generated at (UTC): `{report.generated_at}`",
         f"- Sample code: `{report.sample_code}`",
         f"- Token configured: `{report.token_configured}` (value never recorded)",
-        "- Client: official Python `tushare` SDK only; optional Base URL override "
-        "is confined to `TushareProvider`.",
-        "- MCP and seller-specific HTTP APIs are not used by the data chain.",
+        "- Client: official Python `tushare` SDK.",
+        "- Optional transport overrides are isolated within `TushareProvider`.",
+        "- Credentials and private endpoint configuration are never recorded.",
         "",
         "## Ordinary APIs",
         "",
