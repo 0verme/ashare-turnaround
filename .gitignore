@@ -4,10 +4,18 @@
 !.env.example
 
 # Runtime data and local catalogs
-data/raw/
-data/derived/
-data/state/
-data/reports/
+data/raw/*
+data/derived/*
+data/state/*
+data/reports/*
+!data/raw/
+!data/raw/.gitkeep
+!data/derived/
+!data/derived/.gitkeep
+!data/state/
+!data/state/.gitkeep
+!data/reports/
+!data/reports/.gitkeep
 *.duckdb
 *.duckdb.wal
 *.parquet
