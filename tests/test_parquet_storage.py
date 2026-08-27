@@ -52,7 +52,30 @@ def test_financial_rows_partition_by_report_year(tmp_path) -> None:
         }
     )
 
-    store.write("income", frame, get_dataset_spec("income"))
+    store.write(
+        "income",
+        frame,
+        get_dataset_spec("income"),
+        retrieved_at="2026-08-27T00:00:00+00:00",
+    )
     paths = {str(path) for path in store.parquet_files("income")}
     assert any("year=2023" in path for path in paths)
     assert any("year=2024" in path for path in paths)
+
+
+def test_trade_cal_uses_one_low_cardinality_year_partition(tmp_path) -> None:
+    store = RawParquetStore(tmp_path / "data")
+    frame = pd.DataFrame(
+        {
+            "exchange": ["SSE", "SSE", "SSE"],
+            "cal_date": ["20240101", "20240102", "20241231"],
+            "is_open": [1, 1, 0],
+        }
+    )
+
+    stored = store.write("trade_cal", frame, get_dataset_spec("trade_cal"))
+
+    assert len(stored) == 1
+    assert len(store.parquet_files("trade_cal")) == 1
+    assert "year=2024" in str(stored[0].path)
+    assert len(store.read("trade_cal")) == 3

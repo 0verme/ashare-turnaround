@@ -17,5 +17,9 @@ def test_specs_capture_raw_and_pit_fields() -> None:
     assert income.api_name == "income"
     assert "f_ann_date" in income.pit_fields
     assert income.partition_strategy == "year"
+    assert get_dataset_spec("trade_cal").partition_strategy == "year"
+    assert get_dataset_spec("trade_cal").partition_field == "cal_date"
+    assert "update_flag" in get_dataset_spec("express").pit_fields
+    assert "curr_type" in get_dataset_spec("fina_mainbz").primary_keys
     assert set(API_VALIDATION_ORDER) >= {"income", "disclosure_date"}
     assert get_dataset_spec("income_vip").api_name == "income_vip"
