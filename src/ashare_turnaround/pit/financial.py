@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from ..dates import normalize_date_series
 from ..storage.parquet import RawParquetStore
 
 
@@ -146,28 +147,19 @@ def _first_available(
         if candidate not in frame.columns:
             continue
         candidate_values = frame[candidate]
-        present = (
-            values.isna() & candidate_values.notna() & candidate_values.astype("string").ne("")
-        )
+        # A non-empty but malformed preferred field must not block a valid
+        # fallback such as ann_date when f_ann_date is unusable.
+        usable = _normalize_date_series(candidate_values).notna()
+        present = values.isna() & usable
         values.loc[present] = candidate_values.loc[present]
         sources.loc[present] = candidate
     return values, sources
 
 
 def _normalize_date_series(values: pd.Series) -> pd.Series:
-    """Parse Tushare YYYYMMDD strings and ordinary date-like values."""
+    """Compatibility wrapper around the shared date parser."""
 
-    normalized = values.astype("string").str.strip()
-    eight_digit = normalized.str.fullmatch(r"\d{8}", na=False)
-    result = pd.Series(pd.NaT, index=values.index, dtype="datetime64[ns]")
-    if eight_digit.any():
-        result.loc[eight_digit] = pd.to_datetime(
-            normalized.loc[eight_digit], format="%Y%m%d", errors="coerce"
-        )
-    remaining = ~eight_digit & normalized.notna()
-    if remaining.any():
-        result.loc[remaining] = pd.to_datetime(normalized.loc[remaining], errors="coerce")
-    return result.dt.normalize()
+    return normalize_date_series(values)
 
 
 def _disclosure_available_dates(
@@ -259,7 +251,16 @@ def _version_columns(frame: pd.DataFrame) -> list[str]:
     # These distinguish simultaneous report families. update_flag is a version
     # attribute and is deliberately not a grouping key: as-of selects its
     # latest available version instead of hiding earlier versions.
-    for candidate in ("report_type", "type", "comp_type", "end_type"):
+    for candidate in (
+        "report_type",
+        "type",
+        "comp_type",
+        "end_type",
+        # ``fina_mainbz`` contains one row per business-line identity.  These
+        # are record keys, not versions, and must not be collapsed by PIT.
+        "bz_item",
+        "curr_type",
+    ):
         if candidate in frame.columns and frame[candidate].notna().any():
             columns.append(candidate)
     return columns
@@ -275,10 +276,18 @@ def select_financial_as_of(
 
     if frame.empty:
         return frame.copy()
-    if "actual_available_date" not in frame.columns or "report_period" not in frame.columns:
-        raise ValueError("frame must be canonicalized before PIT selection")
+    required = {"ts_code", "actual_available_date", "report_period"}
+    missing = required.difference(frame.columns)
+    if missing:
+        raise ValueError(
+            "frame must be canonicalized before PIT selection; "
+            f"missing columns: {sorted(missing)}"
+        )
 
-    as_of = pd.Timestamp(as_of_date).normalize()
+    as_of_values = _normalize_date_series(pd.Series([as_of_date]))
+    as_of = as_of_values.iloc[0]
+    if pd.isna(as_of):
+        raise ValueError(f"invalid as_of_date: {as_of_date!r}")
     available = _normalize_date_series(frame["actual_available_date"])
     selected = frame.loc[
         frame["ts_code"].astype("string").eq(ts_code)
@@ -351,6 +360,15 @@ def derive_single_quarter(
     output["report_period"] = _normalize_date_series(output["end_date"])
     output["_year"] = output["report_period"].dt.year
     output["_month_day"] = output["report_period"].dt.strftime("%m-%d")
+    standard_periods = output["_month_day"].isin({"03-31", "06-30", "09-30", "12-31"})
+    duplicate_periods = output.loc[standard_periods].duplicated(
+        ["ts_code", "_year", "_month_day"], keep=False
+    )
+    if duplicate_periods.any():
+        raise ValueError(
+            "duplicate cumulative rows for the same ts_code/year/report period; "
+            "canonicalize revisions before quarterization"
+        )
     output["single_quarter"] = pd.to_numeric(output[value_column], errors="coerce")
 
     sort_columns = ["ts_code", "_year", "report_period"]

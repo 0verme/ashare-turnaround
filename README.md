@@ -65,9 +65,16 @@ The minimal CLI is:
 .venv/bin/python -m ashare_turnaround preflight
 .venv/bin/python -m ashare_turnaround validate-source
 .venv/bin/python -m ashare_turnaround validate-source --vip
+.venv/bin/python -m ashare_turnaround sync-sample --dry-run
 .venv/bin/python -m ashare_turnaround sync-sample
 .venv/bin/python -m ashare_turnaround pit-check
 ```
+
+`sync-sample --dry-run` only renders the bounded request plan. It does not
+construct a provider, contact the remote endpoint, create data directories, or
+change Parquet/state files. Paginated reads fail closed when a page bound is
+exhausted or a duplicate page is observed; a failed sample request never
+replaces an existing dataset partition.
 
 ## Data Source
 

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import logging
+import os
 import sys
 from pathlib import Path
 
@@ -18,7 +20,8 @@ from .datasets.production import (
     write_production_validation_report,
 )
 from .datasets.specs import get_dataset_spec
-from .datasets.sync import sync_sample
+from .datasets.sync import sample_request_plan, sync_sample
+from .dates import normalize_date_series
 from .pit.financial import (
     canonicalize_financial_frame,
     derive_single_quarter,
@@ -59,6 +62,11 @@ def _parser() -> argparse.ArgumentParser:
     sync.add_argument("--end-date", default="20241231")
     sync.add_argument("--limit", type=int, default=100)
     sync.add_argument("--max-pages", type=int, default=1)
+    sync.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print the bounded request plan without token/API/state/file side effects",
+    )
 
     subparsers.add_parser("pit-check", help="run synthetic and available-sample PIT checks")
 
@@ -163,12 +171,36 @@ def _validate_source(args: argparse.Namespace) -> int:
 
 def _sync_sample(args: argparse.Namespace) -> int:
     settings = load_settings()
-    if not settings.token_configured:
-        print("TUSHARE_TOKEN is not configured; sync-sample was not run", file=sys.stderr)
-        return 2
     codes = tuple(args.codes)
     if not 3 <= len(codes) <= 5:
         print("sync-sample requires 3 to 5 codes", file=sys.stderr)
+        return 2
+    if args.limit <= 0 or args.max_pages <= 0:
+        print("sync-sample --limit and --max-pages must be positive", file=sys.stderr)
+        return 2
+
+    if args.dry_run:
+        plan = sample_request_plan(
+            codes,
+            start_date=args.start_date,
+            end_date=args.end_date,
+            limit=args.limit,
+        )
+        print("sync-sample dry-run")
+        print(f"codes={','.join(codes)}")
+        print(
+            f"request_groups={len(plan)} "
+            f"requests_planned={sum(len(requests) for requests in plan.values())}"
+        )
+        for dataset, requests in plan.items():
+            print(f"dataset={dataset} requests={len(requests)}")
+        print("remote_requests=false")
+        print("parquet_writes=false")
+        print("state_changes=false")
+        return 0
+
+    if not settings.token_configured:
+        print("TUSHARE_TOKEN is not configured; sync-sample was not run", file=sys.stderr)
         return 2
     settings.ensure_data_dirs()
     provider = TushareProvider(
@@ -191,14 +223,23 @@ def _sync_sample(args: argparse.Namespace) -> int:
         limit=args.limit,
         max_pages=args.max_pages,
     )
-    failed = [result for result in summary.results if result.status == "failed"]
     print(
-        f"requests={len(summary.results)} failed={len(failed)} "
+        f"requests={len(summary.results)} failed={len(summary.failures)} "
+        f"storage_errors={len(summary.storage_errors)} "
         f"stored_files={len(summary.stored_files)}"
     )
+    for result in summary.results:
+        if result.status in {"failed", "partial"}:
+            print(
+                f"failed dataset={result.dataset} status={result.status} "
+                f"error_type={result.error_type or '-'} message={result.error_message or '-'}",
+                file=sys.stderr,
+            )
+    for dataset, message in summary.storage_errors:
+        print(f"storage_failed dataset={dataset} message={message}", file=sys.stderr)
     for path in summary.stored_files:
         print(f"stored={path.path} rows={path.rows} bytes={path.size_bytes}")
-    return 2 if failed and not summary.stored_files else 0
+    return 2 if summary.failures or summary.storage_errors else 0
 
 
 def _storage_plan(args: argparse.Namespace) -> int:
@@ -420,14 +461,10 @@ def _cumulative_semantics_evidence(store: RawParquetStore) -> dict[str, dict[str
             }
             continue
         frame = frame.copy()
-        frame["_period"] = pd.to_datetime(
-            frame["end_date"].astype("string"), format="%Y%m%d", errors="coerce"
-        )
+        frame["_period"] = normalize_date_series(frame["end_date"])
         frame = frame[frame["_period"].dt.strftime("%m-%d").isin(quarter_labels)].copy()
         availability_field = "f_ann_date" if "f_ann_date" in frame.columns else "ann_date"
-        frame["_available"] = pd.to_datetime(
-            frame[availability_field].astype("string"), format="%Y%m%d", errors="coerce"
-        )
+        frame["_available"] = normalize_date_series(frame[availability_field])
         frame["_update_rank"] = pd.to_numeric(
             frame.get("update_flag", pd.Series(pd.NA, index=frame.index)), errors="coerce"
         ).fillna(-1)
@@ -754,8 +791,15 @@ def _pit_check(_: argparse.Namespace) -> int:
     return 0 if all(checks.values()) and not real_revision_failed else 2
 
 
+def _configure_logging() -> None:
+    level_name = os.getenv("ASHARE_LOG_LEVEL", "INFO").upper()
+    level = getattr(logging, level_name, logging.INFO)
+    logging.basicConfig(level=level, format="%(asctime)s %(levelname)s %(message)s")
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    _configure_logging()
     handlers = {
         "preflight": _preflight,
         "validate-source": _validate_source,
@@ -766,7 +810,11 @@ def main(argv: list[str] | None = None) -> int:
         "bootstrap-financials": _bootstrap_financials,
         "inventory": _inventory,
     }
-    return handlers[args.command](args)
+    try:
+        return handlers[args.command](args)
+    except (KeyError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":
