@@ -11,7 +11,7 @@ from ashare_turnaround.features import (
 from ashare_turnaround.scanner.contracts import FeatureVector
 from ashare_turnaround.scanner.replay import ReplayConfig, run_replay_frames
 from ashare_turnaround.scanner.report import candidate_report, candidate_report_markdown
-from ashare_turnaround.scanner.score import score_feature_vector
+from ashare_turnaround.scanner.score import ablation_score_configs, score_feature_vector
 from ashare_turnaround.scanner.universe import UniverseConfig, build_investable_universe
 
 AS_OF = "20250630"
@@ -144,6 +144,35 @@ def test_universe_records_policy_exclusions_and_feature_groups_are_pit_safe() ->
     )
 
 
+def test_historical_universe_keeps_a_later_delisted_security_before_delist_date() -> None:
+    stock_basic = pd.DataFrame(
+        {
+            "ts_code": [CODE],
+            "name": ["Historical member"],
+            "list_status": ["D"],
+            "list_date": ["20100101"],
+            "delist_date": ["20250715"],
+        }
+    )
+
+    before = build_investable_universe(
+        stock_basic,
+        as_of_date="20250630",
+        financial_frames=_financial_frames(),
+        config=UniverseConfig(min_financial_periods=4),
+    )
+    after = build_investable_universe(
+        stock_basic,
+        as_of_date="20250715",
+        financial_frames=_financial_frames(),
+        config=UniverseConfig(min_financial_periods=4),
+    )
+
+    assert before.included["ts_code"].tolist() == [CODE]
+    assert after.included.empty
+    assert after.excluded[0].reason == "delisted_by_as_of"
+
+
 def test_replay_score_and_candidate_report_are_deterministic() -> None:
     result = run_replay_frames(
         _frames(),
@@ -162,6 +191,72 @@ def test_replay_score_and_candidate_report_are_deterministic() -> None:
     assert report["selected"] is True
     assert "Evidence and provenance" in markdown
     assert "revenue_yoy" in markdown
+    assert result.ranked["snapshot_id"].tolist() == [result.snapshot_id]
+    assert result.ranked["historical_universe_member"].tolist() == [True]
+    assert result.metadata()["config_fingerprint"] == result.config_fingerprint
+
+
+def test_ablation_score_configs_share_data_snapshot_but_have_distinct_run_ids() -> None:
+    variants = ablation_score_configs()
+    fundamental = run_replay_frames(
+        _frames(),
+        as_of_date=AS_OF,
+        config=ReplayConfig(
+            top_n=5,
+            universe=UniverseConfig(min_financial_periods=4),
+            score=variants["fundamental_only"],
+        ),
+    )
+    expectation = run_replay_frames(
+        _frames(),
+        as_of_date=AS_OF,
+        config=ReplayConfig(
+            top_n=5,
+            universe=UniverseConfig(min_financial_periods=4),
+            score=variants["expectation_added"],
+        ),
+    )
+
+    assert fundamental.snapshot_id == expectation.snapshot_id
+    assert fundamental.run_id != expectation.run_id
+    assert fundamental.config_fingerprint != expectation.config_fingerprint
+    assert fundamental.ranked.iloc[0]["score_config_fingerprint"] == variants[
+        "fundamental_only"
+    ].fingerprint
+
+
+def test_replay_snapshot_id_ignores_observations_unavailable_after_as_of() -> None:
+    frames = _frames()
+    original = run_replay_frames(
+        frames,
+        as_of_date=AS_OF,
+        config=ReplayConfig(universe=UniverseConfig(min_financial_periods=4)),
+    )
+    with_future = {name: frame.copy() for name, frame in frames.items()}
+    with_future["daily"] = pd.concat(
+        [
+            with_future["daily"],
+            pd.DataFrame(
+                {
+                    "ts_code": [CODE],
+                    "trade_date": ["20250701"],
+                    "close": [99.0],
+                    "vol": [1.0],
+                    "pct_chg": [50.0],
+                }
+            ),
+        ],
+        ignore_index=True,
+    ).sample(frac=1.0, random_state=7)
+
+    repeated = run_replay_frames(
+        with_future,
+        as_of_date=AS_OF,
+        config=ReplayConfig(universe=UniverseConfig(min_financial_periods=4)),
+    )
+
+    assert repeated.snapshot_id == original.snapshot_id
+    assert repeated.run_id == original.run_id
 
 
 def test_hard_quality_reject_is_reflected_in_score() -> None:

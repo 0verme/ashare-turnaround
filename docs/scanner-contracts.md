@@ -35,7 +35,7 @@ replay / daily snapshot / evaluation / report
 | #15 | Weighted transparent score | `scanner.score.score_feature_vector` |
 | #16 | Historical PIT replay | `scanner.replay.run_replay` |
 | #17 | Forward evaluation | `scanner.evaluation.evaluate_scans` |
-| #18 | Feature-group ablation | `scanner.evaluation.run_ablation` |
+| #18 | Feature-group ablation | `scanner.stability.analyze_feature_stability` |
 | #19 | Daily snapshot and comparison | `scanner.daily.scan_data` / `compare_scan_snapshots` |
 | #20 | Explainable candidate report | `scanner.report.write_candidate_reports` |
 
@@ -99,12 +99,17 @@ ranked output and cannot be mistaken for a clean candidate.
   the latest row for an exact identity.
 - `replay --as-of YYYYMMDD` writes a ranked Parquet artifact and JSON metadata
   under `data/derived/replays/`.
+- `replay-variants --as-of YYYYMMDD` writes the four versioned score variants
+  from one verified PIT snapshot.
 - `scan` writes a daily snapshot under `data/derived/scans/`; `scan-compare`
   reports additions, removals, rank/score changes, and risk-flag changes.
-- `evaluate` computes forward returns, coverage, hit rate, excess return,
-  drawdown, industry count, market-cap exposure, and turnover. It never uses a
-  price on or before the scan's `as_of_date` as a forward observation.
-- `ablate` compares named `variant=path.parquet` snapshots for top-N overlap.
+- `evaluate` persists declared holding/benchmark/cost/delisting assumptions,
+  aligned forward returns, coverage, hit rate, excess return, price-path and
+  cohort drawdown, industry and market-cap exposure, turnover, reason-coded
+  missingness, and separate PIT fundamental improvement.
+- `ablate` consumes the four named saved evaluation artifacts, verifies common
+  PIT snapshots and evaluation rules, then reports rank overlap, performance
+  dispersion, segmented stability, and the precommitted promotion decision.
 - `report` writes JSON and Markdown candidate reports containing score breakdown,
   flags, and source-period evidence.
 

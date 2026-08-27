@@ -655,6 +655,45 @@ def _daily_params(dataset: str, requested: str, effective: str | None) -> dict[s
     raise KeyError(f"unsupported daily dataset: {dataset}")
 
 
+def _daily_param_sets(
+    dataset: str, requested: str, effective: str | None
+) -> tuple[dict[str, Any], ...]:
+    if dataset == "stock_basic":
+        return tuple({"list_status": status, "limit": 5000} for status in ("L", "D", "P"))
+    return (_daily_params(dataset, requested, effective),)
+
+
+def _combine_daily_fetches(fetches: list[PaginatedFetch]) -> PaginatedFetch:
+    frames = [fetch.frame for fetch in fetches if not fetch.frame.empty]
+    frame = pd.concat(frames, ignore_index=True, sort=False) if frames else pd.DataFrame()
+    if not frame.empty and "ts_code" in frame.columns:
+        frame = frame.drop_duplicates("ts_code", keep="last", ignore_index=True)
+    statuses = {fetch.status for fetch in fetches}
+    status = "PASS" if statuses <= {"PASS", "EMPTY"} and not frame.empty else "EMPTY"
+    warnings = tuple(
+        dict.fromkeys(warning for fetch in fetches for warning in fetch.warnings)
+    )
+    return PaginatedFetch(
+        frame=frame,
+        status=status,
+        pages=tuple(page for fetch in fetches for page in fetch.pages),
+        elapsed_seconds=sum(fetch.elapsed_seconds for fetch in fetches),
+        duplicate_count=sum(fetch.duplicate_count for fetch in fetches),
+        schema_hash=_schema_hash(frame.columns),
+        first_ts_code=str(frame.iloc[0]["ts_code"])
+        if not frame.empty and "ts_code" in frame.columns
+        else None,
+        last_ts_code=str(frame.iloc[-1]["ts_code"])
+        if not frame.empty and "ts_code" in frame.columns
+        else None,
+        schema_hashes=tuple(
+            dict.fromkeys(value for fetch in fetches for value in fetch.schema_hashes)
+        ),
+        warnings=warnings,
+        total_rows=len(frame),
+    )
+
+
 def _daily_state(
     state: SyncStateStore,
     result: DailySyncResult,
@@ -785,16 +824,21 @@ def sync_daily(
             _daily_state(state, result)
             results.append(result)
             continue
-        params = _daily_params(dataset, requested, effective)
-        params["limit"] = page_size
+        param_sets = _daily_param_sets(dataset, requested, effective)
+        for params in param_sets:
+            params["limit"] = page_size
         try:
-            fetched = fetch_paginated_audited(
-                provider,
-                source_api,
-                params,
-                page_size=page_size,
-                max_pages=max_pages,
-            )
+            fetches = [
+                fetch_paginated_audited(
+                    provider,
+                    source_api,
+                    params,
+                    page_size=page_size,
+                    max_pages=max_pages,
+                )
+                for params in param_sets
+            ]
+            fetched = _combine_daily_fetches(fetches) if len(fetches) > 1 else fetches[0]
         except ProviderError as exc:
             result = DailySyncResult(
                 dataset, source_api, requested, effective, "failed", error=exc.error_message

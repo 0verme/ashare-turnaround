@@ -42,9 +42,16 @@ from .scanner.daily import (
     scan_data,
     write_scan_snapshot,
 )
-from .scanner.evaluation import EvaluationConfig, evaluate_scans, run_ablation
-from .scanner.replay import ReplayConfig, run_replay, write_replay_artifacts
+from .scanner.evaluation import EvaluationConfig, evaluate_scans
+from .scanner.replay import (
+    ReplayConfig,
+    run_replay,
+    run_replay_variants,
+    write_replay_artifacts,
+    write_replay_variant_artifacts,
+)
 from .scanner.report import write_candidate_reports
+from .scanner.stability import StabilityConfig, analyze_feature_stability, write_stability_report
 from .storage.guards import check_disk_space
 from .storage.inventory import (
     build_coverage_report,
@@ -155,6 +162,15 @@ def _parser() -> argparse.ArgumentParser:
     replay.add_argument("--as-of", required=True)
     replay.add_argument("--top", type=int, default=20)
 
+    replay_variants = subparsers.add_parser(
+        "replay-variants",
+        help="run all predeclared score variants against one historical snapshot",
+    )
+    replay_variants.add_argument("--data-dir", default="data")
+    replay_variants.add_argument("--as-of", required=True)
+    replay_variants.add_argument("--top", type=int, default=20)
+    replay_variants.add_argument("--directory", default=None)
+
     scan = subparsers.add_parser("scan", help="run and persist the daily Top-N scanner")
     scan.add_argument("--data-dir", default="data")
     scan.add_argument("--as-of", default=None)
@@ -169,12 +185,20 @@ def _parser() -> argparse.ArgumentParser:
     evaluate.add_argument("--data-dir", default="data")
     evaluate.add_argument("--benchmark-code", default=None)
     evaluate.add_argument("--horizons", nargs="+", type=int, default=[20, 60, 120, 250])
+    evaluate.add_argument("--top", type=int, default=20)
+    evaluate.add_argument("--transaction-cost-bps", type=float, default=0.0)
+    evaluate.add_argument("--delisted-return", type=float, default=-1.0)
+    evaluate.add_argument("--historical-universe", default=None)
+    evaluate.add_argument("--exposures", default=None)
+    evaluate.add_argument("--fundamentals", default=None)
     evaluate.add_argument("--report", default="data/reports/evaluation.json")
 
-    ablate = subparsers.add_parser("ablate", help="compare feature-group ranking variants")
-    ablate.add_argument("variants", nargs="+", help="variant=path.parquet")
+    ablate = subparsers.add_parser(
+        "ablate", help="analyze feature stability from saved variant evaluations"
+    )
+    ablate.add_argument("variants", nargs="+", help="variant=evaluation.json")
     ablate.add_argument("--top", type=int, default=20)
-    ablate.add_argument("--report", default="data/reports/ablation.json")
+    ablate.add_argument("--report", default="data/reports/feature-stability.json")
 
     report = subparsers.add_parser("report", help="generate deterministic candidate reports")
     report.add_argument("--data-dir", default="data")
@@ -536,6 +560,27 @@ def _replay(args: argparse.Namespace) -> int:
     return 0 if result.status == "PASS" else 2
 
 
+def _replay_variants(args: argparse.Namespace) -> int:
+    try:
+        results = run_replay_variants(
+            args.data_dir,
+            as_of_date=args.as_of,
+            config=ReplayConfig(top_n=args.top),
+        )
+        directory = Path(args.directory or Path(args.data_dir) / "derived" / "replays")
+        artifacts = write_replay_variant_artifacts(results, directory)
+    except (OSError, ValueError, KeyError, RuntimeError) as exc:
+        print(f"replay-variants failed: {exc}", file=sys.stderr)
+        return 2
+    for name, result in results.items():
+        data_path, metadata_path = artifacts[name]
+        print(
+            f"variant={name} status={result.status} snapshot_id={result.snapshot_id} "
+            f"candidates={len(result.ranked)} data={data_path} metadata={metadata_path}"
+        )
+    return 0 if all(result.status == "PASS" for result in results.values()) else 2
+
+
 def _scan(args: argparse.Namespace) -> int:
     try:
         snapshot = scan_data(
@@ -580,14 +625,32 @@ def _evaluate(args: argparse.Namespace) -> int:
             (read_scan_snapshot(path) for path in args.scans), ignore_index=True, sort=False
         )
         store = RawParquetStore(args.data_dir)
+        stock_basic = (
+            _read_research_frame(args.historical_universe)
+            if args.historical_universe
+            else store.read("stock_basic")
+        )
+        exposures = (
+            _read_research_frame(args.exposures)
+            if args.exposures
+            else store.read("daily_basic")
+        )
+        fundamentals = (
+            _read_research_frame(args.fundamentals) if args.fundamentals else None
+        )
         result = evaluate_scans(
             scans,
             store.read("daily"),
             config=EvaluationConfig(
                 horizons=tuple(args.horizons),
+                top_n=args.top,
                 benchmark_code=args.benchmark_code,
+                transaction_cost_bps=args.transaction_cost_bps,
+                delisted_return=args.delisted_return,
             ),
-            stock_basic=store.read("stock_basic"),
+            stock_basic=stock_basic,
+            exposures=exposures,
+            fundamentals=fundamentals,
         )
         destination = Path(args.report)
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -597,6 +660,9 @@ def _evaluate(args: argparse.Namespace) -> int:
                     "config_version": result.config_version,
                     "status": result.status,
                     "warnings": list(result.warnings),
+                    "configuration": result.configuration,
+                    "limitations": list(result.limitations),
+                    "provenance": result.provenance,
                     "summary": result.summary.to_dict(orient="records"),
                     "observations": result.observations.to_dict(orient="records"),
                 },
@@ -614,26 +680,51 @@ def _evaluate(args: argparse.Namespace) -> int:
     return 0 if result.status == "PASS" else 2
 
 
+def _read_research_frame(path: str | Path) -> pd.DataFrame:
+    source = Path(path)
+    if not source.is_file():
+        raise FileNotFoundError(source)
+    suffix = source.suffix.lower()
+    if suffix == ".parquet":
+        return pd.read_parquet(source)
+    if suffix == ".csv":
+        return pd.read_csv(source)
+    if suffix == ".json":
+        payload = json.loads(source.read_text(encoding="utf-8"))
+        if isinstance(payload, dict):
+            for key in ("rows", "observations", "ranked"):
+                if key in payload:
+                    payload = payload[key]
+                    break
+        if not isinstance(payload, list):
+            raise ValueError(f"JSON research frame must contain an array: {source}")
+        return pd.DataFrame(payload)
+    raise ValueError(f"unsupported research frame: {source}")
+
+
 def _ablate(args: argparse.Namespace) -> int:
-    variants: dict[str, pd.DataFrame] = {}
+    variants: dict[str, Path] = {}
     try:
         for item in args.variants:
             name, separator, path = item.partition("=")
             if not separator or not name or not path:
                 raise ValueError("variants must use name=path format")
-            variants[name] = read_scan_snapshot(path)
-        result = run_ablation(variants, top_n=args.top)
-        destination = Path(args.report)
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_text(
-            json.dumps(result.to_dict(orient="records"), ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
+            if name in variants:
+                raise ValueError(f"duplicate ablation variant: {name}")
+            variants[name] = Path(path)
+        result = analyze_feature_stability(
+            variants,
+            config=StabilityConfig(top_n=args.top),
         )
+        write_stability_report(result, args.report)
     except (OSError, ValueError, KeyError) as exc:
         print(f"ablate failed: {exc}", file=sys.stderr)
         return 2
-    print(f"ablation_rows={len(result)} report={args.report}")
-    return 0
+    print(
+        f"ablation_status={result.status} segments={len(result.segments)} "
+        f"assessments={len(result.feature_assessments)} report={args.report}"
+    )
+    return 0 if result.status == "PASS" else 2
 
 
 def _report(args: argparse.Namespace) -> int:
@@ -1060,6 +1151,7 @@ def main(argv: list[str] | None = None) -> int:
         "inventory": _inventory,
         "sync-daily": _sync_daily,
         "replay": _replay,
+        "replay-variants": _replay_variants,
         "scan": _scan,
         "scan-compare": _scan_compare,
         "evaluate": _evaluate,

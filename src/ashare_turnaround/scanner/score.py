@@ -2,13 +2,40 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any
 
 import pandas as pd
 
 from .contracts import FeatureVector
+
+FEATURE_GROUP_COMPONENTS: dict[str, str] = {
+    "fundamental": "fundamental_score",
+    "trend": "trend_score",
+    "quality": "quality_score",
+    "attention": "attention_score",
+    "expectation": "expectation_score",
+}
+DEFAULT_FEATURE_GROUPS = tuple(FEATURE_GROUP_COMPONENTS)
+ABLATION_VARIANT_GROUPS: dict[str, tuple[str, ...]] = {
+    "fundamental_only": ("fundamental", "trend"),
+    "quality_added": ("fundamental", "trend", "quality"),
+    "attention_added": ("fundamental", "trend", "quality", "attention"),
+    "expectation_added": DEFAULT_FEATURE_GROUPS,
+}
+
+_QUALITY_RISK_FLAGS = {
+    "profit_dominated_by_non_recurring_items",
+    "non_operating_income_dominates_profit",
+    "negative_operating_cash_flow",
+    "inventory_pressure",
+    "receivables_pressure",
+    "impairment_effect",
+}
+_EXPECTATION_RISK_FLAGS = {"already_repriced_or_crowded"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,16 +47,74 @@ class ScoreConfig:
     attention_weight: float = 0.15
     expectation_weight: float = 0.15
     risk_penalty_cap: float = 50.0
+    enabled_groups: tuple[str, ...] = DEFAULT_FEATURE_GROUPS
+
+    def __post_init__(self) -> None:
+        unknown = set(self.enabled_groups) - set(FEATURE_GROUP_COMPONENTS)
+        if unknown:
+            raise ValueError(f"unknown feature groups: {','.join(sorted(unknown))}")
+        if len(self.enabled_groups) != len(set(self.enabled_groups)):
+            raise ValueError("enabled_groups must not contain duplicates")
+        if not self.enabled_groups:
+            raise ValueError("at least one feature group must be enabled")
+        if self.risk_penalty_cap < 0:
+            raise ValueError("risk_penalty_cap must be non-negative")
+        configured = {
+            "fundamental": self.fundamental_weight,
+            "trend": self.trend_weight,
+            "quality": self.quality_weight,
+            "attention": self.attention_weight,
+            "expectation": self.expectation_weight,
+        }
+        if any(weight < 0 for weight in configured.values()):
+            raise ValueError("score weights must be non-negative")
+        if not any(configured[group] > 0 for group in self.enabled_groups):
+            raise ValueError("at least one enabled feature group must have a positive weight")
 
     @property
     def weights(self) -> dict[str, float]:
-        return {
-            "fundamental_score": self.fundamental_weight,
-            "trend_score": self.trend_weight,
-            "quality_score": self.quality_weight,
-            "attention_score": self.attention_weight,
-            "expectation_score": self.expectation_weight,
+        configured = {
+            "fundamental": self.fundamental_weight,
+            "trend": self.trend_weight,
+            "quality": self.quality_weight,
+            "attention": self.attention_weight,
+            "expectation": self.expectation_weight,
         }
+        enabled = set(self.enabled_groups)
+        return {
+            component: configured[group] if group in enabled else 0.0
+            for group, component in FEATURE_GROUP_COMPONENTS.items()
+        }
+
+    def with_feature_groups(
+        self, groups: tuple[str, ...], *, variant: str | None = None
+    ) -> ScoreConfig:
+        """Return an isolated score variant without mutating weights or feature inputs."""
+
+        version = f"{self.version}/{variant}" if variant else self.version
+        return replace(self, version=version, enabled_groups=groups)
+
+    def declared(self) -> dict[str, Any]:
+        """Return the complete versioned score configuration."""
+
+        return asdict(self)
+
+    @property
+    def fingerprint(self) -> str:
+        """Identify behavior-changing score settings independently of filenames."""
+
+        payload = json.dumps(self.declared(), sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def ablation_score_configs(config: ScoreConfig | None = None) -> dict[str, ScoreConfig]:
+    """Build the four required cumulative, independently reproducible variants."""
+
+    base = config or ScoreConfig()
+    return {
+        name: base.with_feature_groups(groups, variant=name)
+        for name, groups in ABLATION_VARIANT_GROUPS.items()
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,6 +122,7 @@ class ScoreResult:
     ts_code: str
     as_of_date: str
     score_version: str
+    enabled_groups: tuple[str, ...]
     turnaround_score: float | None
     components: dict[str, float | None]
     weights: dict[str, float]
@@ -89,6 +175,14 @@ def _trend_score(values: dict[str, Any]) -> float | None:
     return _mean_known([acceleration, qoq, persistence_score, transition, margin])
 
 
+def _risk_flag_group(flag: str) -> str | None:
+    if flag in _QUALITY_RISK_FLAGS:
+        return "quality"
+    if flag in _EXPECTATION_RISK_FLAGS:
+        return "expectation"
+    return None
+
+
 def score_feature_vector(
     vector: FeatureVector,
     *,
@@ -111,8 +205,12 @@ def score_feature_vector(
         if values.get("expectation_score") is not None
         else None,
     }
+    enabled = set(settings.enabled_groups)
     penalties: dict[str, float] = {}
     for flag in vector.risk_flags:
+        group = _risk_flag_group(flag)
+        if group is not None and group not in enabled:
+            continue
         penalties[flag] = min(
             settings.risk_penalty_cap, 10.0 if flag.endswith("pressure") else 15.0
         )
@@ -129,18 +227,24 @@ def score_feature_vector(
     )
     penalty = min(settings.risk_penalty_cap, sum(penalties.values()))
     score = max(0.0, min(100.0, raw_score - penalty)) if raw_score is not None else None
+    rejected_reasons = tuple(
+        reason
+        for reason in vector.rejected_reasons
+        if _risk_flag_group(reason) is None or _risk_flag_group(reason) in enabled
+    )
     return ScoreResult(
         ts_code=vector.ts_code,
         as_of_date=vector.as_of_date,
         score_version=settings.version,
+        enabled_groups=settings.enabled_groups,
         turnaround_score=score,
         components=components,
         weights=settings.weights,
         penalties=penalties,
         risk_flags=tuple(vector.risk_flags),
         unknown_flags=tuple(vector.unknown_features),
-        rejected=vector.rejected,
-        rejected_reasons=tuple(vector.rejected_reasons),
+        rejected=bool(rejected_reasons),
+        rejected_reasons=rejected_reasons,
     )
 
 
@@ -155,6 +259,7 @@ def rank_scores(
             "ts_code": result.ts_code,
             "as_of_date": result.as_of_date,
             "score_version": result.score_version,
+            "enabled_groups": "|".join(result.enabled_groups),
             "turnaround_score": result.turnaround_score,
             "risk_flags": "|".join(result.risk_flags),
             "unknown_flags": "|".join(result.unknown_flags),
@@ -171,12 +276,14 @@ def rank_scores(
         -float("inf")
     )
     frame = frame.sort_values(
-        ["_score_sort", "rejected", "ts_code"], ascending=[False, True, True], kind="stable"
+        ["rejected", "_score_sort", "ts_code"], ascending=[True, False, True], kind="stable"
     )
     frame["rank"] = range(1, len(frame) + 1)
     frame = frame.drop(columns="_score_sort").reset_index(drop=True)
     if top_n is not None:
         if top_n <= 0:
             raise ValueError("top_n must be positive")
-        frame = frame.head(top_n).reset_index(drop=True)
+        scored = pd.to_numeric(frame["turnaround_score"], errors="coerce").notna()
+        frame = frame.loc[~frame["rejected"] & scored].head(top_n).reset_index(drop=True)
+        frame["rank"] = range(1, len(frame) + 1)
     return frame

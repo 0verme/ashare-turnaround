@@ -42,10 +42,10 @@ Phase 0/1 and the first complete scanner path are implemented:
 - idempotent date-scoped incremental synchronization for market and disclosure
   data;
 - a PIT-safe investable universe, independent feature groups, transparent scoring,
-  historical replay, forward evaluation, ablation comparison, and provenance-first
-  candidate reports.
+  historical replay, provenance-complete forward evaluation, precommitted feature
+  stability analysis, and provenance-first candidate reports.
 
-The live source validation report is at [docs/data-source-validation.md](docs/data-source-validation.md), the VIP assessment is at [docs/vip-api-evaluation.md](docs/vip-api-evaluation.md), and the PIT evidence is at [docs/pit-field-mapping.md](docs/pit-field-mapping.md) and [docs/pit-validation.md](docs/pit-validation.md). The scanner contracts and issue-to-module mapping are documented in [docs/scanner-contracts.md](docs/scanner-contracts.md). Full-market historical bootstrap remains an explicit, resumable operation; tests use synthetic fixtures and local Parquet only.
+The live source validation report is at [docs/data-source-validation.md](docs/data-source-validation.md), the VIP assessment is at [docs/vip-api-evaluation.md](docs/vip-api-evaluation.md), and the PIT evidence is at [docs/pit-field-mapping.md](docs/pit-field-mapping.md) and [docs/pit-validation.md](docs/pit-validation.md). The scanner contracts and issue-to-module mapping are documented in [docs/scanner-contracts.md](docs/scanner-contracts.md). Evaluation assumptions are frozen in [docs/scanner-evaluation.md](docs/scanner-evaluation.md), and the ablation decision rule is in [docs/feature-ablation.md](docs/feature-ablation.md). Full-market historical bootstrap remains an explicit, resumable operation; tests use synthetic fixtures and local Parquet only.
 
 ## Architecture
 
@@ -82,8 +82,10 @@ The minimal CLI is:
 .venv/bin/python -m ashare_turnaround inventory --as-of 20250630
 .venv/bin/python -m ashare_turnaround sync-daily --date 20250630
 .venv/bin/python -m ashare_turnaround replay --as-of 20250630 --top 20
+.venv/bin/python -m ashare_turnaround replay-variants --as-of 20250630 --top 20
 .venv/bin/python -m ashare_turnaround scan --top 20
-.venv/bin/python -m ashare_turnaround evaluate --scans data/derived/scans/scan-20250630.parquet
+.venv/bin/python -m ashare_turnaround evaluate --scans data/derived/scans/scan-20250630.parquet --benchmark-code 000300.SH --fundamentals data/derived/research/fundamental-history.parquet
+.venv/bin/python -m ashare_turnaround ablate fundamental_only=data/reports/evaluation-fundamental_only.json quality_added=data/reports/evaluation-quality_added.json attention_added=data/reports/evaluation-attention_added.json expectation_added=data/reports/evaluation-expectation_added.json
 .venv/bin/python -m ashare_turnaround report --as-of 20250630
 ```
 
@@ -95,10 +97,12 @@ replaces an existing dataset partition.
 
 `sync-daily` records every dataset outcome as `success`, `not_due`, `pending`,
 `partial`, or `failed`. Empty or pagination-incomplete responses are not treated
-as complete data. `replay` and `scan` accept an explicit `--as-of` for historical
-reproduction; omitting it from `scan` selects the latest open date in the local
-trade calendar. Evaluation reads only prices strictly after each frozen scan
-date.
+as complete data. Its stock reference refresh includes listed, delisted, and
+pre-listing statuses for dated-universe reconstruction. `replay` and `scan`
+accept an explicit `--as-of` for historical reproduction; omitting it from
+`scan` selects the latest open date in the local trade calendar. Evaluation
+aligns candidates and benchmarks to the same future market dates and preserves
+failed, delisted, exposure, and PIT-fundamental evidence in its report.
 
 ## Data Source
 
