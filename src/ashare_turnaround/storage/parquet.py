@@ -18,6 +18,7 @@ from ..dates import date_text
 from .atomic import fsync_directory
 
 _DATASET_NAME = re.compile(r"^[A-Za-z0-9_]+$")
+_UNIT_PART = re.compile(r"^[A-Za-z0-9_.=-]+$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,6 +79,7 @@ class RawParquetStore:
         *,
         retrieved_at: str | None = None,
         source: str | None = None,
+        source_api: str | None = None,
     ) -> list[StoredFile]:
         """Write a frame, preserving columns and adding optional provenance."""
 
@@ -92,6 +94,8 @@ class RawParquetStore:
             output["retrieved_at"] = retrieved_at
         if source is not None:
             output["source"] = source
+        if source_api is not None:
+            output["source_api"] = source_api
         if output.empty:
             return []
 
@@ -154,6 +158,7 @@ class RawParquetStore:
         *,
         retrieved_at: str | None = None,
         source: str | None = None,
+        source_api: str | None = None,
     ) -> list[StoredFile]:
         """Merge an incremental fetch into deterministic partitions atomically.
 
@@ -173,6 +178,8 @@ class RawParquetStore:
             output["retrieved_at"] = retrieved_at
         if source is not None:
             output["source"] = source
+        if source_api is not None:
+            output["source_api"] = source_api
         if output.empty:
             return []
 
@@ -203,6 +210,56 @@ class RawParquetStore:
 
     def period_exists(self, dataset: str, period: str) -> bool:
         return self.period_file(dataset, period).is_file()
+
+    def unit_file(self, dataset: str, unit_parts: tuple[str, ...]) -> Path:
+        """Return a deterministic path for a non-date historical unit.
+
+        Market/reference bootstrap units are often a month, an exchange-range,
+        or a current snapshot rather than a report period.  Keeping their path
+        construction here makes the same atomic RAW writer usable by both the
+        financial and market orchestration without teaching callers to assemble
+        filesystem paths.
+        """
+
+        self._validate_dataset(dataset)
+        if not unit_parts or any(not _UNIT_PART.fullmatch(part) for part in unit_parts):
+            raise ValueError("unit path parts must be non-empty safe path components")
+        return self.dataset_dir(dataset).joinpath(*unit_parts, "data.parquet")
+
+    def write_unit(
+        self,
+        dataset: str,
+        unit_parts: tuple[str, ...],
+        frame: pd.DataFrame,
+        spec: DatasetSpec | None = None,
+        *,
+        retrieved_at: str | None = None,
+        source: str | None = None,
+        source_api: str | None = None,
+    ) -> list[StoredFile]:
+        """Atomically replace one named historical market/reference unit.
+
+        The caller is responsible for proving that ``frame`` is complete for
+        the unit before invoking this method.  An empty frame is deliberately
+        not materialized, so an empty/unknown API response cannot look like a
+        completed partition.
+        """
+
+        selected_spec = spec or get_dataset_spec(dataset)
+        if selected_spec.name != dataset:
+            raise ValueError("spec.name must match dataset")
+        if not isinstance(frame, pd.DataFrame):
+            raise TypeError("frame must be a pandas DataFrame")
+        output = frame.reset_index(drop=True).copy()
+        if retrieved_at is not None:
+            output["retrieved_at"] = retrieved_at
+        if source is not None:
+            output["source"] = source
+        if source_api is not None:
+            output["source_api"] = source_api
+        if output.empty:
+            return []
+        return [self._atomic_write(self.unit_file(dataset, unit_parts), output)]
 
     def schema_columns(self, dataset: str) -> tuple[str, ...]:
         """Return the union of Parquet columns using metadata only."""

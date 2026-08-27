@@ -572,7 +572,7 @@ def sync_sample(
             continue
         combined = pd.concat(frames, ignore_index=True, sort=False)
         try:
-            stored_files.extend(store.write(dataset, combined, spec))
+            stored_files.extend(store.write(dataset, combined, spec, source_api=dataset))
             state.append(
                 SyncRecord(
                     dataset=dataset,
@@ -794,6 +794,7 @@ def sync_daily(
                     get_dataset_spec("trade_cal"),
                     retrieved_at=utc_now(),
                     source=SOURCE_NAME,
+                    source_api="trade_cal",
                 )
             )
         except Exception as exc:
@@ -889,13 +890,21 @@ def sync_daily(
             results.append(result)
             continue
         try:
+            frame_to_store = fetched.frame.copy()
+            if dataset == "stock_basic":
+                # The API returns a current snapshot even when an operator
+                # requests a historical sync date.  Never label it with that
+                # requested date and thereby imply historical PIT status.
+                frame_to_store["reference_snapshot_date"] = datetime.now(UTC).strftime("%Y%m%d")
+                frame_to_store["reference_semantics"] = "current_snapshot"
             stored = tuple(
                 store.write_incremental(
                     dataset,
-                    fetched.frame,
+                    frame_to_store,
                     get_dataset_spec(dataset),
                     retrieved_at=utc_now(),
                     source=SOURCE_NAME,
+                    source_api=source_api,
                 )
             )
             result = DailySyncResult(

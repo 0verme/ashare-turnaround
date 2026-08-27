@@ -38,6 +38,7 @@ replay / daily snapshot / evaluation / report
 | #18 | Feature-group ablation | `scanner.stability.analyze_feature_stability` |
 | #19 | Daily snapshot and comparison | `scanner.daily.scan_data` / `compare_scan_snapshots` |
 | #20 | Explainable candidate report | `scanner.report.write_candidate_reports` |
+| #34 | Market / Reference historical corpus | `datasets.market_bootstrap` / `datasets.market_validation` |
 
 Issue #7 is deliberately not duplicated in this branch: the repository already
 has the proposed adversarial PIT test/documentation in [PR #24](https://github.com/0verme/ashare-turnaround/pull/24).
@@ -67,7 +68,11 @@ Missing data is never silently imputed. A feature is either known from an
 available observation or carries an evidence status and reason. Financial frames
 are canonicalized with `report_period` and `actual_available_date`, then selected
 with `select_financial_as_of`. Market rows are restricted to `trade_date <=
-as_of_date` and, when present, `actual_available_date <= as_of_date`.
+as_of_date` and, when present, `actual_available_date <= as_of_date`. Phase 1.6 stores
+stock daily and daily_basic in monthly historical units, a separate configured
+`index_daily` benchmark, exchange-range calendars, and dated suspension evidence.
+The current stock_basic name/status/industry/board fields remain explicitly
+snapshot-only; they are never treated as historical PIT state.
 
 The universe records every exclusion reason, including ST status, delisting,
 future listing, BSE policy, new listing, suspension, low liquidity, insufficient
@@ -92,6 +97,12 @@ ranked output and cannot be mistaken for a clean candidate.
 
 ## Runtime commands and artifacts
 
+- `market-capacity-plan` writes a no-network capacity estimate for the declared
+  Market / Reference window.
+- `bootstrap-market` writes month/range/snapshot Market / Reference units and
+  `data/state/market-bootstrap-checkpoints.json`; it does not touch Financial P0.
+- `verify-market` writes the Market / Reference coverage, cross-section,
+  benchmark, forward-window, PIT-limitation, and RAW-integrity report only.
 - `inventory` writes `data/state/raw-manifest.json` and
   `data/state/data-coverage.json`.
 - `sync-daily` writes raw partitions and an append-only sanitized state log.

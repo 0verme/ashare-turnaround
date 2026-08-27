@@ -13,7 +13,7 @@ import pandas as pd
 import pyarrow.parquet as pq
 
 from ..datasets.specs import DATASET_SPECS, DatasetSpec, get_dataset_spec
-from .state import BootstrapCheckpointStore
+from .state import BootstrapCheckpointStore, MarketCheckpointStore
 
 _PARTITION_VALUE = re.compile(r"(?:period|trade_date|year)=(\d{4,8})")
 
@@ -91,6 +91,13 @@ def _date_values(frame: pd.DataFrame, columns: tuple[str, ...]) -> pd.Series:
 
 
 def _checkpoint_completeness_for(dataset: str, checkpoint_path: Path) -> tuple[str, set[str]]:
+    market_path = checkpoint_path.parent / "market-bootstrap-checkpoints.json"
+    if market_path.exists():
+        checkpoints = MarketCheckpointStore(market_path).latest_for_dataset(dataset)
+        if checkpoints:
+            statuses = {str(value.get("status", "")).upper() for value in checkpoints.values()}
+            completeness = "COMPLETE" if statuses == {"PASS"} else "PARTIAL"
+            return completeness, set(checkpoints)
     if not checkpoint_path.exists():
         return "UNKNOWN", set()
     checkpoints = BootstrapCheckpointStore(checkpoint_path).latest_for_dataset(dataset)
@@ -117,12 +124,47 @@ def _expected_trade_dates(data_path: Path, as_of: pd.Timestamp | None) -> set[st
     return {value.strftime("%Y%m%d") for value in dates}
 
 
+def _storage_partition_key(value: str | Path) -> str:
+    """Normalize a storage path to the partition identity used by inventory."""
+
+    components = [part for part in Path(value).parts if "=" in part and part != "data.parquet"]
+    for marker in ("period=", "trade_date="):
+        matches = [part for part in components if part.startswith(marker)]
+        if matches:
+            return matches[-1]
+    if any(part.startswith("month=") for part in components):
+        return "/".join(components)
+    return "/".join(components)
+
+
+def _market_checkpoint_records(data_path: Path, dataset: str) -> dict[str, dict[str, object]]:
+    path = data_path / "state" / "market-bootstrap-checkpoints.json"
+    if not path.exists():
+        return {}
+    return MarketCheckpointStore(path).latest_for_dataset(dataset)
+
+
 def _expected_partitions(
     data_path: Path,
     spec: DatasetSpec,
     checkpoint_periods: set[str],
     as_of: pd.Timestamp | None,
 ) -> tuple[set[str], str | None]:
+    market_records = _market_checkpoint_records(data_path, spec.name)
+    if market_records:
+        expected = {
+            _storage_partition_key(str(value.get("storage_path", "")))
+            for value in market_records.values()
+            if value.get("storage_path")
+        }
+        expected.discard("")
+        ends = {
+            str(value.get("requested_end"))
+            for value in market_records.values()
+            if value.get("requested_end")
+        }
+        latest = max(ends) if ends else None
+        return expected, latest
     if spec.partition_strategy == "date" and spec.partition_field == "trade_date":
         values = _expected_trade_dates(data_path, as_of)
         latest = max(values) if values else None
@@ -137,9 +179,17 @@ def _expected_partitions(
 def _partition_keys(paths: list[Path]) -> set[str]:
     keys: set[str] = set()
     for path in paths:
-        match = re.search(r"(period|trade_date|year)=(\d{4,8})", str(path))
-        if match:
-            keys.add(f"{match.group(1)}={match.group(2)}")
+        components = [part for part in path.parts if "=" in part]
+        if any(part.startswith("period=") for part in components):
+            keys.update(part for part in components if part.startswith("period="))
+        elif any(part.startswith("trade_date=") for part in components):
+            keys.update(part for part in components if part.startswith("trade_date="))
+        elif any(part.startswith("month=") for part in components):
+            keys.add("/".join(components))
+        else:
+            # Keep the existing year/snapshot/range behavior for low-cardinality
+            # and named units.
+            keys.add("/".join(components))
     return keys
 
 

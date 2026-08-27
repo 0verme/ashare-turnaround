@@ -39,19 +39,23 @@ Phase 0/1 and the first complete scanner path are implemented:
 - a cumulative income/cash-flow single-quarter prototype.
 - raw coverage/integrity inventory with missing-partition, duplicate, schema, and
   checkpoint findings;
+- Phase 1.6 Market / Reference historical corpus bootstrap: exchange-range
+  calendars, explicit current reference snapshots, monthly full-market `daily` /
+  `daily_basic`, `suspend_d`, and configured `000300.SH` `index_daily` history;
 - idempotent date-scoped incremental synchronization for market and disclosure
   data;
 - a PIT-safe investable universe, independent feature groups, transparent scoring,
   historical replay, provenance-complete forward evaluation, precommitted feature
   stability analysis, and provenance-first candidate reports.
 
-The live source validation report is at [docs/data-source-validation.md](docs/data-source-validation.md), the VIP assessment is at [docs/vip-api-evaluation.md](docs/vip-api-evaluation.md), and the PIT evidence is at [docs/pit-field-mapping.md](docs/pit-field-mapping.md) and [docs/pit-validation.md](docs/pit-validation.md). The scanner contracts and issue-to-module mapping are documented in [docs/scanner-contracts.md](docs/scanner-contracts.md). Evaluation assumptions are frozen in [docs/scanner-evaluation.md](docs/scanner-evaluation.md), and the ablation decision rule is in [docs/feature-ablation.md](docs/feature-ablation.md). Full-market historical bootstrap remains an explicit, resumable operation; tests use synthetic fixtures and local Parquet only.
+The live source validation report is at [docs/data-source-validation.md](docs/data-source-validation.md), the VIP assessment is at [docs/vip-api-evaluation.md](docs/vip-api-evaluation.md), and the PIT evidence is at [docs/pit-field-mapping.md](docs/pit-field-mapping.md) and [docs/pit-validation.md](docs/pit-validation.md). The scanner contracts and issue-to-module mapping are documented in [docs/scanner-contracts.md](docs/scanner-contracts.md). Evaluation assumptions are frozen in [docs/scanner-evaluation.md](docs/scanner-evaluation.md), and the ablation decision rule is in [docs/feature-ablation.md](docs/feature-ablation.md). Phase 1.6 decisions and final gates are documented in [docs/market-reference-history.md](docs/market-reference-history.md) and [docs/market-reference-coverage.md](docs/market-reference-coverage.md). Full-market historical bootstrap is an explicit, resumable operation; tests use synthetic fixtures and local Parquet only.
 
 ## Architecture
 
 - `src/ashare_turnaround/providers/tushare.py` — the only Tushare client construction and transport override.
-- `src/ashare_turnaround/datasets/` — dataset contracts and bounded sample synchronization.
-- `src/ashare_turnaround/storage/` — local Parquet and JSON sync state.
+- `src/ashare_turnaround/datasets/` — dataset contracts, bounded sample synchronization,
+  Market / Reference historical bootstrap, and coverage verification.
+- `src/ashare_turnaround/storage/` — local Parquet, JSON sync state, and capacity guards.
 - `src/ashare_turnaround/query/` — in-process DuckDB access.
 - `src/ashare_turnaround/pit/` — financial normalization and as-of selection.
 - `src/ashare_turnaround/features/` — independent fundamental, trend, quality,
@@ -79,6 +83,9 @@ The minimal CLI is:
 .venv/bin/python -m ashare_turnaround sync-sample --dry-run
 .venv/bin/python -m ashare_turnaround sync-sample
 .venv/bin/python -m ashare_turnaround pit-check
+.venv/bin/python -m ashare_turnaround market-capacity-plan --start-date 20120101 --end-date 20251231
+.venv/bin/python -m ashare_turnaround bootstrap-market --dry-run --start-date 20120101 --end-date 20251231
+.venv/bin/python -m ashare_turnaround verify-market --start-date 20120101 --end-date 20251231
 .venv/bin/python -m ashare_turnaround inventory --as-of 20250630
 .venv/bin/python -m ashare_turnaround sync-daily --date 20250630
 .venv/bin/python -m ashare_turnaround replay --as-of 20250630 --top 20
@@ -98,7 +105,10 @@ replaces an existing dataset partition.
 `sync-daily` records every dataset outcome as `success`, `not_due`, `pending`,
 `partial`, or `failed`. Empty or pagination-incomplete responses are not treated
 as complete data. Its stock reference refresh includes listed, delisted, and
-pre-listing statuses for dated-universe reconstruction. `replay` and `scan`
+pre-listing statuses for dated-universe reconstruction. The Phase 1.6
+`bootstrap-market` command uses month/range units rather than a ten-year
+`sync-daily` loop; `verify-market` performs coverage and integrity checks only.
+`replay` and `scan`
 accept an explicit `--as-of` for historical reproduction; omitting it from
 `scan` selects the latest open date in the local trade calendar. Evaluation
 aligns candidates and benchmarks to the same future market dates and preserves
@@ -115,6 +125,7 @@ Tushare-compatible endpoints. Leave it unset to use the SDK default endpoint.
 TUSHARE_TOKEN=
 TUSHARE_BASE_URL=
 ASHARE_DATA_DIR=./data
+ASHARE_BENCHMARK_CODE=000300.SH
 ```
 
 Copy `.env.example` to `.env` for local development.
