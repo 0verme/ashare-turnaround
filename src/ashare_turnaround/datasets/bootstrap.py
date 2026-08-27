@@ -54,6 +54,24 @@ class BootstrapUnitResult:
 
 
 @dataclass(frozen=True, slots=True)
+class DatasetProgress:
+    """Dataset-level completion counts for observable resumable state.
+
+    ``partial`` aggregates everything that is neither a durable PASS nor a
+    resume skip nor a hard failure (for example ``UNKNOWN_EMPTY`` or a
+    ``PARTIAL`` pagination outcome).  This makes dataset-level completion as
+    observable as the per-period checkpoint records.
+    """
+
+    dataset: str
+    total: int
+    completed: int
+    skipped: int
+    failed: int
+    partial: int
+
+
+@dataclass(frozen=True, slots=True)
 class BootstrapRunSummary:
     datasets: tuple[str, ...]
     start_year: int
@@ -92,6 +110,39 @@ class BootstrapRunSummary:
     @property
     def row_count(self) -> int:
         return sum(result.rows for result in self.results)
+
+    @property
+    def dataset_progress(self) -> tuple[DatasetProgress, ...]:
+        """Return per-dataset total/completed/skipped/failed/partial counts."""
+
+        buckets: dict[str, dict[str, int]] = {
+            dataset: {"total": 0, "completed": 0, "skipped": 0, "failed": 0, "partial": 0}
+            for dataset in self.datasets
+        }
+        for result in self.results:
+            bucket = buckets.get(result.dataset)
+            if bucket is None:
+                continue
+            bucket["total"] += 1
+            if result.skipped:
+                bucket["skipped"] += 1
+            elif result.status == "PASS":
+                bucket["completed"] += 1
+            elif result.status == "FAILED":
+                bucket["failed"] += 1
+            else:
+                bucket["partial"] += 1
+        return tuple(
+            DatasetProgress(
+                dataset=dataset,
+                total=counts["total"],
+                completed=counts["completed"],
+                skipped=counts["skipped"],
+                failed=counts["failed"],
+                partial=counts["partial"],
+            )
+            for dataset, counts in buckets.items()
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -659,6 +710,21 @@ def bootstrap_datasets(
         api_requests=max(0, limiter_requests - limiter_start_requests),
         elapsed_seconds=time.monotonic() - run_started,
     )
+
+
+def format_dataset_progress(summary: BootstrapRunSummary) -> str:
+    """Render a compact per-dataset completion table for operational visibility."""
+
+    lines = [
+        "dataset | total | completed | skipped | failed | partial",
+        "--- | ---: | ---: | ---: | ---: | ---:",
+    ]
+    for progress in summary.dataset_progress:
+        lines.append(
+            f"{progress.dataset} | {progress.total} | {progress.completed} | "
+            f"{progress.skipped} | {progress.failed} | {progress.partial}"
+        )
+    return "\n".join(lines)
 
 
 def render_bootstrap_dry_run(summary: BootstrapRunSummary) -> str:

@@ -11,7 +11,12 @@ from pathlib import Path
 import pandas as pd
 
 from .config import SOURCE_NAME, Settings, load_settings
-from .datasets.bootstrap import P0_DATASETS, bootstrap_datasets, render_bootstrap_dry_run
+from .datasets.bootstrap import (
+    P0_DATASETS,
+    bootstrap_datasets,
+    format_dataset_progress,
+    render_bootstrap_dry_run,
+)
 from .datasets.periods import latest_complete_annual_year
 from .datasets.production import (
     PRODUCTION_DATASETS,
@@ -303,7 +308,6 @@ def _validate_vip_production(args: argparse.Namespace) -> int:
 
 def _bootstrap_financials(args: argparse.Namespace) -> int:
     settings = load_settings()
-    settings.ensure_data_dirs()
     end_year = args.end_year or latest_complete_annual_year()
     datasets = tuple(dict.fromkeys(P0_DATASETS if "all" in args.dataset else args.dataset))
     requests_per_minute = (
@@ -337,6 +341,7 @@ def _bootstrap_financials(args: argparse.Namespace) -> int:
             return 2
         print(render_bootstrap_dry_run(summary))
         return 0
+    settings.ensure_data_dirs()
     if not settings.token_configured:
         print("TUSHARE_TOKEN is not configured; bootstrap was not run", file=sys.stderr)
         return 2
@@ -386,6 +391,7 @@ def _bootstrap_financials(args: argparse.Namespace) -> int:
             f"{result.dataset} {result.period} {result.status} rows={result.rows} "
             f"pages={result.page_count} skipped={result.skipped}{error}"
         )
+    print(format_dataset_progress(summary))
     failed = len(summary.failures)
     print(
         f"datasets={','.join(summary.datasets)} tasks={summary.task_count} "
