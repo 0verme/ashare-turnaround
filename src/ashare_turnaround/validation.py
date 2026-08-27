@@ -11,6 +11,17 @@ from .config import Settings
 from .datasets.specs import API_VALIDATION_ORDER, CORE_DATASETS, VIP_API_NAMES, get_dataset_spec
 from .pit.financial import PIT_MAPPINGS
 from .providers.tushare import ProviderError, TushareProvider
+from .quality import check_frame_quality, compare_field_sets
+
+VIP_PROBE_PERIOD = "20231231"
+_CANONICAL_PIT_FIELDS = {
+    "report_period",
+    "announcement_date",
+    "actual_available_date",
+    "available_date_source",
+    "retrieved_at",
+    "source",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,6 +33,7 @@ class ApiValidationResult:
     fields: tuple[str, ...] = ()
     notes: str = ""
     error_type: str | None = None
+    full_market_by_period: str = "NOT_TESTED"
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,11 +45,22 @@ class ValidationReport:
     vip_requested: bool = False
 
     @property
+    def ordinary_results(self) -> tuple[ApiValidationResult, ...]:
+        return tuple(result for result in self.results if not result.api.endswith("_vip"))
+
+    @property
+    def vip_results(self) -> tuple[ApiValidationResult, ...]:
+        return tuple(result for result in self.results if result.api.endswith("_vip"))
+
+    @property
     def core_failures(self) -> tuple[ApiValidationResult, ...]:
+        """Return authenticated core results that are not successful."""
+
         return tuple(
             result
-            for result in self.results
-            if result.api in CORE_DATASETS and result.status in {"FAIL", "SCHEMA_MISMATCH"}
+            for result in self.ordinary_results
+            if result.api in CORE_DATASETS
+            and result.status in {"FAIL", "PERMISSION", "NOT_SUPPORTED", "SCHEMA_MISMATCH", "EMPTY"}
         )
 
 
@@ -58,6 +81,10 @@ def _params_for(api: str, sample_code: str) -> dict[str, Any]:
             "end_date": "20240131",
             "limit": 3,
         }
+    if api in VIP_API_NAMES:
+        # This is intentionally a three-row, no-ts_code probe of the mode that
+        # could support a Phase 2 report-period bootstrap.
+        return {"period": VIP_PROBE_PERIOD, "limit": 3}
     params: dict[str, Any] = {"ts_code": sample_code, "limit": 3}
     if api.removesuffix("_vip") == "fina_mainbz":
         params["period"] = "20231231"
@@ -68,13 +95,68 @@ def _skip_result(api: str, reason: str) -> ApiValidationResult:
     return ApiValidationResult(api, "SKIP", 0, 0.0, notes=reason)
 
 
+def _status_for_provider_error(error_type: str) -> str:
+    if error_type == "permission":
+        return "PERMISSION"
+    if error_type == "not_found":
+        return "NOT_SUPPORTED"
+    return "FAIL"
+
+
+def _frame_result(
+    api: str,
+    frame: Any,
+    duration_seconds: float,
+    *,
+    params: dict[str, Any],
+) -> ApiValidationResult:
+    fields = tuple(str(column) for column in frame.columns)
+    spec = get_dataset_spec(api)
+    quality = check_frame_quality(api, frame, spec)
+    if frame.empty:
+        status = "EMPTY"
+        notes = "request succeeded but returned no rows; schema is not proven"
+    elif quality.missing_required:
+        status = "SCHEMA_MISMATCH"
+        notes = f"required fields missing: {', '.join(quality.missing_required)}"
+    else:
+        status = "PASS"
+        notes = "response returned and required fields were observed"
+
+    if quality.warnings:
+        notes += "; quality_warnings=" + ",".join(quality.warnings)
+
+    full_market = "NOT_TESTED"
+    if api in VIP_API_NAMES:
+        notes = (
+            f"bounded period probe period={params.get('period')} without ts_code; " + notes
+        )
+        if status == "PASS" and "ts_code" in frame.columns:
+            full_market = "YES (bounded period probe)"
+        elif status == "EMPTY":
+            full_market = "UNKNOWN (period probe returned no rows)"
+        elif status == "SCHEMA_MISMATCH":
+            full_market = "NO (required fields missing)"
+        else:
+            full_market = "NOT_CONFIRMED"
+    return ApiValidationResult(
+        api,
+        status,
+        len(frame),
+        duration_seconds,
+        fields,
+        notes,
+        full_market_by_period=full_market,
+    )
+
+
 def validate_source(
     settings: Settings,
     *,
     sample_code: str = "600000.SH",
     include_vip: bool = False,
 ) -> ValidationReport:
-    """Run one small request for each requested API; never logs credentials."""
+    """Run one bounded request for each requested API; never logs credentials."""
 
     api_names = list(API_VALIDATION_ORDER)
     if include_vip:
@@ -93,32 +175,23 @@ def validate_source(
     )
     results: list[ApiValidationResult] = []
     for api in api_names:
+        params = _params_for(api, sample_code)
         start = time.monotonic()
         try:
-            frame = provider.call(api, **_params_for(api, sample_code))
-            duration = time.monotonic() - start
-            fields = tuple(str(column) for column in frame.columns)
-            spec = get_dataset_spec(api)
-            missing = tuple(field for field in spec.required_fields if field not in frame.columns)
-            if missing:
-                status = "SCHEMA_MISMATCH"
-                notes = f"required fields missing: {', '.join(missing)}"
-            elif frame.empty:
-                status = "EMPTY"
-                notes = "request succeeded but returned no rows"
-            else:
-                status = "PASS"
-                notes = "response returned and required fields were observed"
-            results.append(ApiValidationResult(api, status, len(frame), duration, fields, notes))
+            frame = provider.call(api, **params)
+            results.append(_frame_result(api, frame, time.monotonic() - start, params=params))
         except ProviderError as exc:
+            status = _status_for_provider_error(exc.error_type)
+            full_market = "NOT_CONFIRMED" if api in VIP_API_NAMES else "NOT_TESTED"
             results.append(
                 ApiValidationResult(
                     api,
-                    "FAIL",
+                    status,
                     0,
                     time.monotonic() - start,
                     notes=exc.error_message,
                     error_type=exc.error_type,
+                    full_market_by_period=full_market,
                 )
             )
     return ValidationReport(tuple(results), sample_code, generated_at, True, include_vip)
@@ -128,20 +201,73 @@ def _cell(value: object) -> str:
     return str(value).replace("|", "\\|").replace("\n", " ")
 
 
+def _status_summary(results: tuple[ApiValidationResult, ...], token_configured: bool) -> str:
+    if not token_configured:
+        return "NOT RUN — token not configured"
+    if not results:
+        return "NOT TESTED"
+    passed = sum(result.status == "PASS" for result in results)
+    if passed == len(results):
+        return "PASS"
+    if passed:
+        return f"PARTIAL — {passed}/{len(results)} PASS"
+    statuses = {result.status for result in results}
+    if statuses == {"EMPTY"}:
+        return "EMPTY"
+    if "PERMISSION" in statuses:
+        return "PERMISSION"
+    if "NOT_SUPPORTED" in statuses:
+        return "NOT SUPPORTED"
+    return "FAIL"
+
+
+def _field_presence_summary(report: ValidationReport) -> str:
+    if not report.token_configured:
+        return "NOT RUN — token not configured"
+    ordinary = report.ordinary_results
+    if ordinary and all(result.status == "PASS" for result in ordinary):
+        return "PASS for validated samples"
+    if any(result.status == "SCHEMA_MISMATCH" for result in ordinary):
+        return "FAIL — at least one required schema field was missing"
+    if any(result.status == "PASS" for result in ordinary):
+        return "PARTIAL — empty/error responses do not prove schema"
+    return "NOT CONFIRMED"
+
+
+def _pagination_summary(report: ValidationReport) -> str:
+    if not report.token_configured:
+        return "NOT RUN — token not configured"
+    if any(result.status == "PASS" for result in report.ordinary_results):
+        return (
+            "PARTIAL — bounded sample paginator validated; not yet proven for every "
+            "endpoint/full historical ranges"
+        )
+    return "NOT CONFIRMED"
+
+
+def _cumulative_semantics_summary(report: ValidationReport) -> str:
+    if not report.token_configured:
+        return "NOT RUN — token not configured"
+    by_api = {result.api: result for result in report.ordinary_results}
+    if all(by_api.get(api) and by_api[api].status == "PASS" for api in ("income", "cashflow")):
+        return (
+            "PARTIAL — quarterization prototype checked; live cumulative semantics "
+            "not fully confirmed"
+        )
+    return "NOT CONFIRMED — income/cashflow live evidence is incomplete"
+
+
 def render_validation_markdown(report: ValidationReport) -> str:
-    ordinary = [result for result in report.results if not result.api.endswith("_vip")]
-    vip = [result for result in report.results if result.api.endswith("_vip")]
+    ordinary = list(report.ordinary_results)
+    vip = list(report.vip_results)
 
     def table(results: list[ApiValidationResult]) -> str:
         lines = [
-            "| API | Status | Rows | Duration (s) | Fields | Notes |",
-            "| --- | --- | ---: | ---: | --- | --- |",
+            "| API | Status | Rows | Duration (s) | Fields | Error Type | Notes |",
+            "| --- | --- | ---: | ---: | --- | --- | --- |",
         ]
         for result in results:
             fields = ", ".join(result.fields) or "-"
-            notes = result.notes
-            if result.error_type:
-                notes = f"error_type={result.error_type}; {notes}"
             lines.append(
                 "| "
                 + " | ".join(
@@ -151,13 +277,20 @@ def render_validation_markdown(report: ValidationReport) -> str:
                         str(result.rows),
                         f"{result.duration_seconds:.3f}",
                         _cell(fields),
-                        _cell(notes or "-"),
+                        _cell(result.error_type or "-"),
+                        _cell(result.notes or "-"),
                     )
                 )
                 + " |"
             )
         return "\n".join(lines)
 
+    ordinary_pass = sum(result.status == "PASS" for result in ordinary)
+    vip_summary = (
+        "NOT TESTED"
+        if not report.vip_requested
+        else _status_summary(tuple(vip), report.token_configured)
+    )
     lines = [
         "# Tushare-compatible data-source validation",
         "",
@@ -178,7 +311,7 @@ def render_validation_markdown(report: ValidationReport) -> str:
     if report.vip_requested:
         lines.append(table(vip))
     else:
-        lines.append("Not run. Pass `--vip` to validate the optional VIP names separately.")
+        lines.append("Not run. Pass `--vip` to validate the bounded report-period probes.")
     lines.extend(
         [
             "",
@@ -187,24 +320,28 @@ def render_validation_markdown(report: ValidationReport) -> str:
             "- `PASS` means the request returned and all minimal required fields were observed.",
             "- `EMPTY` means the request completed but the chosen sample/parameters "
             "returned no rows; it is not treated as schema proof.",
-            "- `SCHEMA_MISMATCH` means the request completed but required fields were absent.",
+            "- `PERMISSION` and `NOT_SUPPORTED` are classified endpoint outcomes; "
+            "`SCHEMA_MISMATCH` means required fields were absent.",
             "- `FAIL` includes a classified provider error such as `timeout`, "
-            "`connection`, `permission`, `not_found`, `rate_limit`, or `compatibility`.",
+            "`connection`, `rate_limit`, or `compatibility`.",
             "- With no token, all rows are deliberately `SKIP`; this is a "
             "credential/configuration block, not evidence that the endpoint is unavailable.",
             "",
             "## Pagination and field notes",
             "",
-            "The validation calls request a small `limit`. Sample synchronization has a "
-            "bounded limit/offset paginator with a maximum page count; it never retries "
-            "indefinitely.",
+            "The ordinary validation calls request a small `limit`. VIP validation uses a "
+            f"bounded `period={VIP_PROBE_PERIOD}` request without `ts_code`; neither proves "
+            "complete pagination or full historical coverage.",
             "",
             "## Run status",
             "",
-            "- Ordinary API availability: `unknown` in this run because no token was configured.",
-            "- VIP API availability: `not tested` unless the `--vip` option was used.",
-            "- Live pagination behavior, live field presence, and live cumulative-value "
-            "semantics: `unknown` until an authenticated sample run.",
+            "- Ordinary API availability: "
+            f"`{_status_summary(tuple(ordinary), report.token_configured)}`",
+            f"- Validated ordinary APIs: `{ordinary_pass} / {len(ordinary)} PASS`",
+            f"- Live field presence: `{_field_presence_summary(report)}`",
+            f"- Live pagination: `{_pagination_summary(report)}`",
+            f"- Live cumulative financial semantics: `{_cumulative_semantics_summary(report)}`",
+            f"- VIP API availability: `{vip_summary}`",
             "",
         ]
     )
@@ -214,7 +351,7 @@ def render_validation_markdown(report: ValidationReport) -> str:
 def render_pit_mapping_markdown(report: ValidationReport) -> str:
     """Render field mapping evidence without turning assumptions into facts."""
 
-    by_api = {result.api.removesuffix("_vip"): result for result in report.results}
+    by_api = {result.api: result for result in report.ordinary_results}
     lines = [
         "# Financial PIT field mapping",
         "",
@@ -234,9 +371,9 @@ def render_pit_mapping_markdown(report: ValidationReport) -> str:
         candidates.update(mapping.available_candidates)
         if mapping.disclosure_fallback:
             candidates.update({"actual_date", "disclosure_date"})
-        raw_candidates = candidates.difference(
-            {"report_period", "announcement_date", "actual_available_date"}
-        )
+        spec = get_dataset_spec(dataset)
+        candidates.update(spec.pit_fields)
+        raw_candidates = candidates.difference(_CANONICAL_PIT_FIELDS)
         observed_candidates = sorted(
             candidate for candidate in raw_candidates if candidate in observed
         )
@@ -245,7 +382,7 @@ def render_pit_mapping_markdown(report: ValidationReport) -> str:
             semantic_status = "unknown"
         elif observed_candidates:
             observation = "observed: " + ", ".join(observed_candidates)
-            semantic_status = "suspected; field meaning still requires source confirmation"
+            semantic_status = mapping.semantic_status or "suspected"
         else:
             observation = "unknown: fields not observed in the sample response"
             semantic_status = "unknown"
@@ -280,8 +417,8 @@ def render_pit_mapping_markdown(report: ValidationReport) -> str:
                     ", ".join(display_period),
                     ", ".join(display_announcement),
                     available_source,
-                    observed_candidates and ", ".join(observed_candidates) or observation,
-                    semantic_status,
+                    _cell(observation),
+                    _cell(semantic_status),
                     _cell(notes),
                 )
             )
@@ -295,9 +432,9 @@ def render_pit_mapping_markdown(report: ValidationReport) -> str:
             "- `confirmed` is reserved for field presence and semantics established "
             "from a live response plus source documentation.",
             "- `suspected` means the implementation has a plausible field mapping "
-            "but this run did not establish its semantic contract.",
-            "- `unknown` means the required live evidence was unavailable; it must "
-            "not be used as a backtest assumption.",
+            "but the semantic contract is not fully established.",
+            "- `unknown` means the required live evidence was unavailable, or the "
+            "event field has not been proven to be data availability.",
             "- `disclosure_date.actual_date` is deliberately not treated as "
             "availability for `fina_mainbz` without an explicit join. Its semantic "
             "meaning remains unknown until verified.",
@@ -307,14 +444,165 @@ def render_pit_mapping_markdown(report: ValidationReport) -> str:
             "`report_type` separates report families where present. `update_flag` "
             "is retained as a version attribute; PIT selection groups by report "
             "identity and picks the latest version whose `actual_available_date` "
-            "is on or before `as_of_date`.",
+            "is on or before the `as_of_date`.",
             "",
             "## Quarterization scope",
             "",
             "The code contains only a prototype for cumulative `income`/`cashflow` "
-            "values: Q1, H1-Q1, Q3-H1, and FY-Q3. Whether each live endpoint's "
-            "values are cumulative is `unknown` until the real API sample and "
-            "source semantics are verified.",
+            "values: Q1, H1-Q1, Q3-H1, and FY-Q3. Live bounded checks are recorded "
+            "in `docs/pit-validation.md`; this is not a factor calculation.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+@dataclass(frozen=True, slots=True)
+class VipEvaluation:
+    dataset: str
+    ordinary_status: str
+    vip_status: str
+    full_market_by_period: str
+    schema_relation: str
+    missing_vip_pit_fields: tuple[str, ...]
+    recommendation: str
+    notes: str
+
+
+def _raw_pit_fields(dataset: str) -> set[str]:
+    return set(get_dataset_spec(dataset).pit_fields).difference(_CANONICAL_PIT_FIELDS)
+
+
+def evaluate_vip_apis(report: ValidationReport) -> tuple[VipEvaluation, ...]:
+    """Compare VIP responses with ordinary schemas without silently merging them."""
+
+    ordinary = {result.api: result for result in report.ordinary_results}
+    vip = {result.api: result for result in report.vip_results}
+    evaluations: list[VipEvaluation] = []
+    for api in VIP_API_NAMES:
+        dataset = api.removesuffix("_vip")
+        ordinary_result = ordinary.get(dataset)
+        vip_result = vip.get(api)
+        ordinary_status = ordinary_result.status if ordinary_result else "NOT TESTED"
+        if not report.vip_requested or not report.token_configured or vip_result is None:
+            evaluations.append(
+                VipEvaluation(
+                    dataset,
+                    ordinary_status,
+                    "NOT TESTED",
+                    "NOT TESTED",
+                    "unknown",
+                    (),
+                    "ordinary",
+                    "VIP period probe was not run",
+                )
+            )
+            continue
+
+        relation = (
+            compare_field_sets(vip_result.fields, ordinary_result.fields)
+            if ordinary_result
+            else "unknown"
+        )
+        missing = tuple(sorted(_raw_pit_fields(dataset).difference(vip_result.fields)))
+        full_market = vip_result.full_market_by_period
+        if (
+            vip_result.status == "PASS"
+            and full_market.startswith("YES")
+            and relation in {"same", "superset"}
+            and not missing
+            and PIT_MAPPINGS[dataset].semantic_status == "confirmed"
+        ):
+            recommendation = "VIP"
+        elif ordinary_status == "PASS":
+            recommendation = "fallback"
+        else:
+            recommendation = "ordinary"
+        notes_parts = [
+            f"schema={relation}",
+            f"pit_mapping={PIT_MAPPINGS[dataset].semantic_status}",
+        ]
+        if dataset == "fina_mainbz":
+            notes_parts.append("requires explicit disclosure_date join")
+        if missing:
+            notes_parts.append("missing_vip_pit_fields=" + ",".join(missing))
+        if vip_result.error_type:
+            notes_parts.append(f"error_type={vip_result.error_type}")
+        evaluations.append(
+            VipEvaluation(
+                dataset,
+                ordinary_status,
+                vip_result.status,
+                full_market,
+                relation,
+                missing,
+                recommendation,
+                "; ".join(notes_parts),
+            )
+        )
+    return tuple(evaluations)
+
+
+def render_vip_evaluation_markdown(report: ValidationReport) -> str:
+    evaluations = evaluate_vip_apis(report)
+    lines = [
+        "# VIP API evaluation",
+        "",
+        f"- Generated at (UTC): `{report.generated_at}`",
+        f"- Token configured: `{report.token_configured}` (value never recorded)",
+        "- VIP calls are bounded `period=20231231` probes without `ts_code`; a positive "
+        "result establishes the query mode, not complete pagination or historical coverage.",
+        "",
+        "| Dataset | Ordinary | VIP | Full-market capable | Recommendation |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    for evaluation in evaluations:
+        lines.append(
+            "| "
+            + " | ".join(
+                (
+                    evaluation.dataset,
+                    _cell(evaluation.ordinary_status),
+                    _cell(evaluation.vip_status),
+                    _cell(evaluation.full_market_by_period),
+                    _cell(evaluation.recommendation),
+                )
+            )
+            + " |"
+        )
+    lines.extend(
+        [
+            "",
+            "## Schema and PIT notes",
+            "",
+            "| Dataset | VIP schema vs ordinary | Missing VIP PIT fields | Notes |",
+            "| --- | --- | --- | --- |",
+        ]
+    )
+    for evaluation in evaluations:
+        missing = ", ".join(evaluation.missing_vip_pit_fields) or "-"
+        lines.append(
+            "| "
+            + " | ".join(
+                (
+                    evaluation.dataset,
+                    _cell(evaluation.schema_relation),
+                    _cell(missing),
+                    _cell(evaluation.notes),
+                )
+            )
+            + " |"
+        )
+    lines.extend(
+        [
+            "",
+            "## Recommendation rule",
+            "",
+            "`VIP` requires a successful bounded period probe, an identical or superset "
+            "schema, no missing raw PIT fields, and a confirmed PIT mapping. `fallback` "
+            "means ordinary remains "
+            "usable but VIP is not safe as the primary source. `ordinary` means VIP "
+            "was not tested or ordinary itself was not ready.",
             "",
         ]
     )
@@ -331,3 +619,9 @@ def write_pit_mapping_report(report: ValidationReport, path: str | Path) -> None
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(render_pit_mapping_markdown(report), encoding="utf-8")
+
+
+def write_vip_evaluation_report(report: ValidationReport, path: str | Path) -> None:
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(render_vip_evaluation_markdown(report), encoding="utf-8")
