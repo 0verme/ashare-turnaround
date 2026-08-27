@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import time
 from collections import defaultdict
 from dataclasses import dataclass
@@ -19,6 +20,8 @@ from ..storage.parquet import RawParquetStore, StoredFile
 from ..storage.state import SyncRecord, SyncStateStore
 from .specs import API_VALIDATION_ORDER, get_dataset_spec
 
+LOGGER = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True, slots=True)
 class FetchResult:
@@ -29,12 +32,18 @@ class FetchResult:
     rows: int
     error_type: str | None = None
     error_message: str | None = None
+    warnings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
 class SampleSyncSummary:
     results: tuple[FetchResult, ...]
     stored_files: tuple[StoredFile, ...]
+    storage_errors: tuple[tuple[str, str], ...] = ()
+
+    @property
+    def failures(self) -> tuple[FetchResult, ...]:
+        return tuple(result for result in self.results if result.status in {"failed", "partial"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,14 +105,21 @@ def _schema_hash(columns: Any) -> str:
 
 
 def _page_signature(frame: pd.DataFrame) -> str:
+    """Hash the complete page, not only its first and last rows."""
+
     if frame.empty:
         return "empty"
-    sample = {
-        "columns": [str(column) for column in frame.columns],
-        "rows": [frame.iloc[0].to_dict(), frame.iloc[-1].to_dict()],
-    }
-    payload = json.dumps(sample, sort_keys=True, default=str, separators=(",", ":"))
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    try:
+        values = pd.util.hash_pandas_object(frame, index=False).to_numpy(copy=False)
+        payload = _schema_hash(frame.columns).encode("ascii") + b":" + values.tobytes()
+    except (TypeError, ValueError):
+        payload = json.dumps(
+            frame.to_dict(orient="records"),
+            sort_keys=True,
+            default=str,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _code_at(frame: pd.DataFrame, position: int) -> str | None:
@@ -146,10 +162,10 @@ def _build_paginated_fetch(
     total_rows: int | None = None,
 ) -> PaginatedFetch:
     frame = pd.concat(frames, ignore_index=True, sort=False) if frames else pd.DataFrame()
-    hashes = tuple(dict.fromkeys(page.schema_hash for page in pages if page.schema_hash))
+    schema_hashes = tuple(dict.fromkeys(page.schema_hash for page in pages if page.schema_hash))
     all_warnings = list(warnings or [])
-    if len(hashes) > 1 and "SCHEMA_DRIFT" not in all_warnings:
-        all_warnings.append("SCHEMA_DRIFT")
+    if len(schema_hashes) > 1 and "schema_drift" not in all_warnings:
+        all_warnings.append("schema_drift")
     return PaginatedFetch(
         frame=frame,
         status=status,
@@ -159,7 +175,7 @@ def _build_paginated_fetch(
         schema_hash=_schema_hash(frame.columns) if not frame.empty else "",
         first_ts_code=_code_at(frame, 0),
         last_ts_code=_code_at(frame, -1),
-        schema_hashes=hashes,
+        schema_hashes=schema_hashes,
         warnings=tuple(all_warnings),
         total_rows=total_rows,
     )
@@ -183,6 +199,8 @@ def fetch_paginated_audited(
     if requested_limit <= 0:
         raise ValueError("limit must be positive")
     offset = int(query.get("offset", 0))
+    if offset < 0:
+        raise ValueError("offset must be non-negative")
     frames: list[pd.DataFrame] = []
     pages: list[PageAudit] = []
     seen_signatures: set[str] = set()
@@ -216,17 +234,21 @@ def fetch_paginated_audited(
             signature=_page_signature(page),
         )
         pages.append(page_audit)
+        LOGGER.info(
+            "pagination_page dataset=%s page=%d offset=%d rows=%d elapsed=%.3f",
+            dataset,
+            page_number,
+            expected_offset,
+            len(page),
+            page_elapsed,
+        )
 
         if page.empty:
             if not frames:
                 return _build_paginated_fetch(
-                    dataset,
-                    frames,
-                    pages,
-                    started,
-                    status="EMPTY",
-                    warnings=["empty_response"],
+                    dataset, frames, pages, started, status="EMPTY", warnings=["empty_response"]
                 )
+            # An empty page after a full page is the normal terminal sentinel.
             if len(frames[-1]) == requested_limit:
                 return _build_paginated_fetch(
                     dataset,
@@ -313,6 +335,33 @@ def fetch_paginated(
     return result.frame
 
 
+def _record_fetch(
+    state: SyncStateStore,
+    dataset: str,
+    params: dict[str, Any],
+    started_at: str,
+    status: str,
+    *,
+    rows: int = 0,
+    error_type: str | None = None,
+    error_message: str | None = None,
+    warnings: tuple[str, ...] = (),
+) -> None:
+    state.append(
+        SyncRecord(
+            dataset=dataset,
+            params=params,
+            started_at=started_at,
+            finished_at=utc_now(),
+            status=status,
+            rows=rows,
+            error_type=error_type,
+            error_message=error_message,
+            warnings=warnings,
+        )
+    )
+
+
 def _fetch_and_record(
     provider: TushareProvider,
     dataset: str,
@@ -324,38 +373,66 @@ def _fetch_and_record(
 ) -> FetchResult:
     started_at = utc_now()
     try:
-        frame = fetch_paginated(
+        fetched = fetch_paginated_audited(
             provider,
             dataset,
             params,
             page_size=page_size,
             max_pages=max_pages,
         )
-        finished_at = utc_now()
-        status = "empty" if frame.empty else "success"
-        state.append(
-            SyncRecord(
-                dataset=dataset,
-                params=params,
-                started_at=started_at,
-                finished_at=finished_at,
-                status=status,
-                rows=len(frame),
-            )
+        if fetched.status == "PARTIAL":
+            raise PaginationError("paginated response is partial", partial=fetched)
+        frame = fetched.frame
+        status = "empty" if fetched.status == "EMPTY" else "success"
+        _record_fetch(
+            state,
+            dataset,
+            params,
+            started_at,
+            status,
+            rows=len(frame),
+            warnings=fetched.warnings,
         )
-        return FetchResult(dataset, params, frame, status, len(frame))
+        return FetchResult(
+            dataset,
+            params,
+            frame,
+            status,
+            len(frame),
+            warnings=fetched.warnings,
+        )
+    except PaginationError as exc:
+        partial = exc.partial
+        _record_fetch(
+            state,
+            dataset,
+            params,
+            started_at,
+            "partial",
+            rows=len(partial.frame),
+            error_type="pagination",
+            error_message=str(exc),
+            warnings=partial.warnings,
+        )
+        return FetchResult(
+            dataset,
+            params,
+            partial.frame,
+            "partial",
+            len(partial.frame),
+            "pagination",
+            str(exc),
+            partial.warnings,
+        )
     except ProviderError as exc:
-        finished_at = utc_now()
-        state.append(
-            SyncRecord(
-                dataset=dataset,
-                params=params,
-                started_at=started_at,
-                finished_at=finished_at,
-                status="failed",
-                error_type=exc.error_type,
-                error_message=exc.error_message,
-            )
+        _record_fetch(
+            state,
+            dataset,
+            params,
+            started_at,
+            "failed",
+            error_type=exc.error_type,
+            error_message=exc.error_message,
         )
         return FetchResult(
             dataset,
@@ -395,6 +472,21 @@ def _sample_requests(
     return dict(requests)
 
 
+def sample_request_plan(
+    codes: tuple[str, ...],
+    start_date: str = "20240101",
+    end_date: str = "20241231",
+    limit: int = 100,
+) -> dict[str, list[dict[str, Any]]]:
+    """Build the bounded sample plan without constructing a provider."""
+
+    if not 3 <= len(codes) <= 5:
+        raise ValueError("sample must contain 3 to 5 stock codes")
+    if limit <= 0:
+        raise ValueError("limit must be positive")
+    return _sample_requests(codes, start_date, end_date, limit)
+
+
 def sync_sample(
     provider: TushareProvider,
     store: RawParquetStore,
@@ -408,14 +500,16 @@ def sync_sample(
 ) -> SampleSyncSummary:
     """Fetch a few codes and replace each dataset's sample partitions once."""
 
-    if not 3 <= len(codes) <= 5:
-        raise ValueError("sample must contain 3 to 5 stock codes")
-    request_groups = _sample_requests(codes, start_date, end_date, limit)
+    if max_pages <= 0:
+        raise ValueError("max_pages must be positive")
+    request_groups = sample_request_plan(codes, start_date, end_date, limit)
     results: list[FetchResult] = []
     stored_files: list[StoredFile] = []
+    storage_errors: list[tuple[str, str]] = []
 
     for dataset, requests in request_groups.items():
         spec = get_dataset_spec(dataset)
+        dataset_results: list[FetchResult] = []
         frames: list[pd.DataFrame] = []
         for params in requests:
             result = _fetch_and_record(
@@ -427,8 +521,15 @@ def sync_sample(
                 max_pages=max_pages,
             )
             results.append(result)
+            dataset_results.append(result)
             if result.status == "success":
                 frames.append(_with_provenance(result.frame))
+
+        # Never replace an existing partition with a partial sample.  A caller
+        # can inspect the failed request and retry the complete dataset later.
+        if any(result.status in {"failed", "partial"} for result in dataset_results):
+            LOGGER.warning("sample_dataset_not_stored dataset=%s reason=incomplete_fetch", dataset)
+            continue
         if not frames:
             continue
         combined = pd.concat(frames, ignore_index=True, sort=False)
@@ -445,6 +546,8 @@ def sync_sample(
                 )
             )
         except Exception as exc:
+            message = str(exc)
+            storage_errors.append((dataset, message))
             state.append(
                 SyncRecord(
                     dataset=dataset,
@@ -454,7 +557,8 @@ def sync_sample(
                     status="failed",
                     rows=0,
                     error_type="storage",
-                    error_message=str(exc),
+                    error_message=message,
                 )
             )
-    return SampleSyncSummary(tuple(results), tuple(stored_files))
+            LOGGER.exception("sample_dataset_storage_failed dataset=%s", dataset)
+    return SampleSyncSummary(tuple(results), tuple(stored_files), tuple(storage_errors))

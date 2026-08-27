@@ -14,6 +14,8 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from ..datasets.specs import DatasetSpec, get_dataset_spec
+from ..dates import date_text
+from .atomic import fsync_directory
 
 _DATASET_NAME = re.compile(r"^[A-Za-z0-9_]+$")
 
@@ -26,20 +28,9 @@ class StoredFile:
 
 
 def _date_text(value: Any) -> str | None:
-    if value is None or pd.isna(value):
-        return None
-    text = str(value).strip()
-    if not text or text.lower() in {"nat", "none", "nan"}:
-        return None
-    if text.isdigit() and len(text) == 8:
-        return text
-    try:
-        timestamp = pd.Timestamp(value)
-    except (TypeError, ValueError):
-        return None
-    if pd.isna(timestamp):
-        return None
-    return timestamp.strftime("%Y%m%d")
+    """Compatibility wrapper around the shared date parser."""
+
+    return date_text(value)
 
 
 class RawParquetStore:
@@ -171,6 +162,19 @@ class RawParquetStore:
     def period_exists(self, dataset: str, period: str) -> bool:
         return self.period_file(dataset, period).is_file()
 
+    def schema_columns(self, dataset: str) -> tuple[str, ...]:
+        """Return the union of Parquet columns using metadata only."""
+
+        columns: list[str] = []
+        seen: set[str] = set()
+        for path in self.parquet_files(dataset):
+            for column in pq.ParquetFile(path).schema_arrow.names:
+                name = str(column)
+                if name not in seen:
+                    seen.add(name)
+                    columns.append(name)
+        return tuple(columns)
+
     def read(self, dataset: str) -> pd.DataFrame:
         """Read all partitions for a dataset, unioning columns in Python."""
 
@@ -189,15 +193,22 @@ class RawParquetStore:
         if strategy not in {"date", "year"}:
             raise ValueError(f"unsupported partition strategy: {strategy}")
         if spec.partition_field not in frame.columns:
-            return [("unknown", frame)]
+            raise ValueError(
+                f"partition field {spec.partition_field!r} is missing for {spec.name}"
+            )
 
         partitions: dict[str, list[int]] = {}
         for index, value in frame[spec.partition_field].items():
-            date_text = _date_text(value)
+            normalized = _date_text(value)
+            if normalized is None:
+                raise ValueError(
+                    f"invalid {spec.partition_field} at row {index!r}; "
+                    "refusing to write an unknown partition"
+                )
             if strategy == "year":
-                key = f"year={date_text[:4]}" if date_text else "year=unknown"
+                key = f"year={normalized[:4]}"
             else:
-                key = f"{spec.partition_field}={date_text}" if date_text else "unknown"
+                key = f"{spec.partition_field}={normalized}"
             partitions.setdefault(key, []).append(index)
         return [
             (key, frame.loc[indices].reset_index(drop=True)) for key, indices in partitions.items()
@@ -227,6 +238,10 @@ class RawParquetStore:
             with temporary_path.open("rb") as written:
                 os.fsync(written.fileno())
             os.replace(temporary_path, path)
+            # The rename is atomic for readers; fsyncing the parent directory
+            # also makes the new name durable across a sudden power loss on
+            # filesystems that support it.
+            fsync_directory(path.parent)
             return StoredFile(path=path, rows=len(frame), size_bytes=path.stat().st_size)
         except BaseException:
             if temporary_path is not None:

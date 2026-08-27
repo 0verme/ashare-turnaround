@@ -13,11 +13,32 @@ import pandas as pd
 from ..storage.parquet import RawParquetStore
 
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+_ORDER_TERM = re.compile(
+    r"^(?:[A-Za-z_][A-Za-z0-9_]*|\d+)"
+    r"(?:\s+(?:ASC|DESC))?"
+    r"(?:\s+NULLS\s+(?:FIRST|LAST))?$",
+    re.IGNORECASE,
+)
 
 
 def _identifier(value: str) -> str:
     if not _IDENTIFIER.fullmatch(value):
         raise ValueError(f"unsafe SQL identifier: {value!r}")
+    return value
+
+
+def _order_by(value: str) -> str:
+    terms = [term.strip() for term in value.split(",")]
+    if not terms or any(not term or not _ORDER_TERM.fullmatch(term) for term in terms):
+        raise ValueError(f"unsafe SQL order expression: {value!r}")
+    return ", ".join(terms)
+
+
+def _where_fragment(value: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("where must be a non-empty SQL fragment")
+    if any(marker in value for marker in (";", "--", "/*", "*/")):
+        raise ValueError("unsafe SQL where fragment")
     return value
 
 
@@ -63,12 +84,12 @@ class DuckDBQuery:
         )
         query_parameters: list[Any] = [self.store.parquet_glob(dataset)]
         if where:
-            sql += f" WHERE {where}"
+            sql += f" WHERE {_where_fragment(where)}"
             query_parameters.extend(parameters or [])
         elif parameters:
             raise ValueError("parameters require a where clause")
         if order_by:
-            sql += f" ORDER BY {order_by}"
+            sql += f" ORDER BY {_order_by(order_by)}"
         return self.connection.execute(sql, query_parameters).fetchdf()
 
     def historical_pe_percentile(self, ts_code: str | None = None) -> pd.DataFrame:
@@ -78,7 +99,7 @@ class DuckDBQuery:
         files = self.store.parquet_files(dataset)
         if not files:
             return pd.DataFrame()
-        available_columns = set(self.store.read(dataset).columns)
+        available_columns = set(self.store.schema_columns(dataset))
         required = {"ts_code", "trade_date", "pe"}
         if not required.issubset(available_columns):
             return pd.DataFrame()
@@ -117,7 +138,7 @@ class DuckDBQuery:
                 "aggregate": pd.DataFrame(),
                 "window": pd.DataFrame(),
             }
-        columns = set(self.store.read(dataset).columns)
+        columns = set(self.store.schema_columns(dataset))
         predicates: list[str] = []
         parameters: list[Any] = []
         if ts_code is not None and "ts_code" in columns:

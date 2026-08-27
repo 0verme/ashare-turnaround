@@ -14,6 +14,7 @@ import pandas as pd
 import requests
 import tushare as ts
 
+from ..security import redact_text
 from .rate_limit import RateLimiter
 
 LOGGER = logging.getLogger(__name__)
@@ -48,12 +49,9 @@ _TRANSIENT_HTTP_STATUS_CODES = {408, 425, 429, 500, 502, 503, 504}
 
 
 def _redact(text: str, secret: str | None = None) -> str:
-    """Remove the configured token from exception text before it is logged."""
+    """Return provider error text without secrets or private endpoint URLs."""
 
-    value = str(text)
-    if secret:
-        value = value.replace(secret, "<redacted>")
-    return value
+    return redact_text(text, secret)
 
 
 def _classify_error(exc: BaseException) -> str:
@@ -237,6 +235,7 @@ class TushareProvider:
             query_params["fields"] = fields
 
         for attempt in range(1, self._max_retries + 2):
+            started = time.monotonic()
             try:
                 if self._rate_limiter is not None:
                     self._rate_limiter.acquire()
@@ -247,8 +246,22 @@ class TushareProvider:
                     frame = result
                 else:
                     frame = pd.DataFrame(result)
+                elapsed = time.monotonic() - started
                 if frame.empty:
-                    self._logger.warning("Tushare API returned no rows: api=%s", api_name)
+                    self._logger.warning(
+                        "tushare_request api=%s rows=0 elapsed=%.3f attempt=%d",
+                        api_name,
+                        elapsed,
+                        attempt,
+                    )
+                else:
+                    self._logger.info(
+                        "tushare_request api=%s rows=%d elapsed=%.3f attempt=%d",
+                        api_name,
+                        len(frame),
+                        elapsed,
+                        attempt,
+                    )
                 return frame.reset_index(drop=True)
             except Exception as exc:  # SDK raises plain Exception for API errors.
                 error_type = _classify_error(exc)
@@ -266,6 +279,13 @@ class TushareProvider:
                     )
                     self._sleep(delay)
                     continue
+                self._logger.error(
+                    "tushare_request_failed api=%s error_type=%s attempt=%d message=%s",
+                    api_name,
+                    error_type,
+                    attempt,
+                    message,
+                )
                 raise ProviderError(
                     api_name,
                     error_type,

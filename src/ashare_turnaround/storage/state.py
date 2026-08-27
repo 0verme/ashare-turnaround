@@ -10,6 +10,9 @@ from pathlib import Path
 from threading import RLock
 from typing import Any
 
+from ..security import redact_text
+from .atomic import fsync_directory
+
 
 @dataclass(frozen=True, slots=True)
 class SyncRecord:
@@ -21,9 +24,50 @@ class SyncRecord:
     rows: int = 0
     error_type: str | None = None
     error_message: str | None = None
+    warnings: tuple[str, ...] = ()
 
 
-_SENSITIVE_KEY_PARTS = ("token", "secret", "password", "passwd", "api_key", "apikey")
+_SENSITIVE_KEY_PARTS = (
+    "token",
+    "secret",
+    "password",
+    "passwd",
+    "api_key",
+    "apikey",
+    "access_token",
+    "authorization",
+    "credential",
+    "url",
+    "uri",
+    "endpoint",
+)
+
+
+def _atomic_write_json(path: Path, value: object) -> None:
+    """Replace a JSON file only after its complete contents are durable."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            dir=path.parent,
+            delete=False,
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+            json.dump(value, temporary, ensure_ascii=False, indent=2)
+            temporary.write("\n")
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        os.replace(temporary_path, path)
+        fsync_directory(path.parent)
+    except BaseException:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+        raise
 
 
 def _sanitize(value: Any, secret: str | None = None, key: str | None = None) -> Any:
@@ -37,8 +81,8 @@ def _sanitize(value: Any, secret: str | None = None, key: str | None = None) -> 
         return [_sanitize(item, secret) for item in value]
     if isinstance(value, Path):
         value = str(value)
-    if isinstance(value, str) and secret:
-        return value.replace(secret, "<redacted>")
+    if isinstance(value, str):
+        return redact_text(value, secret)
     return value
 
 
@@ -82,27 +126,7 @@ class SyncStateStore:
         payload = _sanitize(asdict(record), self._secret)
         records = self.records()
         records.append(payload)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        temporary_path: Path | None = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                mode="w",
-                encoding="utf-8",
-                prefix=f".{self.path.name}.",
-                suffix=".tmp",
-                dir=self.path.parent,
-                delete=False,
-            ) as temporary:
-                temporary_path = Path(temporary.name)
-                json.dump(records, temporary, ensure_ascii=False, indent=2)
-                temporary.write("\n")
-                temporary.flush()
-                os.fsync(temporary.fileno())
-            os.replace(temporary_path, self.path)
-        except BaseException:
-            if temporary_path is not None:
-                temporary_path.unlink(missing_ok=True)
-            raise
+        _atomic_write_json(self.path, records)
 
     def latest(self, dataset: str | None = None) -> dict[str, Any] | None:
         values = self.records()
@@ -135,27 +159,7 @@ class BootstrapCheckpointStore:
             payload["record_type"] = "bootstrap_checkpoint"
             records = self.records()
             records.append(payload)
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            temporary_path: Path | None = None
-            try:
-                with tempfile.NamedTemporaryFile(
-                    mode="w",
-                    encoding="utf-8",
-                    prefix=f".{self.path.name}.",
-                    suffix=".tmp",
-                    dir=self.path.parent,
-                    delete=False,
-                ) as temporary:
-                    temporary_path = Path(temporary.name)
-                    json.dump(records, temporary, ensure_ascii=False, indent=2)
-                    temporary.write("\n")
-                    temporary.flush()
-                    os.fsync(temporary.fileno())
-                os.replace(temporary_path, self.path)
-            except BaseException:
-                if temporary_path is not None:
-                    temporary_path.unlink(missing_ok=True)
-                raise
+            _atomic_write_json(self.path, records)
 
     def latest(self, dataset: str, period: str) -> dict[str, Any] | None:
         values = [

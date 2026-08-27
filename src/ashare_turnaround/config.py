@@ -19,7 +19,7 @@ class Settings:
     """Runtime settings without putting credentials in logs or repr output."""
 
     token: str | None = field(default=None, repr=False)
-    base_url: str | None = DEFAULT_BASE_URL
+    base_url: str | None = field(default=DEFAULT_BASE_URL, repr=False)
     data_dir: Path = DEFAULT_DATA_DIR
     timeout: float = 30.0
     max_retries: int = 2

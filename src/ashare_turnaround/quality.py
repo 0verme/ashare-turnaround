@@ -8,6 +8,7 @@ from dataclasses import dataclass
 import pandas as pd
 
 from .datasets.specs import DatasetSpec
+from .dates import bad_date_count
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,24 +45,6 @@ def compare_field_sets(left: Iterable[str], right: Iterable[str]) -> str:
     if left_set.issubset(right_set):
         return "subset"
     return "different"
-
-
-def _bad_date_count(values: pd.Series) -> int:
-    text = values.astype("string").str.strip()
-    present = values.notna() & text.notna() & text.ne("")
-    if not present.any():
-        return 0
-
-    parsed = pd.Series(pd.NaT, index=values.index, dtype="datetime64[ns]")
-    eight_digit = text.str.fullmatch(r"\d{8}", na=False)
-    if (present & eight_digit).any():
-        parsed.loc[present & eight_digit] = pd.to_datetime(
-            text.loc[present & eight_digit], format="%Y%m%d", errors="coerce"
-        )
-    remaining = present & ~eight_digit
-    if remaining.any():
-        parsed.loc[remaining] = pd.to_datetime(text.loc[remaining], errors="coerce")
-    return int((present & parsed.isna()).sum())
 
 
 def check_frame_quality(
@@ -119,7 +102,7 @@ def check_frame_quality(
     for field in spec.date_fields:
         if field not in frame.columns:
             continue
-        count = _bad_date_count(frame[field])
+        count = bad_date_count(frame[field])
         if count:
             bad_dates.append((field, count))
             warnings.append(f"bad_dates={field}:{count}")
