@@ -52,13 +52,32 @@ def test_pit_hides_future_and_selects_revision_by_as_of_date() -> None:
     assert after_revision["total_revenue"].tolist() == [110.0]
 
 
-def test_pit_can_use_disclosure_date_for_main_business_data() -> None:
+def test_pit_falls_back_when_preferred_available_date_is_malformed() -> None:
     raw = pd.DataFrame(
         {
             "ts_code": ["600000.SH"],
+            "ann_date": ["20260320"],
+            "f_ann_date": ["not-a-date"],
             "end_date": ["20251231"],
-            "bz_item": ["main"],
-            "bz_sales": [10.0],
+            "report_type": ["1"],
+            "update_flag": ["1"],
+            "total_revenue": [100.0],
+        }
+    )
+
+    canonical = canonicalize_financial_frame("income", raw)
+
+    assert canonical["available_date_source"].tolist() == ["ann_date"]
+    assert canonical["actual_available_date"].dt.strftime("%Y%m%d").tolist() == ["20260320"]
+
+
+def test_pit_can_use_disclosure_date_for_main_business_data() -> None:
+    raw = pd.DataFrame(
+        {
+            "ts_code": ["600000.SH", "600000.SH"],
+            "end_date": ["20251231", "20251231"],
+            "bz_item": ["main", "other"],
+            "bz_sales": [10.0, 2.0],
         }
     )
     disclosure = pd.DataFrame(
@@ -68,8 +87,9 @@ def test_pit_can_use_disclosure_date_for_main_business_data() -> None:
     result = query_financial_as_of(
         "fina_mainbz", "600000.SH", "20260325", frame=raw, disclosure_frame=disclosure
     )
-    assert len(result) == 1
-    assert result["available_date_source"].tolist() == ["disclosure_date.actual_date"]
+    assert len(result) == 2
+    assert set(result["bz_item"]) == {"main", "other"}
+    assert set(result["available_date_source"]) == {"disclosure_date.actual_date"}
 
 
 def test_single_quarter_bridge_for_cumulative_values() -> None:

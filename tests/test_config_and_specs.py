@@ -12,6 +12,16 @@ def test_settings_redact_token_from_repr_and_support_official_switch() -> None:
     assert DEFAULT_BASE_URL.startswith("https://")
 
 
+def test_settings_repr_does_not_expose_credentials_in_endpoint_url() -> None:
+    settings = Settings(
+        token="secret-token",
+        base_url="https://private.example/api?token=secret-token",
+    )
+
+    assert "private.example" not in repr(settings)
+    assert "secret-token" not in repr(settings)
+
+
 def test_specs_capture_raw_and_pit_fields() -> None:
     income = get_dataset_spec("income")
     assert income.api_name == "income"

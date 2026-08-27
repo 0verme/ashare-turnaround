@@ -63,6 +63,26 @@ def test_financial_rows_partition_by_report_year(tmp_path) -> None:
     assert any("year=2024" in path for path in paths)
 
 
+def test_fina_mainbz_raw_duplicate_identity_is_preserved(tmp_path) -> None:
+    store = RawParquetStore(tmp_path / "data")
+    frame = pd.DataFrame(
+        {
+            "ts_code": ["600000.SH", "600000.SH"],
+            "end_date": ["20241231", "20241231"],
+            "bz_item": ["main", "main"],
+            "curr_type": ["CNY", "CNY"],
+            "update_flag": ["1", "1"],
+            "bz_sales": [10.0, 11.0],
+        }
+    )
+
+    store.write("fina_mainbz", frame, get_dataset_spec("fina_mainbz"))
+
+    loaded = store.read("fina_mainbz")
+    assert len(loaded) == 2
+    assert sorted(loaded["bz_sales"].tolist()) == [10.0, 11.0]
+
+
 def test_trade_cal_uses_one_low_cardinality_year_partition(tmp_path) -> None:
     store = RawParquetStore(tmp_path / "data")
     frame = pd.DataFrame(

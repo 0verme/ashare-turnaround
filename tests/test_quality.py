@@ -46,6 +46,22 @@ def test_quality_reports_duplicate_and_schema_relation() -> None:
     assert "schema_drift=superset" in result.warnings
 
 
+def test_quality_reports_null_identity_keys_without_repairing_rows() -> None:
+    frame = pd.DataFrame(
+        {
+            "ts_code": ["600000.SH", None],
+            "trade_date": ["20240101", "20240102"],
+            "close": [1.0, 2.0],
+        }
+    )
+
+    result = check_frame_quality("daily_basic", frame, get_dataset_spec("daily_basic"))
+
+    assert result.null_identity_rows == 1
+    assert result.null_key_counts == (("ts_code", 1),)
+    assert "null_identity_rows=1" in result.warnings
+
+
 def test_compare_field_sets_distinguishes_all_drift_shapes() -> None:
     assert compare_field_sets({"a"}, {"a"}) == "same"
     assert compare_field_sets({"a", "b"}, {"a"}) == "superset"
