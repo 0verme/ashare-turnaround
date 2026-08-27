@@ -218,7 +218,15 @@ def run_replay_frames(
         vector.merge(compute_trend_features(financial_frames, code, as_of))
         vector.merge(compute_quality_features(financial_frames, code, as_of))
         vector.merge(compute_attention_features(market, code, as_of))
-        vector.merge(compute_crowding_features(market, code, as_of))
+        vector.merge(
+            compute_crowding_features(
+                market,
+                code,
+                as_of,
+                calendar_frame=frames.get("trade_cal"),
+                disclosure_frame=frames.get("disclosure_date"),
+            )
+        )
         vectors.append(vector)
         scores.append(score_feature_vector(vector, config=settings.score))
     ranked = rank_scores(scores, top_n=settings.top_n)

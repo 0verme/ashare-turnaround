@@ -116,6 +116,37 @@ def availability_texts(history: pd.DataFrame) -> tuple[str, ...]:
     return tuple(value.strftime("%Y%m%d") for value in values)
 
 
+def market_history(
+    frame: pd.DataFrame | None,
+    code: str,
+    as_of_date: str | date | datetime | pd.Timestamp,
+    lookback: int = 252,
+) -> pd.DataFrame:
+    """PIT market rows for one security (or index) up to and including as-of.
+
+    Rows are restricted to ``trade_date <= as_of`` and, when the frame carries
+    ``actual_available_date``, to rows available on or before as-of.  The
+    returned frame is sorted by ``_date`` with at most ``lookback`` rows.
+    """
+
+    if (
+        frame is None
+        or frame.empty
+        or "ts_code" not in frame.columns
+        or "trade_date" not in frame.columns
+    ):
+        return pd.DataFrame()
+    as_of = pd.Timestamp(pd.to_datetime(as_of_date, errors="raise")).normalize()
+    result = frame.loc[frame["ts_code"].astype("string").eq(str(code))].copy()
+    dates = normalize_date_series(result["trade_date"])
+    result = result.loc[dates.notna() & dates.le(as_of)].copy()
+    if "actual_available_date" in result.columns:
+        available = normalize_date_series(result["actual_available_date"])
+        result = result.loc[available.isna() | available.le(as_of)].copy()
+    result["_date"] = normalize_date_series(result["trade_date"])
+    return result.sort_values("_date").tail(lookback).reset_index(drop=True)
+
+
 def add_known(
     vector: FeatureVector,
     name: str,
@@ -133,6 +164,10 @@ def add_known(
     source_versions: tuple[str, ...] = (),
     provenance: dict[str, Any] | None = None,
     status: str | None = None,
+    semantic_version: str = "features-v1",
+    formula: str | None = None,
+    components: dict[str, Any] | None = None,
+    config: dict[str, Any] | None = None,
 ) -> None:
     parsed = numeric(value)
     vector.add(
@@ -152,6 +187,10 @@ def add_known(
         source_versions=source_versions,
         contract_version=COMPARABLE_PERIOD_CONTRACT_VERSION,
         provenance=provenance or {},
+        semantic_version=semantic_version,
+        formula=formula,
+        components=components,
+        config=config,
     )
 
 
@@ -312,6 +351,7 @@ def add_unknown(
     fields: tuple[str, ...],
     reason: str,
     history: pd.DataFrame | None = None,
+    semantic_version: str = "features-v1",
 ) -> None:
     add_known(
         vector,
@@ -321,4 +361,5 @@ def add_unknown(
         fields=fields,
         history=history,
         reason=reason,
+        semantic_version=semantic_version,
     )
