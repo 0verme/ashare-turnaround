@@ -133,6 +133,7 @@ def add_known(
     source_versions: tuple[str, ...] = (),
     provenance: dict[str, Any] | None = None,
     status: str | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> None:
     parsed = numeric(value)
     vector.add(
@@ -152,6 +153,7 @@ def add_known(
         source_versions=source_versions,
         contract_version=COMPARABLE_PERIOD_CONTRACT_VERSION,
         provenance=provenance or {},
+        metadata=metadata or {},
     )
 
 

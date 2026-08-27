@@ -30,6 +30,7 @@ class FeatureEvidence:
     source_versions: tuple[str, ...] = ()
     contract_version: str = COMPARABLE_PERIOD_CONTRACT_VERSION
     provenance: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -70,6 +71,7 @@ class FeatureVector:
         source_versions: tuple[str, ...] = (),
         contract_version: str | None = None,
         provenance: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         resolved_contract_version = contract_version or self.comparable_period_contract_version
         if resolved_contract_version != self.comparable_period_contract_version:
@@ -94,6 +96,7 @@ class FeatureVector:
             source_versions=source_versions,
             contract_version=resolved_contract_version,
             provenance=provenance or {},
+            metadata=metadata or {},
         )
         if (
             status in {"unknown", "insufficient_data", "unsupported"}
