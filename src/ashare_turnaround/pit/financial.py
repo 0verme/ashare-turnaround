@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
 
@@ -28,28 +28,44 @@ PIT_MAPPINGS: dict[str, PITMapping] = {
         ("report_period", "end_date"),
         ("announcement_date", "ann_date"),
         ("actual_available_date", "f_ann_date", "ann_date"),
-        notes="Prefer f_ann_date; ann_date is only an explicit fallback when f_ann_date is absent.",
+        semantic_status="confirmed",
+        notes=(
+            "Live schema and source field definitions confirm f_ann_date as the actual "
+            "announcement date; ann_date is an explicit fallback."
+        ),
     ),
     "balancesheet": PITMapping(
         "balancesheet",
         ("report_period", "end_date"),
         ("announcement_date", "ann_date"),
         ("actual_available_date", "f_ann_date", "ann_date"),
-        notes="Prefer f_ann_date; ann_date is only an explicit fallback when f_ann_date is absent.",
+        semantic_status="confirmed",
+        notes=(
+            "Live schema and source field definitions confirm f_ann_date as the actual "
+            "announcement date; ann_date is an explicit fallback."
+        ),
     ),
     "cashflow": PITMapping(
         "cashflow",
         ("report_period", "end_date"),
         ("announcement_date", "ann_date"),
         ("actual_available_date", "f_ann_date", "ann_date"),
-        notes="Prefer f_ann_date; ann_date is only an explicit fallback when f_ann_date is absent.",
+        semantic_status="confirmed",
+        notes=(
+            "Live schema and source field definitions confirm f_ann_date as the actual "
+            "announcement date; ann_date is an explicit fallback."
+        ),
     ),
     "fina_indicator": PITMapping(
         "fina_indicator",
         ("report_period", "end_date"),
         ("announcement_date", "ann_date"),
         ("actual_available_date", "ann_date"),
-        notes="No f_ann_date candidate is assumed for this endpoint; confirm against live schema.",
+        semantic_status="confirmed",
+        notes=(
+            "Live schema and source field definitions confirm ann_date as the endpoint's "
+            "available announcement date; no f_ann_date is exposed."
+        ),
     ),
     "fina_mainbz": PITMapping(
         "fina_mainbz",
@@ -64,19 +80,33 @@ PIT_MAPPINGS: dict[str, PITMapping] = {
         ("report_period", "end_date"),
         ("announcement_date", "ann_date"),
         ("actual_available_date", "ann_date"),
-        notes="first_ann_date is retained as a raw field, not silently substituted.",
+        semantic_status="confirmed",
+        notes=(
+            "Live schema and source field definitions confirm ann_date for availability; "
+            "first_ann_date remains a raw field and is not substituted."
+        ),
     ),
     "express": PITMapping(
         "express",
         ("report_period", "end_date"),
         ("announcement_date", "ann_date"),
         ("actual_available_date", "ann_date"),
+        semantic_status="confirmed",
+        notes=(
+            "Live schema and source field definitions confirm ann_date as the available "
+            "announcement date."
+        ),
     ),
     "fina_audit": PITMapping(
         "fina_audit",
         ("report_period", "end_date"),
         ("announcement_date", "ann_date"),
         ("actual_available_date", "ann_date"),
+        semantic_status="confirmed",
+        notes=(
+            "Live schema and source field definitions confirm ann_date as the available "
+            "announcement date."
+        ),
     ),
     "disclosure_date": PITMapping(
         "disclosure_date",
@@ -202,12 +232,13 @@ def canonicalize_financial_frame(
     output["announcement_date"] = _normalize_date_series(announcement_values)
 
     available_values, available_sources = _first_available(output, mapping.available_candidates)
-    if mapping.disclosure_fallback and available_values.isna().all():
+    if mapping.disclosure_fallback:
         disclosure_values, disclosure_sources = _disclosure_available_dates(
             output, disclosure_frame
         )
-        available_values = disclosure_values
-        available_sources = disclosure_sources
+        fill_from_disclosure = available_values.isna() & disclosure_values.notna()
+        available_values.loc[fill_from_disclosure] = disclosure_values.loc[fill_from_disclosure]
+        available_sources.loc[fill_from_disclosure] = disclosure_sources.loc[fill_from_disclosure]
     output["actual_available_date"] = _normalize_date_series(available_values)
     output["available_date_source"] = available_sources.astype("string")
 
@@ -342,3 +373,229 @@ def derive_single_quarter(
             row_mask = mask & output["_month_day"].eq(month_day)
             output.loc[row_mask, "single_quarter"] = value
     return output.drop(columns=["_year", "_month_day"])
+
+
+@dataclass(frozen=True, slots=True)
+class RevisionCandidate:
+    """A bounded, comparable financial version chain found in local raw data."""
+
+    dataset: str
+    ts_code: str
+    report_period: pd.Timestamp
+    identity: tuple[tuple[str, str], ...]
+    available_dates: tuple[pd.Timestamp, ...]
+    update_flags: tuple[str, ...]
+    changed_fields: tuple[str, ...]
+    rows: pd.DataFrame = field(repr=False, compare=False)
+
+
+@dataclass(frozen=True, slots=True)
+class RevisionPITCheck:
+    """Results for the four as-of boundaries around a real revision chain."""
+
+    status: str
+    before_first_empty: bool
+    first_version_visible: bool
+    before_revision_first: bool
+    after_revision_revised: bool
+    first_available_date: pd.Timestamp
+    revision_available_date: pd.Timestamp
+    value_column: str
+    first_value: object
+    revised_value: object
+
+    @property
+    def checks(self) -> dict[str, bool]:
+        return {
+            "before_first": self.before_first_empty,
+            "after_first": self.first_version_visible,
+            "before_revision": self.before_revision_first,
+            "after_revision": self.after_revision_revised,
+        }
+
+
+def _distinct_non_null_values(values: pd.Series) -> bool:
+    return values.dropna().astype("string").nunique() > 1
+
+
+def find_financial_revision_candidates(
+    dataset: str,
+    frame: pd.DataFrame,
+    *,
+    max_candidates: int = 20,
+) -> tuple[RevisionCandidate, ...]:
+    """Find real temporal revision candidates without scanning a remote universe.
+
+    A candidate must share a comparable report identity, have at least two
+    available dates, and change at least one non-metadata financial value.  A
+    mere duplicate with only a different ``update_flag`` is intentionally
+    excluded.
+    """
+
+    if max_candidates <= 0:
+        raise ValueError("max_candidates must be positive")
+    canonical = (
+        frame.copy()
+        if {"report_period", "actual_available_date"}.issubset(frame.columns)
+        else canonicalize_financial_frame(dataset, frame)
+    )
+    required = {"ts_code", "report_period", "actual_available_date"}
+    if not required.issubset(canonical.columns) or canonical.empty:
+        return ()
+    canonical = canonical.copy()
+    canonical["report_period"] = _normalize_date_series(canonical["report_period"])
+    canonical["actual_available_date"] = _normalize_date_series(
+        canonical["actual_available_date"]
+    )
+    if "announcement_date" in canonical.columns:
+        canonical["announcement_date"] = _normalize_date_series(canonical["announcement_date"])
+    canonical = canonical.loc[
+        canonical["ts_code"].notna()
+        & canonical["report_period"].notna()
+        & canonical["actual_available_date"].notna()
+    ].copy()
+    if canonical.empty:
+        return ()
+
+    identity_columns = _version_columns(canonical)
+    metadata = {
+        "ts_code",
+        "ann_date",
+        "f_ann_date",
+        "end_date",
+        "report_period",
+        "announcement_date",
+        "actual_available_date",
+        "available_date_source",
+        "report_type",
+        "comp_type",
+        "end_type",
+        "type",
+        "update_flag",
+        "retrieved_at",
+        "source",
+    }
+    value_columns = [column for column in canonical.columns if column not in metadata]
+    candidates: list[RevisionCandidate] = []
+    for _, group in canonical.groupby(identity_columns, dropna=False, sort=False):
+        available_dates = sorted(
+            {
+                pd.Timestamp(value).normalize()
+                for value in group["actual_available_date"].dropna()
+            }
+        )
+        if len(group) < 2 or len(available_dates) < 2:
+            continue
+        changed_fields = tuple(
+            column for column in value_columns if _distinct_non_null_values(group[column])
+        )
+        if not changed_fields:
+            continue
+        first = group.iloc[0]
+        identity = tuple((column, str(first[column])) for column in identity_columns)
+        update_series = group.get("update_flag", pd.Series(pd.NA, index=group.index))
+        update_flags = tuple(sorted({str(value) for value in update_series.dropna()}))
+        ordered = group.copy()
+        if "announcement_date" not in ordered.columns:
+            ordered["announcement_date"] = pd.NaT
+        ordered["_candidate_update_rank"] = pd.to_numeric(
+            ordered.get("update_flag", pd.Series(pd.NA, index=ordered.index)), errors="coerce"
+        ).fillna(-1)
+        ordered = ordered.sort_values(
+            ["actual_available_date", "announcement_date", "_candidate_update_rank"],
+            kind="stable",
+            na_position="last",
+        ).drop(columns="_candidate_update_rank")
+        candidates.append(
+            RevisionCandidate(
+                dataset=dataset,
+                ts_code=str(first["ts_code"]),
+                report_period=pd.Timestamp(first["report_period"]).normalize(),
+                identity=identity,
+                available_dates=tuple(available_dates),
+                update_flags=update_flags,
+                changed_fields=changed_fields,
+                rows=ordered.reset_index(drop=True),
+            )
+        )
+        if len(candidates) >= max_candidates:
+            break
+    return tuple(candidates)
+
+
+def _scalar_equal(left: object, right: object) -> bool:
+    if left is None or right is None:
+        return left is right or (pd.isna(left) and pd.isna(right))
+    try:
+        left_missing = bool(pd.isna(left))
+        right_missing = bool(pd.isna(right))
+    except (TypeError, ValueError):
+        left_missing = right_missing = False
+    if left_missing or right_missing:
+        return left_missing and right_missing
+    try:
+        return bool(left == right)
+    except (TypeError, ValueError):
+        return str(left) == str(right)
+
+
+def _one_value(frame: pd.DataFrame, column: str) -> object:
+    if len(frame) != 1 or column not in frame.columns:
+        return None
+    return frame.iloc[0][column]
+
+
+def validate_revision_candidate(
+    candidate: RevisionCandidate,
+    *,
+    value_column: str | None = None,
+) -> RevisionPITCheck:
+    """Apply real as-of boundaries to one candidate's canonical rows."""
+
+    selected_column = value_column or candidate.changed_fields[0]
+    if selected_column not in candidate.changed_fields:
+        raise ValueError(f"value column is not changed in candidate: {selected_column}")
+    first_date, revision_date = candidate.available_dates[:2]
+    first = select_financial_as_of(
+        candidate.rows,
+        ts_code=candidate.ts_code,
+        as_of_date=first_date,
+    )
+    before_revision = select_financial_as_of(
+        candidate.rows,
+        ts_code=candidate.ts_code,
+        as_of_date=revision_date - pd.Timedelta(days=1),
+    )
+    after_revision = select_financial_as_of(
+        candidate.rows,
+        ts_code=candidate.ts_code,
+        as_of_date=revision_date,
+    )
+    before_first = select_financial_as_of(
+        candidate.rows,
+        ts_code=candidate.ts_code,
+        as_of_date=first_date - pd.Timedelta(days=1),
+    )
+    first_value = _one_value(first, selected_column)
+    before_revision_value = _one_value(before_revision, selected_column)
+    revised_value = _one_value(after_revision, selected_column)
+    checks = {
+        "before_first": before_first.empty,
+        "after_first": len(first) == 1,
+        "before_revision": len(before_revision) == 1
+        and _scalar_equal(before_revision_value, first_value),
+        "after_revision": len(after_revision) == 1
+        and not _scalar_equal(revised_value, first_value),
+    }
+    return RevisionPITCheck(
+        status="PASS" if all(checks.values()) else "FAIL",
+        before_first_empty=checks["before_first"],
+        first_version_visible=checks["after_first"],
+        before_revision_first=checks["before_revision"],
+        after_revision_revised=checks["after_revision"],
+        first_available_date=first_date,
+        revision_available_date=revision_date,
+        value_column=selected_column,
+        first_value=first_value,
+        revised_value=revised_value,
+    )

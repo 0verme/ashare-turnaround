@@ -5,7 +5,9 @@ import pandas as pd
 from ashare_turnaround.pit.financial import (
     canonicalize_financial_frame,
     derive_single_quarter,
+    find_financial_revision_candidates,
     query_financial_as_of,
+    validate_revision_candidate,
 )
 
 
@@ -81,3 +83,48 @@ def test_single_quarter_bridge_for_cumulative_values() -> None:
 
     result = derive_single_quarter(frame, "revenue")
     assert result["single_quarter"].tolist() == [10.0, 13.0, 12.0, 15.0]
+
+
+def test_real_style_revision_candidate_passes_all_as_of_boundaries() -> None:
+    frame = pd.DataFrame(
+        [
+            {
+                "ts_code": "300001.SZ",
+                "ann_date": "20170417",
+                "f_ann_date": "20170417",
+                "end_date": "20161231",
+                "report_type": "1",
+                "comp_type": "1",
+                "end_type": "4",
+                "update_flag": "0",
+                "net_profit": 194235271.97,
+            },
+            {
+                "ts_code": "300001.SZ",
+                "ann_date": "20170417",
+                "f_ann_date": "20211217",
+                "end_date": "20161231",
+                "report_type": "1",
+                "comp_type": "1",
+                "end_type": "4",
+                "update_flag": "1",
+                "net_profit": 167226201.78,
+            },
+        ]
+    )
+
+    candidates = find_financial_revision_candidates("cashflow", frame)
+    check = validate_revision_candidate(candidates[0], value_column="net_profit")
+
+    assert len(candidates) == 1
+    assert candidates[0].available_dates[0].strftime("%Y-%m-%d") == "2017-04-17"
+    assert candidates[0].available_dates[1].strftime("%Y-%m-%d") == "2021-12-17"
+    assert check.status == "PASS"
+    assert check.checks == {
+        "before_first": True,
+        "after_first": True,
+        "before_revision": True,
+        "after_revision": True,
+    }
+    assert check.first_value == 194235271.97
+    assert check.revised_value == 167226201.78

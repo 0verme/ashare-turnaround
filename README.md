@@ -32,11 +32,13 @@ Phase 0 and the Phase 1 foundation are implemented:
 - bounded API retries and classified provider errors;
 - small `DatasetSpec` definitions and bounded sample pagination;
 - atomic RAW Parquet partitions with `retrieved_at` and `source` provenance;
+- per-dataset partition strategies (snapshot, year, or trade-date) with compact calendar storage;
 - in-process DuckDB queries and a PE percentile smoke example;
-- financial PIT canonical columns and synthetic version-chain checks;
+- financial PIT canonical columns, bounded real revision checks, and synthetic version-chain checks;
+- bounded VIP period probes with schema/PIT-risk evaluation;
 - a cumulative income/cash-flow single-quarter prototype.
 
-The live source validation report is at [docs/data-source-validation.md](docs/data-source-validation.md), and the PIT mapping evidence is at [docs/pit-field-mapping.md](docs/pit-field-mapping.md). No full-market historical bootstrap, factors, scanner, dashboard, or trading code is included in this phase.
+The live source validation report is at [docs/data-source-validation.md](docs/data-source-validation.md), the VIP assessment is at [docs/vip-api-evaluation.md](docs/vip-api-evaluation.md), and the PIT evidence is at [docs/pit-field-mapping.md](docs/pit-field-mapping.md) and [docs/pit-validation.md](docs/pit-validation.md). No full-market historical bootstrap, factors, scanner, dashboard, or trading code is included in this phase.
 
 ## Architecture
 
@@ -62,6 +64,7 @@ The minimal CLI is:
 ```bash
 .venv/bin/python -m ashare_turnaround preflight
 .venv/bin/python -m ashare_turnaround validate-source
+.venv/bin/python -m ashare_turnaround validate-source --vip
 .venv/bin/python -m ashare_turnaround sync-sample
 .venv/bin/python -m ashare_turnaround pit-check
 ```
