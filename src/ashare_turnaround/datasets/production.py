@@ -464,8 +464,8 @@ def render_production_validation_markdown(summary: ProductionValidationSummary) 
         f"- Period: `{summary.period}`",
         f"- Ordinary cross-check sample size: `{summary.sample_size}` "
         "(deterministic random sample)",
-        "- VIP calls use the official Tushare Python SDK through `TushareProvider`; no raw",
-        "  seller HTTP or MCP data path is used.",
+        "- VIP calls use the official Tushare Python SDK through `TushareProvider`.",
+        "- Credentials and private endpoint configuration are never recorded.",
         "- Page size is recorded in the command/run log; no smoke-test limit was used.",
         "",
         "## Full-market results",

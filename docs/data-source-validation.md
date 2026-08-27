@@ -3,8 +3,9 @@
 - Generated at (UTC): `2026-08-27T04:30:11Z`
 - Sample code: `600000.SH`
 - Token configured: `True` (value never recorded)
-- Client: official Python `tushare` SDK only; optional Base URL override is confined to `TushareProvider`.
-- MCP and seller-specific HTTP APIs are not used by the data chain.
+- Client: official Python `tushare` SDK.
+- Optional transport overrides are isolated within `TushareProvider`.
+- Credentials and private endpoint configuration are never recorded.
 
 ## Ordinary APIs
 
