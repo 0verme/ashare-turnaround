@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+import math
+import random
 import time
 from collections.abc import Callable
 from typing import Any
@@ -11,6 +13,8 @@ from typing import Any
 import pandas as pd
 import requests
 import tushare as ts
+
+from .rate_limit import RateLimiter
 
 LOGGER = logging.getLogger(__name__)
 
@@ -33,7 +37,14 @@ class ProviderError(RuntimeError):
         super().__init__(f"{api_name} failed ({error_type}) after {attempts} attempt(s): {message}")
 
 
-_RETRYABLE_ERROR_TYPES = {"connection", "timeout", "rate_limit", "compatibility"}
+_RETRYABLE_ERROR_TYPES = {
+    "connection",
+    "timeout",
+    "rate_limit",
+    "server_error",
+    "compatibility",
+}
+_TRANSIENT_HTTP_STATUS_CODES = {408, 425, 429, 500, 502, 503, 504}
 
 
 def _redact(text: str, secret: str | None = None) -> str:
@@ -59,14 +70,46 @@ def _classify_error(exc: BaseException) -> str:
         return "permission"
     if status_code == 404:
         return "not_found"
-    if status_code == 429:
-        return "rate_limit"
+    if status_code in _TRANSIENT_HTTP_STATUS_CODES:
+        return "rate_limit" if status_code == 429 else "server_error"
+    if status_code is not None and 400 <= status_code < 500:
+        return "http_error"
     if isinstance(exc, requests.RequestException):
         return "connection"
 
     text = str(exc).lower()
-    if any(term in text for term in ("429", "rate limit", "频繁", "限流", "too many")):
+    if any(
+        term in text
+        for term in (
+            "429",
+            "rate limit",
+            "每分钟最多",
+            "访问过于频繁",
+            "频繁",
+            "限流",
+            "too many",
+        )
+    ):
         return "rate_limit"
+    if any(
+        term in text
+        for term in (
+            "500",
+            "502",
+            "503",
+            "504",
+            "internal server error",
+            "bad gateway",
+            "service unavailable",
+            "gateway timeout",
+            "temporarily unavailable",
+            "temporary failure",
+            "系统繁忙",
+            "服务异常",
+            "服务器错误",
+        )
+    ):
+        return "server_error"
     if any(
         term in text
         for term in (
@@ -117,7 +160,10 @@ class TushareProvider:
         timeout: float = 30.0,
         max_retries: int = 2,
         backoff_seconds: float = 1.0,
+        backoff_jitter_seconds: float = 0.0,
+        rate_limiter: RateLimiter | None = None,
         sleep: Callable[[float], None] = time.sleep,
+        random_fn: Callable[[], float] = random.random,
         logger: logging.Logger | None = None,
     ) -> None:
         if not token or not token.strip():
@@ -126,15 +172,20 @@ class TushareProvider:
             raise ValueError("timeout must be positive")
         if max_retries < 0:
             raise ValueError("max_retries must be non-negative")
-        if backoff_seconds < 0:
-            raise ValueError("backoff_seconds must be non-negative")
+        if not math.isfinite(backoff_seconds) or backoff_seconds < 0:
+            raise ValueError("backoff_seconds must be finite and non-negative")
+        if not math.isfinite(backoff_jitter_seconds) or backoff_jitter_seconds < 0:
+            raise ValueError("backoff_jitter_seconds must be finite and non-negative")
 
         self._token = token.strip()
         self._timeout = timeout
         self._base_url = base_url.strip() if base_url and base_url.strip() else None
         self._max_retries = max_retries
         self._backoff_seconds = backoff_seconds
+        self._backoff_jitter_seconds = backoff_jitter_seconds
+        self._rate_limiter = rate_limiter
         self._sleep = sleep
+        self._random = random_fn
         self._logger = logger or LOGGER
 
         # This is the sole Tushare client construction in the repository.
@@ -160,6 +211,15 @@ class TushareProvider:
 
         return getattr(self.pro, "_DataApi__http_url", None)
 
+    @property
+    def rate_limiter(self) -> RateLimiter | None:
+        return self._rate_limiter
+
+    def set_rate_limiter(self, rate_limiter: RateLimiter | None) -> None:
+        """Attach the shared limiter before concurrent calls begin."""
+
+        self._rate_limiter = rate_limiter
+
     def __repr__(self) -> str:
         return (
             f"TushareProvider(endpoint_kind={self.endpoint_kind!r}, "
@@ -178,6 +238,8 @@ class TushareProvider:
 
         for attempt in range(1, self._max_retries + 2):
             try:
+                if self._rate_limiter is not None:
+                    self._rate_limiter.acquire()
                 result = self.pro.query(api_name, **query_params)
                 if result is None:
                     frame = pd.DataFrame()
@@ -194,6 +256,8 @@ class TushareProvider:
                 retryable = error_type in _RETRYABLE_ERROR_TYPES
                 if retryable and attempt <= self._max_retries:
                     delay = self._backoff_seconds * (2 ** (attempt - 1))
+                    if self._backoff_jitter_seconds:
+                        delay += self._backoff_jitter_seconds * self._random()
                     self._logger.warning(
                         "Tushare API call will retry: api=%s error_type=%s attempt=%d",
                         api_name,

@@ -9,6 +9,14 @@ from pathlib import Path
 import pandas as pd
 
 from .config import SOURCE_NAME, Settings, load_settings
+from .datasets.bootstrap import P0_DATASETS, bootstrap_datasets, render_bootstrap_dry_run
+from .datasets.periods import latest_complete_annual_year
+from .datasets.production import (
+    PRODUCTION_DATASETS,
+    PRODUCTION_PERIOD,
+    run_vip_production_validation,
+    write_production_validation_report,
+)
 from .datasets.specs import get_dataset_spec
 from .datasets.sync import sync_sample
 from .pit.financial import (
@@ -19,8 +27,11 @@ from .pit.financial import (
     validate_revision_candidate,
 )
 from .providers.tushare import TushareProvider
+from .storage.guards import check_disk_space
+from .storage.inventory import build_raw_manifest, format_inventory, write_raw_manifest
 from .storage.parquet import RawParquetStore
-from .storage.state import SyncStateStore
+from .storage.planning import build_capacity_plan, write_capacity_plan
+from .storage.state import BootstrapCheckpointStore, SyncStateStore
 from .validation import (
     validate_source,
     write_pit_mapping_report,
@@ -50,6 +61,57 @@ def _parser() -> argparse.ArgumentParser:
     sync.add_argument("--max-pages", type=int, default=1)
 
     subparsers.add_parser("pit-check", help="run synthetic and available-sample PIT checks")
+
+    plan = subparsers.add_parser(
+        "storage-plan", help="estimate 10/15-year RAW Parquet storage needs"
+    )
+    plan.add_argument("--company-count", type=int, default=5500)
+    plan.add_argument("--company-count-source", default="planning estimate")
+    plan.add_argument("--report", default="docs/storage-capacity-plan.md")
+
+    production = subparsers.add_parser(
+        "validate-vip-production", help="validate one full-market VIP report period"
+    )
+    production.add_argument("--period", default=PRODUCTION_PERIOD)
+    production.add_argument("--page-size", type=int, default=5000)
+    production.add_argument("--max-pages", type=int, default=100)
+    production.add_argument("--sample-size", type=int, default=10)
+    production.add_argument("--no-persist", action="store_true")
+    production.add_argument("--report", default="docs/vip-production-validation.md")
+
+    bootstrap = subparsers.add_parser(
+        "bootstrap-financials", help="resumable period-scoped historical RAW bootstrap"
+    )
+    bootstrap.add_argument(
+        "--dataset",
+        nargs="+",
+        choices=(*P0_DATASETS, "all"),
+        default=["all"],
+    )
+    bootstrap.add_argument("--start-year", type=int, default=2012)
+    bootstrap.add_argument("--end-year", type=int, default=None)
+    resume_group = bootstrap.add_mutually_exclusive_group()
+    resume_group.add_argument("--resume", dest="resume", action="store_true")
+    resume_group.add_argument("--no-resume", dest="resume", action="store_false")
+    bootstrap.set_defaults(resume=True)
+    bootstrap.add_argument("--dry-run", action="store_true")
+    bootstrap.add_argument("--page-size", type=int, default=5000)
+    bootstrap.add_argument("--max-pages", type=int, default=100)
+    bootstrap.add_argument(
+        "--workers",
+        type=int,
+        default=4,
+        help="Number of concurrent financial bootstrap workers. Use 1 for serial execution.",
+    )
+    bootstrap.add_argument(
+        "--requests-per-minute",
+        type=float,
+        default=None,
+        help="Global financial bootstrap API limit; defaults to TUSHARE_REQUESTS_PER_MINUTE.",
+    )
+
+    inventory = subparsers.add_parser("inventory", help="inventory raw Parquet and write manifest")
+    inventory.add_argument("--manifest", default="data/state/raw-manifest.json")
     return parser
 
 
@@ -60,7 +122,8 @@ def _settings_without_secret(settings: Settings) -> str:
         f"token_configured={settings.token_configured}\n"
         f"base_url={base}\n"
         f"timeout={settings.timeout}\n"
-        f"max_retries={settings.max_retries}"
+        f"max_retries={settings.max_retries}\n"
+        f"requests_per_minute={settings.requests_per_minute}"
     )
 
 
@@ -114,6 +177,7 @@ def _sync_sample(args: argparse.Namespace) -> int:
         timeout=settings.timeout,
         max_retries=settings.max_retries,
         backoff_seconds=settings.backoff_seconds,
+        backoff_jitter_seconds=settings.backoff_jitter_seconds,
     )
     store = RawParquetStore(settings.data_dir)
     state = SyncStateStore(settings.data_dir / "state" / "sync-log.json", secret=settings.token)
@@ -135,6 +199,171 @@ def _sync_sample(args: argparse.Namespace) -> int:
     for path in summary.stored_files:
         print(f"stored={path.path} rows={path.rows} bytes={path.size_bytes}")
     return 2 if failed and not summary.stored_files else 0
+
+
+def _storage_plan(args: argparse.Namespace) -> int:
+    settings = load_settings()
+    settings.ensure_data_dirs()
+    plan = build_capacity_plan(
+        settings.data_dir,
+        company_count=args.company_count,
+        company_count_source=args.company_count_source,
+    )
+    report_path = Path(args.report)
+    write_capacity_plan(plan, report_path)
+    print(f"storage_plan={report_path}")
+    print(f"initial_free_bytes={plan.initial_free_bytes}")
+    print(f"initial_data_bytes={plan.initial_data_bytes}")
+    for years in (10, 15):
+        values = [item for item in plan.estimates if item.horizon_years == years]
+        print(
+            f"estimate_{years}y={sum(item.estimated_size_bytes for item in values)} "
+            f"upper_bound={sum(item.conservative_upper_bound_bytes for item in values)}"
+        )
+    return 0
+
+
+def _validate_vip_production(args: argparse.Namespace) -> int:
+    settings = load_settings()
+    if not settings.token_configured:
+        print("TUSHARE_TOKEN is not configured; production validation was not run", file=sys.stderr)
+        return 2
+    settings.ensure_data_dirs()
+    disk = check_disk_space(settings.data_dir)
+    print(f"free_bytes={disk.free_bytes} disk_gate={disk.recommendation}")
+    if disk.hard_stop:
+        print("disk gate blocked production validation", file=sys.stderr)
+        return 2
+    try:
+        summary = run_vip_production_validation(
+            settings,
+            period=args.period,
+            datasets=PRODUCTION_DATASETS,
+            page_size=args.page_size,
+            max_pages=args.max_pages,
+            sample_size=args.sample_size,
+            persist=not args.no_persist,
+        )
+    except (ValueError, RuntimeError) as exc:
+        print(f"production validation failed before completion: {exc}", file=sys.stderr)
+        return 2
+    report_path = Path(args.report)
+    write_production_validation_report(summary, report_path)
+    print(f"production_validation_report={report_path}")
+    for result in summary.results:
+        print(
+            f"{result.dataset}: status={result.status} api={result.source_api} "
+            f"period={result.period} pages={result.page_count} rows={result.rows} "
+            f"elapsed={result.elapsed_seconds:.3f}s duplicate_count={result.duplicate_count} "
+            f"ordinary_cross_check={result.ordinary_cross_check.status}"
+        )
+    print(f"safe_to_bootstrap={summary.safe_to_bootstrap}")
+    return 0 if summary.safe_to_bootstrap else 2
+
+
+def _bootstrap_financials(args: argparse.Namespace) -> int:
+    settings = load_settings()
+    settings.ensure_data_dirs()
+    end_year = args.end_year or latest_complete_annual_year()
+    datasets = tuple(dict.fromkeys(P0_DATASETS if "all" in args.dataset else args.dataset))
+    requests_per_minute = (
+        settings.requests_per_minute
+        if args.requests_per_minute is None
+        else args.requests_per_minute
+    )
+    checkpoints = BootstrapCheckpointStore(
+        settings.data_dir / "state" / "bootstrap-checkpoints.json",
+        secret=settings.token,
+    )
+    store = RawParquetStore(settings.data_dir)
+    if args.dry_run:
+        try:
+            summary = bootstrap_datasets(
+                None,
+                store,
+                checkpoints,
+                datasets=datasets,
+                start_year=args.start_year,
+                end_year=end_year,
+                resume=args.resume,
+                dry_run=True,
+                page_size=args.page_size,
+                max_pages=args.max_pages,
+                workers=args.workers,
+                requests_per_minute=requests_per_minute,
+            )
+        except (ValueError, RuntimeError) as exc:
+            print(f"bootstrap dry-run failed: {exc}", file=sys.stderr)
+            return 2
+        print(render_bootstrap_dry_run(summary))
+        return 0
+    if not settings.token_configured:
+        print("TUSHARE_TOKEN is not configured; bootstrap was not run", file=sys.stderr)
+        return 2
+    disk = check_disk_space(settings.data_dir)
+    print(f"free_bytes={disk.free_bytes} disk_gate={disk.recommendation}")
+    if disk.hard_stop:
+        print("disk gate blocked historical bootstrap", file=sys.stderr)
+        return 2
+    provider = TushareProvider(
+        settings.token or "",
+        settings.base_url,
+        timeout=settings.timeout,
+        max_retries=settings.max_retries,
+        backoff_seconds=settings.backoff_seconds,
+        backoff_jitter_seconds=settings.backoff_jitter_seconds,
+    )
+    try:
+        summary = bootstrap_datasets(
+            provider,
+            store,
+            checkpoints,
+            datasets=datasets,
+            start_year=args.start_year,
+            end_year=end_year,
+            resume=args.resume,
+            dry_run=False,
+            page_size=args.page_size,
+            max_pages=args.max_pages,
+            workers=args.workers,
+            requests_per_minute=requests_per_minute,
+            progress=lambda message: print(message, flush=True),
+        )
+    except KeyboardInterrupt:
+        print(
+            "bootstrap interrupted; completed period files/checkpoints were preserved; "
+            "resume can continue unfinished periods",
+            file=sys.stderr,
+        )
+        return 130
+    except (ValueError, RuntimeError) as exc:
+        print(f"bootstrap failed before completion: {exc}", file=sys.stderr)
+        return 2
+
+    for result in summary.results:
+        error = f" error={result.error}" if result.error else ""
+        print(
+            f"{result.dataset} {result.period} {result.status} rows={result.rows} "
+            f"pages={result.page_count} skipped={result.skipped}{error}"
+        )
+    failed = len(summary.failures)
+    print(
+        f"datasets={','.join(summary.datasets)} tasks={summary.task_count} "
+        f"completed={summary.completed_count} skipped(resume)={summary.skipped_count} "
+        f"failed={failed} workers={summary.workers} requests={summary.api_requests} "
+        f"rows={summary.row_count} elapsed={summary.elapsed_seconds:.3f}s"
+    )
+    return 2 if failed else 0
+
+
+def _inventory(args: argparse.Namespace) -> int:
+    settings = load_settings()
+    settings.ensure_data_dirs()
+    manifest = build_raw_manifest(settings.data_dir)
+    write_raw_manifest(manifest, args.manifest)
+    print(format_inventory(manifest))
+    print(f"manifest={args.manifest}")
+    return 0
 
 
 def _synthetic_pit_frame() -> pd.DataFrame:
@@ -532,6 +761,10 @@ def main(argv: list[str] | None = None) -> int:
         "validate-source": _validate_source,
         "sync-sample": _sync_sample,
         "pit-check": _pit_check,
+        "storage-plan": _storage_plan,
+        "validate-vip-production": _validate_vip_production,
+        "bootstrap-financials": _bootstrap_financials,
+        "inventory": _inventory,
     }
     return handlers[args.command](args)
 

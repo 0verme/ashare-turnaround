@@ -18,6 +18,8 @@ class FrameQuality:
     rows: int
     missing_required: tuple[str, ...] = ()
     duplicate_identity_rows: int = 0
+    null_identity_rows: int = 0
+    null_key_counts: tuple[tuple[str, int], ...] = ()
     null_partition_rows: int = 0
     bad_date_values: tuple[tuple[str, int], ...] = ()
     schema_relation: str | None = None
@@ -88,7 +90,16 @@ def check_frame_quality(
 
     duplicate_identity_rows = 0
     identity_fields = tuple(field for field in spec.primary_keys if field in frame.columns)
+    null_key_counts: list[tuple[str, int]] = []
+    null_identity_rows = 0
     if spec.primary_keys and len(identity_fields) == len(spec.primary_keys):
+        for field in spec.primary_keys:
+            count = int(frame[field].isna().sum())
+            if count:
+                null_key_counts.append((field, count))
+        null_identity_rows = int(frame[list(spec.primary_keys)].isna().any(axis=1).sum())
+        if null_identity_rows:
+            warnings.append(f"null_identity_rows={null_identity_rows}")
         duplicate_identity_rows = int(frame.duplicated(list(spec.primary_keys), keep=False).sum())
         if duplicate_identity_rows:
             warnings.append(f"duplicate_identity_rows={duplicate_identity_rows}")
@@ -124,6 +135,8 @@ def check_frame_quality(
         rows=rows,
         missing_required=missing_required,
         duplicate_identity_rows=duplicate_identity_rows,
+        null_identity_rows=null_identity_rows,
+        null_key_counts=tuple(null_key_counts),
         null_partition_rows=null_partition_rows,
         bad_date_values=tuple(bad_dates),
         schema_relation=schema_relation,

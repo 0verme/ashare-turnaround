@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -23,6 +24,8 @@ class Settings:
     timeout: float = 30.0
     max_retries: int = 2
     backoff_seconds: float = 1.0
+    backoff_jitter_seconds: float = 0.25
+    requests_per_minute: float = 60.0
 
     def __post_init__(self) -> None:
         if self.token is not None:
@@ -36,6 +39,10 @@ class Settings:
             raise ValueError("timeout must be positive")
         if self.backoff_seconds < 0:
             raise ValueError("backoff_seconds must be non-negative")
+        if not math.isfinite(self.backoff_jitter_seconds) or self.backoff_jitter_seconds < 0:
+            raise ValueError("backoff_jitter_seconds must be finite and non-negative")
+        if not math.isfinite(self.requests_per_minute) or self.requests_per_minute <= 0:
+            raise ValueError("requests_per_minute must be a finite positive number")
 
     @property
     def token_configured(self) -> bool:
@@ -71,4 +78,6 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
         timeout=float(os.getenv("TUSHARE_TIMEOUT", "30")),
         max_retries=int(os.getenv("TUSHARE_MAX_RETRIES", "2")),
         backoff_seconds=float(os.getenv("TUSHARE_BACKOFF_SECONDS", "1")),
+        backoff_jitter_seconds=float(os.getenv("TUSHARE_BACKOFF_JITTER_SECONDS", "0.25")),
+        requests_per_minute=float(os.getenv("TUSHARE_REQUESTS_PER_MINUTE", "60")),
     )

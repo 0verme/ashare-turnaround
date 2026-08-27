@@ -110,6 +110,67 @@ class RawParquetStore:
             stored.append(self._atomic_write(path, chunk))
         return stored
 
+    def write_period(
+        self,
+        dataset: str,
+        period: str,
+        frame: pd.DataFrame,
+        spec: DatasetSpec | None = None,
+        *,
+        retrieved_at: str | None = None,
+        source: str | None = None,
+        source_api: str | None = None,
+    ) -> list[StoredFile]:
+        """Write one report period without replacing another period in its year.
+
+        The original Phase 1 year partition remains supported for samples.  A
+        historical bootstrap must use a period sub-partition because four
+        report periods share one year and replacing ``year=YYYY/data.parquet``
+        would silently discard earlier downloads.
+        """
+
+        selected_spec = spec or get_dataset_spec(dataset)
+        if selected_spec.name != dataset:
+            raise ValueError("spec.name must match dataset")
+        if not re.fullmatch(r"\d{8}", str(period)):
+            raise ValueError("period must be an 8-digit YYYYMMDD string")
+        if not isinstance(frame, pd.DataFrame):
+            raise TypeError("frame must be a pandas DataFrame")
+
+        output = frame.reset_index(drop=True).copy()
+        if retrieved_at is not None:
+            output["retrieved_at"] = retrieved_at
+        if source is not None:
+            output["source"] = source
+        if source_api is not None:
+            output["source_api"] = source_api
+        if output.empty:
+            return []
+
+        path = (
+            self.dataset_dir(dataset)
+            / f"year={str(period)[:4]}"
+            / f"period={period}"
+            / "data.parquet"
+        )
+        return [self._atomic_write(path, output)]
+
+    def period_file(self, dataset: str, period: str) -> Path:
+        """Return the deterministic period path used by bootstrap checkpoints."""
+
+        self._validate_dataset(dataset)
+        if not re.fullmatch(r"\d{8}", str(period)):
+            raise ValueError("period must be an 8-digit YYYYMMDD string")
+        return (
+            self.dataset_dir(dataset)
+            / f"year={str(period)[:4]}"
+            / f"period={period}"
+            / "data.parquet"
+        )
+
+    def period_exists(self, dataset: str, period: str) -> bool:
+        return self.period_file(dataset, period).is_file()
+
     def read(self, dataset: str) -> pd.DataFrame:
         """Read all partitions for a dataset, unioning columns in Python."""
 
@@ -167,7 +228,7 @@ class RawParquetStore:
                 os.fsync(written.fileno())
             os.replace(temporary_path, path)
             return StoredFile(path=path, rows=len(frame), size_bytes=path.stat().st_size)
-        except Exception:
+        except BaseException:
             if temporary_path is not None:
                 temporary_path.unlink(missing_ok=True)
             raise

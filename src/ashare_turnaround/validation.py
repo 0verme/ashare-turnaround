@@ -172,6 +172,7 @@ def validate_source(
         timeout=settings.timeout,
         max_retries=settings.max_retries,
         backoff_seconds=settings.backoff_seconds,
+        backoff_jitter_seconds=settings.backoff_jitter_seconds,
     )
     results: list[ApiValidationResult] = []
     for api in api_names:

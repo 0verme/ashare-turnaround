@@ -1,6 +1,29 @@
 """Local file storage primitives."""
 
+from .guards import DiskSpaceCheck, check_disk_space
+from .inventory import RawManifest, build_raw_manifest, write_raw_manifest
 from .parquet import RawParquetStore, StoredFile
-from .state import SyncRecord, SyncStateStore
+from .planning import StorageCapacityPlan, build_capacity_plan, write_capacity_plan
+from .state import (
+    BootstrapCheckpoint,
+    BootstrapCheckpointStore,
+    SyncRecord,
+    SyncStateStore,
+)
 
-__all__ = ["RawParquetStore", "StoredFile", "SyncRecord", "SyncStateStore"]
+__all__ = [
+    "BootstrapCheckpoint",
+    "BootstrapCheckpointStore",
+    "DiskSpaceCheck",
+    "RawManifest",
+    "RawParquetStore",
+    "StoredFile",
+    "SyncRecord",
+    "SyncStateStore",
+    "StorageCapacityPlan",
+    "build_capacity_plan",
+    "build_raw_manifest",
+    "check_disk_space",
+    "write_capacity_plan",
+    "write_raw_manifest",
+]

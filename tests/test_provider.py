@@ -7,6 +7,7 @@ import pytest
 import requests
 
 import ashare_turnaround.providers.tushare as provider_module
+from ashare_turnaround.providers.rate_limit import RateLimiter
 from ashare_turnaround.providers.tushare import ProviderError, TushareProvider
 
 
@@ -55,6 +56,46 @@ def test_retry_is_bounded_and_exponential(monkeypatch: pytest.MonkeyPatch) -> No
     assert len(result) == 1
     assert delays == [0.25, 0.5]
     assert len(client.calls) == 3
+
+
+def test_transient_http_server_error_retries_with_jitter(monkeypatch: pytest.MonkeyPatch) -> None:
+    response = requests.Response()
+    response.status_code = 503
+    client = FakeClient("secret-token", [requests.HTTPError("busy", response=response)])
+    monkeypatch.setattr(provider_module.ts, "pro_api", lambda token: client)
+    delays: list[float] = []
+
+    provider = TushareProvider(
+        "secret-token",
+        max_retries=1,
+        backoff_seconds=0.25,
+        backoff_jitter_seconds=0.1,
+        random_fn=lambda: 0.5,
+        sleep=delays.append,
+    )
+    result = provider.call("income")
+
+    assert len(result) == 1
+    assert delays == [0.3]
+    assert len(client.calls) == 2
+
+
+def test_provider_rate_limits_each_retry_attempt(monkeypatch: pytest.MonkeyPatch) -> None:
+    client = FakeClient("secret-token", [requests.Timeout("temporary")])
+    monkeypatch.setattr(provider_module.ts, "pro_api", lambda token: client)
+    limiter = RateLimiter(6_000_000.0)
+
+    provider = TushareProvider(
+        "secret-token",
+        max_retries=1,
+        backoff_seconds=0,
+        rate_limiter=limiter,
+        sleep=lambda _: None,
+    )
+    provider.call("income")
+
+    assert limiter.request_count == 2
+    assert len(client.calls) == 2
 
 
 def test_error_is_classified_and_token_redacted(
