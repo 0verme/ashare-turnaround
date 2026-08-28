@@ -133,15 +133,15 @@ def test_universe_records_policy_exclusions_and_feature_groups_are_pit_safe() ->
         daily.merge(daily_basic, on=["ts_code", "trade_date"]), CODE, AS_OF
     )
 
-    assert fundamental.values["revenue_yoy"] is not None
-    assert trend.values["consecutive_improvement"] == 3
+    # FY2024 has no FY2023 comparator in this fixture; adjacent Q3 is not a
+    # valid YoY denominator under the comparable-period contract.
+    assert fundamental.values["revenue_yoy"] is None
+    assert fundamental.evidence["revenue_yoy"].reason == "missing_comparable_period"
+    assert trend.values["consecutive_improvement"] is None
+    assert trend.evidence["consecutive_improvement"].reason == "trend_redesign_out_of_scope"
     assert quality.values["quality_gate_status"] == "pass"
     assert attention.values["attention_score"] is not None
-    assert fundamental.evidence["revenue_yoy"].periods == tuple(
-        period.strftime("%Y%m%d") for period in pd.to_datetime(
-            ["20240331", "20240630", "20240930", "20241231"]
-        )
-    )
+    assert fundamental.evidence["revenue_yoy"].periods == ("20241231",)
 
 
 def test_historical_universe_keeps_a_later_delisted_security_before_delist_date() -> None:
@@ -194,6 +194,8 @@ def test_replay_score_and_candidate_report_are_deterministic() -> None:
     assert result.ranked["snapshot_id"].tolist() == [result.snapshot_id]
     assert result.ranked["historical_universe_member"].tolist() == [True]
     assert result.metadata()["config_fingerprint"] == result.config_fingerprint
+    assert result.metadata()["comparable_period_contract_version"] == ("comparable-period-v1")
+    assert result.ranked.iloc[0]["comparable_period_contract_version"] == ("comparable-period-v1")
 
 
 def test_ablation_score_configs_share_data_snapshot_but_have_distinct_run_ids() -> None:
@@ -220,9 +222,10 @@ def test_ablation_score_configs_share_data_snapshot_but_have_distinct_run_ids() 
     assert fundamental.snapshot_id == expectation.snapshot_id
     assert fundamental.run_id != expectation.run_id
     assert fundamental.config_fingerprint != expectation.config_fingerprint
-    assert fundamental.ranked.iloc[0]["score_config_fingerprint"] == variants[
-        "fundamental_only"
-    ].fingerprint
+    assert (
+        fundamental.ranked.iloc[0]["score_config_fingerprint"]
+        == variants["fundamental_only"].fingerprint
+    )
 
 
 def test_replay_snapshot_id_ignores_observations_unavailable_after_as_of() -> None:

@@ -12,7 +12,6 @@ time selection in ``select_financial_as_of`` enforces the barrier.
 from __future__ import annotations
 
 import pandas as pd
-import pytest
 
 from ashare_turnaround import __main__
 from ashare_turnaround.pit.financial import (
@@ -335,8 +334,12 @@ def test_quarterization_rejects_duplicate_cumulative_periods() -> None:
             "revenue": [10.0, 11.0],
         }
     )
-    with pytest.raises(ValueError, match="duplicate cumulative rows"):
-        derive_single_quarter(frame, "revenue")
+    result = derive_single_quarter(frame, "revenue")
+    assert result["single_quarter"].isna().all()
+    assert result["single_quarter_reason"].tolist() == [
+        "ambiguous_period_chain",
+        "ambiguous_period_chain",
+    ]
 
 
 # --------------------------------------------------------------------------- #
