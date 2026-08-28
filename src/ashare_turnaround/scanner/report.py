@@ -8,6 +8,68 @@ from typing import Any
 
 from .replay import ReplayResult
 
+_CROWDING_FEATURE_NAMES = frozenset(
+    {
+        "stock_return_20d",
+        "benchmark_return_20d",
+        "excess_return_20d",
+        "recent_return_20d",
+        "recent_excess_return",
+        "stock_return_60d",
+        "benchmark_return_60d",
+        "excess_return_60d",
+        "momentum_60d",
+        "distance_to_52w_high",
+        "distance_52w_high",
+        "high_52w",
+        "current_price",
+        "high_52w_window_start",
+        "high_52w_window_end",
+        "high_52w_obs_count",
+        "volume_spike",
+        "turnover_spike",
+        "valuation_percentile",
+        "repricing_20d",
+        "repricing_60d",
+        "high_proximity",
+        "volume_spike_penalty",
+        "turnover_spike_penalty",
+        "valuation_penalty",
+        "disclosure_reaction_excess",
+        "disclosure_availability_date",
+        "disclosure_event_date",
+        "disclosure_reaction_window_start",
+        "disclosure_reaction_window_end",
+        "disclosure_reaction_penalty",
+        "crowding_penalty",
+        "expectation_score",
+    }
+)
+_FUNDAMENTAL_FEATURE_NAMES = frozenset(
+    {
+        "revenue_level",
+        "revenue_yoy",
+        "net_profit_level",
+        "net_profit_yoy",
+        "operating_profit_yoy",
+        "gross_margin",
+        "gross_margin_yoy_change",
+        "operating_margin",
+        "operating_margin_yoy_change",
+        "net_margin",
+        "net_margin_yoy_change",
+        "operating_cash_flow",
+        "operating_cash_flow_change",
+        "cfo_to_profit",
+        "roe",
+        "roa",
+        "inventory_yoy",
+        "receivables_yoy",
+        "asset_turnover",
+        "fundamental_data_status",
+    }
+)
+
 
 def candidate_report(result: ReplayResult, ts_code: str) -> dict[str, Any]:
     vectors = {vector.ts_code: vector for vector in result.vectors}
@@ -16,14 +78,27 @@ def candidate_report(result: ReplayResult, ts_code: str) -> dict[str, Any]:
     score = scores.get(ts_code)
     if vector is None or score is None:
         raise KeyError(f"candidate not found in replay: {ts_code}")
+    evidence = {key: value.as_dict() for key, value in vector.evidence.items()}
+    fundamental_names = set(evidence).intersection(_FUNDAMENTAL_FEATURE_NAMES)
+    crowding_names = set(evidence).intersection(_CROWDING_FEATURE_NAMES)
     return {
         "metadata": result.metadata(),
         "comparable_period_contract_version": result.comparable_period_contract_version,
         "trend_contract_version": result.trend_contract_version,
+        "expectation_crowding_contract_version": result.expectation_crowding_contract_version,
+        "benchmark": dict(result.benchmark_metadata),
         "report_metadata": {
             "attention_contract_version": result.attention_contract_version,
             "low_attention_version": result.attention_contract_version,
             "attention_feature_fields": list(result.attention_feature_fields),
+            "trend_contract_version": result.trend_contract_version,
+            "expectation_crowding_contract_version": (
+                result.expectation_crowding_contract_version
+            ),
+            "benchmark_id": result.benchmark_metadata.get("benchmark_id"),
+            "benchmark_contract_version": result.benchmark_metadata.get(
+                "benchmark_contract_version", result.benchmark_metadata.get("version")
+            ),
             "research_only": True,
         },
         "ts_code": ts_code,
@@ -32,8 +107,17 @@ def candidate_report(result: ReplayResult, ts_code: str) -> dict[str, Any]:
         "score_input_metadata": dict(score.input_metadata),
         "features": dict(vector.values),
         "feature_metadata": dict(vector.metadata),
-        "evidence": {key: value.as_dict() for key, value in vector.evidence.items()},
+        "evidence": evidence,
         "attention_v2_evidence": dict(vector.metadata.get("low_attention_v2_evidence", {})),
+        "fundamental_evidence": {
+            key: evidence[key] for key in sorted(fundamental_names)
+        },
+        "crowding_evidence": {key: evidence[key] for key in sorted(crowding_names)},
+        "expectation_penalties": {
+            key: evidence[key]
+            for key in sorted(evidence)
+            if "penalty" in key or key.startswith("repricing_") or key == "high_proximity"
+        },
         "risk_flags": list(vector.risk_flags),
         "rejected_reasons": list(vector.rejected_reasons),
     }
@@ -43,6 +127,10 @@ def candidate_report_markdown(report: dict[str, Any]) -> str:
     score = report["score"]
     contract_version = report["metadata"].get("comparable_period_contract_version", "unknown")
     trend_contract_version = report["metadata"].get("trend_contract_version", "unknown")
+    crowding_version = report["metadata"].get(
+        "expectation_crowding_contract_version", "unknown"
+    )
+    benchmark_id = report["metadata"].get("benchmark_id", "unknown")
     lines = [
         f"# Turnaround candidate report: {report['ts_code']}",
         "",
@@ -53,6 +141,8 @@ def candidate_report_markdown(report: dict[str, Any]) -> str:
         f"- Low-attention contract: `{report['report_metadata']['attention_contract_version']}`",
         f"- Comparable-period contract: `{contract_version}`",
         f"- Trend contract: `{trend_contract_version}`",
+        f"- Expectation/crowding contract: `{crowding_version}`",
+        f"- Primary benchmark: `{benchmark_id}`",
         f"- Risk flags: `{', '.join(report['risk_flags']) or 'none'}`",
         f"- Rejected reasons: `{', '.join(report['rejected_reasons']) or 'none'}`",
         "",

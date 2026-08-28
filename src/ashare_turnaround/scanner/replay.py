@@ -13,8 +13,10 @@ from typing import Any
 import pandas as pd
 
 from ..features import (
+    EXPECTATION_CROWDING_CONTRACT_VERSION,
     LOW_ATTENTION_V2_FIELDS,
     LOW_ATTENTION_V2_VERSION,
+    CrowdingConfig,
     LowAttentionConfig,
     compute_attention_features,
     compute_crowding_features,
@@ -42,6 +44,7 @@ class ReplayConfig:
     top_n: int = 20
     universe: UniverseConfig = field(default_factory=UniverseConfig)
     score: ScoreConfig = field(default_factory=ScoreConfig)
+    crowding: CrowdingConfig = field(default_factory=CrowdingConfig)
     low_attention: LowAttentionConfig = field(default_factory=LowAttentionConfig)
 
     def __post_init__(self) -> None:
@@ -55,6 +58,9 @@ class ReplayConfig:
             "trend_contract_version": TURNAROUND_TREND_CONTRACT_VERSION,
             "attention_contract_version": self.low_attention.version,
             "low_attention_version": self.low_attention.version,
+            "expectation_crowding_contract_version": self.crowding.version,
+            "benchmark": self.crowding.benchmark.declared(),
+            "expectation_crowding": self.crowding.declared(),
             "universe": asdict(self.universe),
             "score": self.score.declared(),
             "low_attention": self.low_attention.declared(),
@@ -86,6 +92,8 @@ class ReplayResult:
     trend_contract_version: str = TURNAROUND_TREND_CONTRACT_VERSION
     attention_contract_version: str = LOW_ATTENTION_V2_VERSION
     attention_feature_fields: tuple[str, ...] = LOW_ATTENTION_V2_FIELDS
+    expectation_crowding_contract_version: str = EXPECTATION_CROWDING_CONTRACT_VERSION
+    benchmark_metadata: dict[str, Any] = field(default_factory=dict)
 
     def metadata(self) -> dict[str, Any]:
         return {
@@ -107,6 +115,25 @@ class ReplayResult:
             "attention_feature_fields": list(self.attention_feature_fields),
             "attention_v2_research_only": True,
             "production_score_attention_input": "attention_score",
+            "expectation_crowding_contract_version": self.expectation_crowding_contract_version,
+            "crowding_contract_version": self.expectation_crowding_contract_version,
+            "benchmark": dict(self.benchmark_metadata),
+            "benchmark_config": dict(self.benchmark_metadata),
+            "benchmark_id": self.benchmark_metadata.get("benchmark_id"),
+            "benchmark_name": self.benchmark_metadata.get("benchmark_name"),
+            "benchmark_contract_version": self.benchmark_metadata.get(
+                "benchmark_contract_version", self.benchmark_metadata.get("version")
+            ),
+            "benchmark_source_dataset": self.benchmark_metadata.get("source_dataset"),
+            "feature_contracts": {
+                "comparable_period": self.comparable_period_contract_version,
+                "trend": self.trend_contract_version,
+                "low_attention": self.attention_contract_version,
+                "expectation_crowding": self.expectation_crowding_contract_version,
+                "benchmark": self.benchmark_metadata.get(
+                    "benchmark_contract_version", self.benchmark_metadata.get("version")
+                ),
+            },
         }
 
     def artifact_dict(self) -> dict[str, Any]:
@@ -122,6 +149,8 @@ _SNAPSHOT_DATE_FIELDS: dict[str, tuple[str, ...]] = {
     "trade_cal": ("cal_date",),
     "daily": ("trade_date",),
     "daily_basic": ("trade_date",),
+    "index_daily": ("trade_date",),
+    "index_basic": ("reference_snapshot_date", "list_date"),
     "income": ("actual_available_date", "f_ann_date", "ann_date"),
     "balancesheet": ("actual_available_date", "f_ann_date", "ann_date"),
     "cashflow": ("actual_available_date", "f_ann_date", "ann_date"),
@@ -187,8 +216,11 @@ def _frames_from_store(data_dir: str | Path) -> dict[str, pd.DataFrame]:
     datasets = (
         "stock_basic",
         "trade_cal",
+        "index_basic",
+        "suspend_d",
         "daily",
         "daily_basic",
+        "index_daily",
         "income",
         "balancesheet",
         "cashflow",
@@ -211,22 +243,43 @@ def _attach_low_attention_evidence(
     """
 
     attached_evidence: dict[str, dict[str, Any]] = {}
+    namespace = str(attention.metadata.get("namespace") or "low_attention_v2").strip()
     for name, evidence in attention.evidence.items():
-        target = name if name not in vector.values else f"low_attention_v2_{name}"
+        target = name
         if target in vector.values:
-            target = f"{target}_research"
+            target = f"{namespace}_{name}"
+            suffix = 2
+            while target in vector.values:
+                target = f"{namespace}_{name}_{suffix}"
+                suffix += 1
         vector.values[target] = attention.values.get(name)
         vector.evidence[target] = (
             evidence if target == name else replace(evidence, feature=target)
         )
         attached_evidence[target] = vector.evidence[target].as_dict()
-        if evidence.status in {"unknown", "insufficient_data", "unsupported"}:
-            if target not in vector.unknown_features:
-                vector.unknown_features.append(target)
-    vector.metadata["low_attention_v2"] = dict(attention.metadata.get("low_attention_v2", {}))
-    vector.metadata["low_attention_v2_evidence"] = attached_evidence
-    vector.metadata["low_attention_v2_risk_flags"] = list(attention.risk_flags)
-    vector.metadata["low_attention_v2_source_version"] = attention.version
+        if evidence.status in {
+            "unknown",
+            "insufficient_data",
+            "insufficient_history",
+            "discontinuous",
+            "unsupported",
+        } and target not in vector.unknown_features:
+            vector.unknown_features.append(target)
+
+    declared = dict(attention.metadata.get("low_attention_v2", {}))
+    existing_declared = vector.metadata.setdefault("low_attention_v2", {})
+    if isinstance(existing_declared, dict):
+        for key, value in declared.items():
+            if key not in existing_declared:
+                existing_declared[key] = value
+            elif isinstance(existing_declared[key], dict) and isinstance(value, dict):
+                existing_declared[key].update(
+                    {nested_key: nested_value for nested_key, nested_value in value.items()
+                     if nested_key not in existing_declared[key]}
+                )
+    vector.metadata.setdefault("low_attention_v2_evidence", {}).update(attached_evidence)
+    vector.metadata.setdefault("low_attention_v2_risk_flags", list(attention.risk_flags))
+    vector.metadata.setdefault("low_attention_v2_source_version", attention.version)
 
 
 def run_replay_frames(
@@ -268,7 +321,19 @@ def run_replay_frames(
         vector.merge(compute_trend_features(financial_frames, code, as_of))
         vector.merge(compute_quality_features(financial_frames, code, as_of))
         vector.merge(compute_attention_features(market, code, as_of))
-        vector.merge(compute_crowding_features(market, code, as_of))
+        vector.merge(
+            compute_crowding_features(
+                market,
+                code,
+                as_of,
+                config=settings.crowding,
+                calendar_frame=frames.get("trade_cal"),
+                disclosure_frame=frames.get("disclosure_date"),
+                benchmark_frame=frames.get("index_daily"),
+                benchmark_definition_frame=frames.get("index_basic"),
+                suspension_frame=frames.get("suspend_d"),
+            )
+        )
         low_attention = compute_low_attention_v2(
             market,
             code,
@@ -293,6 +358,8 @@ def run_replay_frames(
     missing = sorted(dataset for dataset in required if frames.get(dataset, pd.DataFrame()).empty)
     if missing:
         warnings.append(f"missing_required_datasets={','.join(missing)}")
+    if frames.get("index_daily", pd.DataFrame()).empty:
+        warnings.append("missing_benchmark_dataset=index_daily")
     status = "PASS" if ranked.shape[0] > 0 and not missing else "PARTIAL" if vectors else "EMPTY"
     snapshot_id = _snapshot_id(frames, as_of_text)
     config_fingerprint = settings.fingerprint
@@ -302,6 +369,10 @@ def run_replay_frames(
     ranked["run_id"] = run_id
     ranked["universe_version"] = universe.version
     ranked["feature_version"] = "features-v1"
+    ranked["expectation_crowding_contract_version"] = settings.crowding.version
+    ranked["benchmark_id"] = settings.crowding.benchmark.benchmark_id
+    ranked["benchmark_contract_version"] = settings.crowding.benchmark.version
+    ranked["benchmark_source_dataset"] = settings.crowding.benchmark.source_dataset
     ranked["comparable_period_contract_version"] = COMPARABLE_PERIOD_CONTRACT_VERSION
     ranked["trend_contract_version"] = TURNAROUND_TREND_CONTRACT_VERSION
     ranked["attention_contract_version"] = settings.low_attention.version
@@ -327,6 +398,8 @@ def run_replay_frames(
         trend_contract_version=TURNAROUND_TREND_CONTRACT_VERSION,
         attention_contract_version=settings.low_attention.version,
         attention_feature_fields=LOW_ATTENTION_V2_FIELDS,
+        expectation_crowding_contract_version=settings.crowding.version,
+        benchmark_metadata=settings.crowding.benchmark.declared(),
     )
 
 

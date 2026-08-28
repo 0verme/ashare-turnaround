@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from datetime import date, datetime
 from typing import Any
 
@@ -31,10 +32,15 @@ def new_vector(code: str, as_of_date: str | date | datetime | pd.Timestamp) -> F
 
 
 def numeric(value: Any) -> float | None:
+    """Return a finite numeric value, rejecting NaN and infinities."""
+
     if value is None:
         return None
     parsed = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
-    return None if pd.isna(parsed) else float(parsed)
+    if pd.isna(parsed):
+        return None
+    result = float(parsed)
+    return result if math.isfinite(result) else None
 
 
 def safe_change(current: Any, previous: Any) -> float | None:
@@ -43,14 +49,16 @@ def safe_change(current: Any, previous: Any) -> float | None:
     current_value, previous_value = numeric(current), numeric(previous)
     if current_value is None or previous_value is None or previous_value <= 0 or current_value < 0:
         return None
-    return (current_value - previous_value) / previous_value
+    result = (current_value - previous_value) / previous_value
+    return result if math.isfinite(result) else None
 
 
 def safe_ratio(numerator: Any, denominator: Any) -> float | None:
     numerator_value, denominator_value = numeric(numerator), numeric(denominator)
     if numerator_value is None or denominator_value in {None, 0.0}:
         return None
-    return numerator_value / denominator_value
+    result = numerator_value / denominator_value
+    return result if math.isfinite(result) else None
 
 
 def first_value(row: pd.Series | None, *columns: str) -> tuple[float | None, str | None]:
@@ -116,6 +124,52 @@ def availability_texts(history: pd.DataFrame) -> tuple[str, ...]:
     return tuple(value.strftime("%Y%m%d") for value in values)
 
 
+def market_history(
+    frame: pd.DataFrame | None,
+    code: str,
+    as_of_date: str | date | datetime | pd.Timestamp,
+    lookback: int = 252,
+) -> pd.DataFrame:
+    """PIT market rows for one security (or index) up to and including as-of.
+
+    Rows are restricted to ``trade_date <= as_of`` and, when the frame carries
+    ``actual_available_date``, to rows available on or before as-of.  The
+    returned frame is sorted by ``_date`` with at most ``lookback`` rows.
+    """
+
+    if (
+        frame is None
+        or frame.empty
+        or "ts_code" not in frame.columns
+        or "trade_date" not in frame.columns
+    ):
+        return pd.DataFrame()
+    as_of = pd.Timestamp(pd.to_datetime(as_of_date, errors="raise")).normalize()
+    result = frame.loc[frame["ts_code"].astype("string").eq(str(code))].copy()
+    dates = normalize_date_series(result["trade_date"])
+    result = result.loc[dates.notna() & dates.le(as_of)].copy()
+    if "actual_available_date" in result.columns:
+        available = normalize_date_series(result["actual_available_date"])
+        result = result.loc[available.isna() | available.le(as_of)].copy()
+    result["_date"] = normalize_date_series(result["trade_date"])
+    result = result.loc[result["_date"].notna()].copy()
+    if result.empty:
+        return pd.DataFrame()
+    # A valid source partition has one row per security/session.  If a
+    # synthetic or partially repaired input violates that invariant, choose a
+    # deterministic row rather than letting input order decide the endpoint.
+    key_columns = sorted(column for column in result.columns if column != "_row_key")
+    result["_row_key"] = (
+        result[key_columns].astype("string").fillna("<NA>").agg("\x1f".join, axis=1)
+    )
+    result = (
+        result.sort_values(["_date", "_row_key"], kind="mergesort")
+        .drop_duplicates("_date", keep="last")
+        .drop(columns="_row_key")
+    )
+    return result.tail(lookback).reset_index(drop=True)
+
+
 def add_known(
     vector: FeatureVector,
     name: str,
@@ -133,9 +187,18 @@ def add_known(
     source_versions: tuple[str, ...] = (),
     provenance: dict[str, Any] | None = None,
     status: str | None = None,
+    semantic_version: str = "features-v1",
+    formula: str | None = None,
+    components: dict[str, Any] | None = None,
+    config: dict[str, Any] | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> None:
     parsed = numeric(value)
+    evidence_components = dict(components or {})
+    evidence_config = dict(config or {})
+    if semantic_version.startswith("expectation-crowding"):
+        evidence_components.setdefault("as_of", vector.as_of_date)
+        evidence_config.setdefault("as_of", vector.as_of_date)
     vector.add(
         name,
         parsed,
@@ -144,7 +207,7 @@ def add_known(
         source_fields=fields,
         periods=period_texts(history if history is not None else pd.DataFrame()),
         availability_dates=availability_texts(history if history is not None else pd.DataFrame()),
-        reason=reason if parsed is None else None,
+        reason=(reason or "invalid_numeric_value") if parsed is None else None,
         current_period=current_period,
         comparison_period=comparison_period,
         current_raw_value=current_raw_value,
@@ -153,6 +216,10 @@ def add_known(
         source_versions=source_versions,
         contract_version=COMPARABLE_PERIOD_CONTRACT_VERSION,
         provenance=provenance or {},
+        semantic_version=semantic_version,
+        formula=formula,
+        components=evidence_components,
+        config=evidence_config,
         metadata=metadata or {},
     )
 
@@ -314,6 +381,12 @@ def add_unknown(
     fields: tuple[str, ...],
     reason: str,
     history: pd.DataFrame | None = None,
+    semantic_version: str = "features-v1",
+    formula: str | None = None,
+    components: dict[str, Any] | None = None,
+    config: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+    status: str = "unknown",
 ) -> None:
     add_known(
         vector,
@@ -323,4 +396,10 @@ def add_unknown(
         fields=fields,
         history=history,
         reason=reason,
+        semantic_version=semantic_version,
+        formula=formula,
+        components=components,
+        config=config,
+        metadata=metadata,
+        status=status,
     )

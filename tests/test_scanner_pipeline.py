@@ -4,7 +4,9 @@ import pandas as pd
 
 from ashare_turnaround.features import (
     compute_attention_features,
+    compute_crowding_features,
     compute_fundamental_features,
+    compute_low_attention_v2,
     compute_quality_features,
     compute_trend_features,
 )
@@ -85,6 +87,7 @@ def _market_frames() -> tuple[pd.DataFrame, pd.DataFrame]:
 
 def _frames() -> dict[str, pd.DataFrame]:
     daily, daily_basic = _market_frames()
+    benchmark_dates = daily["trade_date"].tolist()
     frames = _financial_frames()
     frames.update(
         {
@@ -99,6 +102,27 @@ def _frames() -> dict[str, pd.DataFrame]:
             ),
             "daily": daily,
             "daily_basic": daily_basic,
+            "index_basic": pd.DataFrame(
+                {
+                    "ts_code": ["000300.SH"],
+                    "name": ["CSI 300"],
+                    "list_date": ["20050101"],
+                }
+            ),
+            "index_daily": pd.DataFrame(
+                {
+                    "ts_code": ["000300.SH"] * len(benchmark_dates),
+                    "trade_date": benchmark_dates,
+                    "close": [100.0 + index * 0.02 for index in range(len(benchmark_dates))],
+                }
+            ),
+            "trade_cal": pd.DataFrame(
+                {
+                    "exchange": ["SSE"] * len(benchmark_dates),
+                    "cal_date": benchmark_dates,
+                    "is_open": [1] * len(benchmark_dates),
+                }
+            ),
             "fina_indicator": pd.DataFrame(),
         }
     )
@@ -190,6 +214,11 @@ def test_replay_score_and_candidate_report_are_deterministic() -> None:
     report = candidate_report(result, CODE)
     markdown = candidate_report_markdown(report)
     assert report["selected"] is True
+    assert report["metadata"]["expectation_crowding_contract_version"] == (
+        "expectation-crowding-v2"
+    )
+    assert report["metadata"]["benchmark_id"] == "000300.SH"
+    assert "expectation_penalties" in report
     assert "Evidence and provenance" in markdown
     assert "revenue_yoy" in markdown
     assert result.ranked["snapshot_id"].tolist() == [result.snapshot_id]
@@ -197,11 +226,65 @@ def test_replay_score_and_candidate_report_are_deterministic() -> None:
     assert result.metadata()["config_fingerprint"] == result.config_fingerprint
     assert result.metadata()["comparable_period_contract_version"] == ("comparable-period-v1")
     assert result.metadata()["trend_contract_version"] == "turnaround-trend-v2"
+    assert result.metadata()["expectation_crowding_contract_version"] == (
+        "expectation-crowding-v2"
+    )
+    assert result.metadata()["attention_contract_version"] == "low-attention-v2.0.0"
+    assert result.metadata()["benchmark_id"] == "000300.SH"
+    assert result.metadata()["benchmark_source_dataset"] == "index_basic + index_daily"
     assert result.ranked.iloc[0]["comparable_period_contract_version"] == ("comparable-period-v1")
     assert result.ranked.iloc[0]["trend_contract_version"] == "turnaround-trend-v2"
+    assert result.ranked.iloc[0]["expectation_crowding_contract_version"] == (
+        "expectation-crowding-v2"
+    )
     assert result.scores[0].trend_contract_version == "turnaround-trend-v2"
     assert report["trend_contract_version"] == "turnaround-trend-v2"
     assert "Trend contract" in markdown
+
+
+def test_merged_contract_stack_keeps_trend_attention_and_crowding_provenance() -> None:
+    frames = _frames()
+    daily, daily_basic = _market_frames()
+    market = daily.merge(daily_basic, on=["ts_code", "trade_date"])
+    vector = compute_fundamental_features(_financial_frames(), CODE, AS_OF)
+    vector.merge(compute_trend_features(_financial_frames(), CODE, AS_OF))
+    vector.merge(compute_attention_features(market, CODE, AS_OF))
+    vector.merge(
+        compute_crowding_features(
+            market,
+            CODE,
+            AS_OF,
+            benchmark_frame=frames["index_daily"],
+            benchmark_definition_frame=frames["index_basic"],
+        )
+    )
+    vector.merge(compute_low_attention_v2(market, CODE, AS_OF))
+
+    assert vector.comparable_period_contract_version == "comparable-period-v1"
+    assert vector.trend_contract_version == "turnaround-trend-v2"
+    assert vector.feature_contract_versions["expectation_crowding"] == (
+        "expectation-crowding-v2"
+    )
+    assert vector.metadata["low_attention_v2"]["attention_contract_version"] == (
+        "low-attention-v2.0.0"
+    )
+    assert vector.metadata["expectation_crowding_v2"]["contract_version"] == (
+        "expectation-crowding-v2"
+    )
+    assert vector.benchmark_metadata["benchmark_id"] == "000300.SH"
+    assert "abnormal_volume" in vector.values
+    assert "low_attention_v2_abnormal_volume" in vector.values
+    assert vector.evidence["low_attention_v2_abnormal_volume"].feature == (
+        "low_attention_v2_abnormal_volume"
+    )
+
+    score = score_feature_vector(vector)
+    assert score.input_metadata["trend_contract_version"] == "turnaround-trend-v2"
+    assert score.input_metadata["attention_contract_version"] == "low-attention-v2.0.0"
+    assert score.input_metadata["expectation_crowding_contract_version"] == (
+        "expectation-crowding-v2"
+    )
+    assert score.input_metadata["benchmark_id"] == "000300.SH"
 
 
 def test_ablation_score_configs_share_data_snapshot_but_have_distinct_run_ids() -> None:

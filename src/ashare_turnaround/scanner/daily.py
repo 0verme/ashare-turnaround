@@ -58,6 +58,7 @@ def scan_data(
             top_n=top_n,
             universe=config.universe,
             score=config.score,
+            crowding=config.crowding,
             low_attention=config.low_attention,
         )
     result = run_replay(data_dir, as_of_date=as_of_date, config=settings)

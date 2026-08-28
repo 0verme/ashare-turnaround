@@ -139,6 +139,8 @@ class ScoreResult:
     rejected_reasons: tuple[str, ...]
     comparable_period_contract_version: str = COMPARABLE_PERIOD_CONTRACT_VERSION
     trend_contract_version: str = TURNAROUND_TREND_CONTRACT_VERSION
+    expectation_crowding_contract_version: str | None = None
+    benchmark_metadata: dict[str, Any] = field(default_factory=dict)
     input_metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -148,7 +150,23 @@ class ScoreResult:
         return self.input_metadata
 
     def as_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        payload = asdict(self)
+        payload.update(
+            {
+                "trend_contract_version": self.trend_contract_version,
+                "expectation_crowding_contract_version": (
+                    self.expectation_crowding_contract_version
+                ),
+                "benchmark_id": self.benchmark_metadata.get("benchmark_id"),
+                "benchmark_name": self.benchmark_metadata.get("benchmark_name"),
+                "benchmark_contract_version": self.benchmark_metadata.get(
+                    "benchmark_contract_version", self.benchmark_metadata.get("version")
+                ),
+                "benchmark_source_dataset": self.benchmark_metadata.get("source_dataset"),
+                "input_metadata": dict(self.input_metadata),
+            }
+        )
+        return payload
 
 
 def _bounded(value: float | int | None, scale: float = 1.0) -> float | None:
@@ -214,10 +232,25 @@ def score_feature_vector(
     if settings.trend_contract_version != vector.trend_contract_version:
         raise ValueError("score and feature vectors use different trend contract versions")
     values = vector.values
-    attention_metadata = vector.metadata.get("low_attention_v2", {})
+    attention_metadata = dict(vector.metadata.get("low_attention_v2", {}))
+    expectation_version = vector.expectation_crowding_contract_version
+    expectation_metadata = dict(vector.metadata.get("expectation_crowding_v2", {}))
+    benchmark_metadata = dict(vector.benchmark_metadata)
+    declared_benchmark = expectation_metadata.get(
+        "benchmark_metadata", expectation_metadata.get("benchmark", {})
+    )
+    if isinstance(declared_benchmark, dict):
+        for key, value in declared_benchmark.items():
+            benchmark_metadata.setdefault(key, value)
+    if expectation_version is not None:
+        expectation_metadata.setdefault("contract_version", expectation_version)
+        expectation_metadata.setdefault(
+            "expectation_crowding_contract_version", expectation_version
+        )
     input_metadata = {
         "feature_version": vector.version,
         "comparable_period_contract_version": vector.comparable_period_contract_version,
+        "trend_contract_version": vector.trend_contract_version,
         "attention_contract_version": attention_metadata.get(
             "attention_contract_version"
         ),
@@ -228,6 +261,18 @@ def score_feature_vector(
         "attention_v2_research_only": bool(attention_metadata),
         "production_attention_input": "attention_score",
         "production_score_uses_low_attention_v2": False,
+        "expectation_crowding_contract_version": expectation_version,
+        "crowding_contract_version": expectation_version,
+        "benchmark_id": benchmark_metadata.get("benchmark_id"),
+        "benchmark_name": benchmark_metadata.get("benchmark_name"),
+        "benchmark_contract_version": benchmark_metadata.get(
+            "benchmark_contract_version", benchmark_metadata.get("version")
+        ),
+        "benchmark_source_dataset": benchmark_metadata.get("source_dataset"),
+        "feature_contract_versions": dict(vector.feature_contract_versions),
+        "low_attention_v2": attention_metadata,
+        "expectation_crowding_v2": expectation_metadata,
+        "benchmark": benchmark_metadata,
     }
     components: dict[str, float | None] = {
         "fundamental_score": _fundamental_score(values),
@@ -287,6 +332,8 @@ def score_feature_vector(
         rejected_reasons=rejected_reasons,
         comparable_period_contract_version=vector.comparable_period_contract_version,
         trend_contract_version=vector.trend_contract_version,
+        expectation_crowding_contract_version=expectation_version,
+        benchmark_metadata=benchmark_metadata,
         input_metadata=input_metadata,
     )
 
@@ -305,6 +352,12 @@ def rank_scores(
             "comparable_period_contract_version": result.comparable_period_contract_version,
             "trend_contract_version": result.trend_contract_version,
             "attention_contract_version": result.input_metadata.get("attention_contract_version"),
+            "expectation_crowding_contract_version": result.expectation_crowding_contract_version,
+            "benchmark_id": result.benchmark_metadata.get("benchmark_id"),
+            "benchmark_contract_version": result.benchmark_metadata.get(
+                "benchmark_contract_version", result.benchmark_metadata.get("version")
+            ),
+            "benchmark_source_dataset": result.benchmark_metadata.get("source_dataset"),
             "enabled_groups": "|".join(result.enabled_groups),
             "turnaround_score": result.turnaround_score,
             "risk_flags": "|".join(result.risk_flags),

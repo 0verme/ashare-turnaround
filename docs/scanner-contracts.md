@@ -16,7 +16,7 @@ fundamental | trend | quality | attention | crowding
         ↓
 FeatureVector + FeatureEvidence
         ↓
-Turnaround Score v1
+Turnaround Score (score-v2; frozen weights)
         ↓
 replay / daily snapshot / evaluation / report
 ```
@@ -34,7 +34,7 @@ replay / daily snapshot / evaluation / report
 | #12 | Quality gate and false-turnaround flags | `features.quality.compute_quality_features` |
 | #13 | Low-attention proxies | `features.market.compute_attention_features` |
 | #29 | Low-attention v2 calibration (cross-sectional context) | `features.low_attention.compute_low_attention_v2` — research-only; see [docs/low-attention-v2.md](low-attention-v2.md); v1/v2 boundary preserved (production score still reads v1 `attention_score`) |
-| #14 | Low-expectation/crowding proxies | `features.market.compute_crowding_features` |
+| #14 | Low-expectation/crowding proxies | `features.market.compute_crowding_features` (`expectation-crowding-v2`, see `docs/expectation-crowding-v2.md`) |
 | #15 | Weighted transparent score | `scanner.score.score_feature_vector` |
 | #16 | Historical PIT replay | `scanner.replay.run_replay` |
 | #17 | Forward evaluation | `scanner.evaluation.evaluate_scans` |
@@ -55,15 +55,22 @@ has the proposed adversarial PIT test/documentation in [PR #24](https://github.c
 Each candidate is represented by `scanner.contracts.FeatureVector`:
 
 - `ts_code` and normalized `as_of_date` identify the decision;
-- `version` is currently `features-v1` for the production composite; the
-  additive Low Attention v2 group declares `low-attention-v2.0.0` in
-  `FeatureVector.metadata["low_attention_v2"]`;
+- `version` is the feature schema version (`features-v1` for a merged scanner
+  vector); the additive Low Attention v2 group declares
+  `low-attention-v2.0.0` in `FeatureVector.metadata["low_attention_v2"]`;
+- `feature_contract_versions` records group contracts, including
+  `expectation_crowding: expectation-crowding-v2`;
+- `benchmark_metadata` records the primary `000300.SH` declaration and its
+  `index_basic + index_daily` source;
+- `FeatureVector.metadata` merges the `low_attention_v2` and
+  `expectation_crowding_v2` provenance namespaces without overwriting either.
 - `comparable_period_contract_version` is `comparable-period-v1`;
 - `trend_contract_version` is `turnaround-trend-v2`; this is independent of
   the comparable-period version;
 - `values` contains numeric features or explicit `None`;
 - `evidence` maps every value to datasets, source fields, report periods, raw
-  values, period semantics, source versions, and actual availability dates;
+  values, period semantics, source versions, actual availability dates, and—
+  for crowding—formula, components, config, and semantic version;
 - `risk_flags` are soft penalties while `rejected_reasons` are hard gates;
 - `unknown_features` is populated for `unknown`, `insufficient_data`,
   `insufficient_history`, `discontinuous`, and `unsupported` values;
@@ -114,6 +121,34 @@ unknown observation interrupts persistence; no status is filled with zero.
 See [docs/trend-semantics.md](trend-semantics.md) for the full contract and
 adversarial examples.
 
+### Low Attention v2
+
+`features.low_attention.compute_low_attention_v2` is the research-only
+`low-attention-v2.0.0` calibration. Self-history is prior-only, cross-sectional
+percentiles use the visible population at the effective session, and liquidity
+eligibility is a separate gate. Missing, stale, suspended, and insufficient
+history observations remain `UNKNOWN`; the production score continues to read
+only the v1 `attention_score`.
+
+See [docs/low-attention-v2.md](low-attention-v2.md) for the full contract and
+A/B/C boundary tests.
+
+### Expectation / Crowding v2 and benchmark
+
+`features.market.compute_crowding_features` uses
+`expectation-crowding-v2` with benchmark `000300.SH` under `benchmark-v1`.
+For 20D and 60D trading-session windows:
+
+```text
+excess_return = (stock_end / stock_start - 1)
+              - (benchmark_end / benchmark_start - 1)
+```
+
+A missing or misaligned benchmark is `UNKNOWN`; it never falls back to the
+absolute stock return. Crowding/expectation penalties and evidence remain
+separate from fundamental and trend evidence. See
+[docs/expectation-crowding-v2.md](expectation-crowding-v2.md).
+
 ### Score
 
 `ScoreConfig` is `score-v2` with these unchanged weights:
@@ -128,7 +163,9 @@ adversarial examples.
 
 Known components are renormalized when a component is unavailable. Risk flags
 subtract bounded penalties, while hard quality gates remain visible in the
-ranked output and cannot be mistaken for a clean candidate.
+ranked output and cannot be mistaken for a clean candidate. Score weights remain
+unchanged in this branch; `ScoreResult` and ranked rows carry the crowding
+contract and benchmark metadata for auditability.
 
 ## Runtime commands and artifacts
 
@@ -144,7 +181,8 @@ ranked output and cannot be mistaken for a clean candidate.
   `write_incremental` merges by the dataset's declared primary keys and keeps
   the latest row for an exact identity.
 - `replay --as-of YYYYMMDD` writes a ranked Parquet artifact and JSON metadata
-  under `data/derived/replays/`.
+  under `data/derived/replays/`; it loads `index_daily` separately from stock
+  `daily` and records the `expectation-crowding-v2`/benchmark declarations.
 - `replay-variants --as-of YYYYMMDD` writes the four versioned score variants
   from one verified PIT snapshot.
 - `scan` writes a daily snapshot under `data/derived/scans/`; `scan-compare`
