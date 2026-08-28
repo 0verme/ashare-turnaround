@@ -1,6 +1,14 @@
 # Financial PIT field mapping
 
-The canonical PIT columns are `report_period`, `announcement_date`, `actual_available_date`, `report_type`, `update_flag`, `retrieved_at`, and `source`.
+The canonical PIT columns are `report_period`, `announcement_date`,
+`actual_available_date`, `report_type`, `update_flag`, `retrieved_at`, and
+`source`.  Comparable-period canonicalization additionally adds
+`fiscal_year`, `fiscal_period`, `quarter`, `report_family`, `statement_type`,
+`duration_semantics`, `scope`, `unit`, `accounting_semantics`,
+`source_version_identity`, `source_version`, and
+`comparable_period_contract_version`.  See
+[comparable-period-semantics.md](comparable-period-semantics.md) for the
+versioned economic-period contract.
 A row with no usable `actual_available_date` is excluded from an as-of query; the implementation does not invent a date.
 
 | Dataset | report_period | announcement_date | available_date source | Field observation | Semantic status | Notes |
@@ -28,4 +36,8 @@ A row with no usable `actual_available_date` is excluded from an as-of query; th
 
 ## Quarterization scope
 
-The code contains only a prototype for cumulative `income`/`cashflow` values: Q1, H1-Q1, Q3-H1, and FY-Q3. Live bounded checks are recorded in `docs/pit-validation.md`; this is not a factor calculation.
+Cumulative `income`/`cashflow` values are quarterized only through the
+validated Q1, H1-Q1, Q3-H1, and FY-Q3 chain.  Missing, ambiguous, mixed-unit,
+mixed-scope, or not-yet-visible links return `UNKNOWN` with a reason.  A
+balance sheet is point-in-time and is never quarterized.  Live bounded checks
+are recorded in `docs/pit-validation.md`; this is not a factor calculation.
