@@ -16,7 +16,7 @@ redownloaded, rewritten, compacted, or added to the Market checkpoint file.
 - GitHub issue: [#34](https://github.com/0verme/ashare-turnaround/issues/34)
 - Title: `feat: build market and reference historical research corpus`
 - Labels: `priority:P0`, `type:data`, `phase:1-foundation`
-- Status: open
+- Status: ready for merge; the PR uses `Closes #34`
 
 The issue records the PIT, coverage, capacity, dry-run, integrity, and
 cross-sectional acceptance criteria for #29, #30, #31, #32, #17, and #18.
@@ -111,7 +111,8 @@ Command:
 ```bash
 ASHARE_DATA_DIR=/vol5/1000/ai-workspace/repos/ashare-turnaround/data \
   python -m ashare_turnaround bootstrap-market --dry-run \
-  --start-date 20120101 --end-date 20251231 --benchmark-code 000300.SH
+  --start-date 20120101 --end-date 20251231 --benchmark-code 000300.SH \
+  --snapshot-date 20260827
 ```
 
 ## Download result
@@ -211,18 +212,19 @@ boundary rule is declared.
 - `suspend_d.trade_date` / `suspend_type`: dated suspension observation; no
 separate publication timestamp is exposed, so its exact as-of convention must
 be declared by the downstream universe layer.
-- `namechange` fields would be usable only with an announcement-date cutoff,
-if a stable source identity can be established.
+- `namechange` is currently opt-in/partial/unsupported: the observed source
+identity is unstable, so no historical name state is approved.  A future source
+would need a stable identity plus an announcement-date cutoff before use.
 
 ### Current-snapshot-only
 
 `stock_basic` was explicitly queried as L/D/P status snapshots with
 `exchange`, `list_date`, `delist_date`, `list_status`, `market`, `industry`,
 `is_hs`, and related fields.  The snapshot is useful for identifiers and
-listing/delisting boundaries, but `name`, `list_status`, `industry`, `market`,
-`exchange` classification, `is_hs`, and actual-control fields must not be
-projected backward into 2012–2025.  In the completion matrix this is
-`UNSUPPORTED_PIT`, not a fabricated historical state.
+listing/delisting boundaries, but historical `name`, `status/list_status`,
+`industry`, and `board/market` are `UNSUPPORTED_PIT`; exchange classification,
+`is_hs`, and actual-control fields are also not historical observations.  None
+of these current values may be projected backward into 2012–2025.
 
 ### Unsupported / partial
 
@@ -292,3 +294,24 @@ daily_basic history, configured benchmark history, and reference foundation
 pass the data/coverage/integrity gates.  It does **not** upgrade the listed
 current-snapshot reference fields into historical PIT facts; those limitations
 remain machine-readable and documented above.
+
+## Phase 2.5 hand-off
+
+Issue #34 is ready to close through its pull request.  From this point,
+historical data work is **GAP-DRIVEN MODE** only: a correctness/replay
+validation failure, a failed benchmark/reference gate, or an approved daily
+incremental-sync need may open a bounded repair.  This phase does not authorize
+full-history redownloads, new benchmarks, new providers, or new feature data.
+
+After #34 is merged, the next main-path issue is #27, branched from the latest
+`origin/main`.  The sequence is:
+
+```text
+#27
+→ #28
+→ merge with completed #29/#30
+→ #31
+→ #32
+→ calibrated Evaluation/Ablation
+→ Score v2 decision
+```

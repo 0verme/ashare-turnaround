@@ -50,6 +50,19 @@ Phase 0/1 and the first complete scanner path are implemented:
 
 The live source validation report is at [docs/data-source-validation.md](docs/data-source-validation.md), the VIP assessment is at [docs/vip-api-evaluation.md](docs/vip-api-evaluation.md), and the PIT evidence is at [docs/pit-field-mapping.md](docs/pit-field-mapping.md) and [docs/pit-validation.md](docs/pit-validation.md). The scanner contracts and issue-to-module mapping are documented in [docs/scanner-contracts.md](docs/scanner-contracts.md). Evaluation assumptions are frozen in [docs/scanner-evaluation.md](docs/scanner-evaluation.md), and the ablation decision rule is in [docs/feature-ablation.md](docs/feature-ablation.md). Phase 1.6 decisions and final gates are documented in [docs/market-reference-history.md](docs/market-reference-history.md) and [docs/market-reference-coverage.md](docs/market-reference-coverage.md). Full-market historical bootstrap is an explicit, resumable operation; tests use synthetic fixtures and local Parquet only.
 
+## Phase 2.5 hand-off
+
+Issue #34 is in close-out state: the 2012–2025 Market / Reference corpus is
+verified locally, while Financial P0 remains untouched. Historical data work
+now follows **GAP-DRIVEN MODE**: only a correctness/replay gate failure or an
+approved incremental-sync need may request a bounded repair. No full-history
+redownload is implied by this hand-off.
+
+The next main-path issue is [#27](https://github.com/0verme/ashare-turnaround/issues/27),
+which must branch from the latest `origin/main` after #34 is merged. The planned
+sequence is `#27 → #28 → #29/#30 → #31 → #32 → calibrated Evaluation/Ablation →
+Score v2 decision`.
+
 ## Architecture
 
 - `src/ashare_turnaround/providers/tushare.py` — the only Tushare client construction and transport override.

@@ -158,9 +158,11 @@ when running from a worktree:
 export ASHARE_DATA_DIR=/vol5/1000/ai-workspace/repos/ashare-turnaround/data
 ashare-turnaround market-capacity-plan --start-date 20120101 --end-date 20251231
 ashare-turnaround bootstrap-market --dry-run \
-  --start-date 20120101 --end-date 20251231 --benchmark-code 000300.SH
+  --start-date 20120101 --end-date 20251231 --benchmark-code 000300.SH \
+  --snapshot-date 20260827
 ashare-turnaround bootstrap-market \
-  --start-date 20120101 --end-date 20251231 --benchmark-code 000300.SH
+  --start-date 20120101 --end-date 20251231 --benchmark-code 000300.SH \
+  --snapshot-date 20260827
 ashare-turnaround verify-market \
   --start-date 20120101 --end-date 20251231 --benchmark-code 000300.SH
 ```
@@ -179,3 +181,9 @@ identical visible rows without a stable source identity; it is not silently
 used to manufacture historical ST/name state.  See
 [market-reference-history.md](market-reference-history.md) for the partition,
 capacity, PIT, and final coverage contract.
+
+After the Market / Reference corpus is accepted, historical data is in
+**GAP-DRIVEN MODE**.  Do not start another full-history download for possible
+future use.  A bounded repair is allowed only when #27–#32 correctness/replay
+validation finds a real gap, a benchmark/reference gate fails, or an approved
+daily incremental sync needs the latest session.

@@ -92,11 +92,13 @@
 | stock_basic | list_date | historical event field | listing boundary | PIT_SAFE | usable only for list_date <= as_of |
 | stock_basic | delist_date | historical event field | delisting boundary | PIT_SAFE | usable only when source supplies a non-null date |
 | stock_basic | exchange | current snapshot | current reference classification | SNAPSHOT_ONLY | not a dated historical reassignment log |
-| stock_basic | market | current snapshot | current board/security category | SNAPSHOT_ONLY | do not project today's board into past dates |
-| stock_basic | name | current snapshot | current display name and possible ST label | SNAPSHOT_ONLY | never use as historical ST/name state |
-| stock_basic | list_status/is_hs/industry | current snapshot | current status/industry/holding classification | SNAPSHOT_ONLY | not historical PIT state |
-| namechange | name/start_date/end_date | historical interval plus ann_date | historical name interval | PIT_WITH_ANN_DATE | only use an interval when ann_date <= as_of |
-| namechange | change_reason | historical source row | reason evidence for ST/name changes | PIT_WITH_ANN_DATE | does not by itself prove an eligibility rule |
+| stock_basic | name | current snapshot | historical name/ST state unavailable | UNSUPPORTED_PIT | never use the current display name as historical ST/name state |
+| stock_basic | status/list_status | current snapshot | historical listing/status state unavailable | UNSUPPORTED_PIT | do not project the current status into past dates |
+| stock_basic | industry | current snapshot | historical industry state unavailable | UNSUPPORTED_PIT | do not project the current industry into past dates |
+| stock_basic | board/market | current snapshot | historical board/security category unavailable | UNSUPPORTED_PIT | do not project today's board into past dates |
+| stock_basic | is_hs/actual-control | current snapshot | current holding/control classification | SNAPSHOT_ONLY | not historical PIT state |
+| namechange | name/start_date/end_date | partial/unstable source response | historical name interval not approved | UNSUPPORTED_PIT | opt-in only: the compatible endpoint exposes no stable source identity; do not deduplicate repeated rows into a history |
+| namechange | change_reason | partial/unstable source response | historical reason evidence not approved | UNSUPPORTED_PIT | source identity is unstable; does not by itself prove an eligibility rule |
 | suspend_d | trade_date/suspend_type | dated market observation | suspension on the trade date | PIT_BY_TRADE_DATE | no separate publication timestamp is exposed |
 | index_basic | all fields | current snapshot | benchmark definition snapshot | SNAPSHOT_ONLY | benchmark identity is explicit; definition history is not claimed |
 

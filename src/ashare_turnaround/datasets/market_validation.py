@@ -36,6 +36,17 @@ _DATE_DATASETS = {"daily", "daily_basic", "index_daily"}
 _MIN_SYMBOL_COUNT = 500
 _EXPECTED_CROSS_SECTION_YEARS = (2013, 2016, 2018, 2020, 2022, 2024, 2025)
 _SAFE_SQL_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+# These columns are added by RawParquetStore after the source-frame schema is
+# checkpointed.  Exclude them when reconciling a checkpoint to its stored file.
+_STORAGE_PROVENANCE_COLUMNS = frozenset(
+    {
+        "retrieved_at",
+        "source",
+        "source_api",
+        "reference_snapshot_date",
+        "reference_semantics",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -367,6 +378,84 @@ def _latest_snapshot_date(checkpoints: MarketCheckpointStore, data_dir: Path | N
     return max(values) if values else datetime.now(UTC).strftime("%Y%m%d")
 
 
+def _checkpoint_file_mismatches(
+    data_dir: Path,
+    dataset: str,
+    unit: Any,
+    checkpoint: dict[str, Any],
+) -> tuple[str, ...]:
+    """Reconcile durable checkpoint metadata with the named Parquet unit."""
+
+    expected_storage_path = "/".join((*unit.storage_parts, "data.parquet"))
+    mismatches: list[str] = []
+    if str(checkpoint.get("source_api", "")) != str(unit.source_api):
+        mismatches.append(
+            f"{dataset}:{unit.unit}:source_api={checkpoint.get('source_api')!r}:"
+            f"expected={unit.source_api!r}"
+        )
+    if str(checkpoint.get("storage_path", "")) != expected_storage_path:
+        mismatches.append(
+            f"{dataset}:{unit.unit}:storage_path={checkpoint.get('storage_path')!r}:"
+            f"expected={expected_storage_path!r}"
+        )
+    for checkpoint_field, unit_field in (
+        ("requested_start", "expected_start"),
+        ("requested_end", "expected_end"),
+    ):
+        observed = checkpoint.get(checkpoint_field)
+        expected = getattr(unit, unit_field)
+        if observed != expected:
+            mismatches.append(
+                f"{dataset}:{unit.unit}:{checkpoint_field}={observed!r}:"
+                f"expected={expected!r}"
+            )
+
+    path = RawParquetStore(data_dir).unit_file(dataset, unit.storage_parts)
+    try:
+        parquet = pq.ParquetFile(path)
+        actual_rows = int(parquet.metadata.num_rows)
+        actual_columns = tuple(str(name) for name in parquet.schema_arrow.names)
+    except (OSError, TypeError, ValueError, RuntimeError, pa.ArrowException) as exc:
+        return (
+            *mismatches,
+            f"{dataset}:{unit.unit}:checkpoint_file_metadata_error={type(exc).__name__}",
+        )
+
+    try:
+        checkpoint_rows = int(checkpoint["row_count"])
+    except (KeyError, TypeError, ValueError):
+        mismatches.append(f"{dataset}:{unit.unit}:invalid_checkpoint_row_count")
+    else:
+        if checkpoint_rows != actual_rows:
+            mismatches.append(
+                f"{dataset}:{unit.unit}:row_count={checkpoint_rows}:actual={actual_rows}"
+            )
+    if actual_rows == 0:
+        mismatches.append(f"{dataset}:{unit.unit}:stored_file_is_empty")
+
+    expected_schema = str(checkpoint.get("schema_hash") or "")
+    actual_schema = _schema_hash(
+        tuple(name for name in actual_columns if name not in _STORAGE_PROVENANCE_COLUMNS)
+    )
+    if not expected_schema:
+        mismatches.append(f"{dataset}:{unit.unit}:missing_checkpoint_schema_hash")
+    elif expected_schema != actual_schema:
+        mismatches.append(
+            f"{dataset}:{unit.unit}:schema_hash={expected_schema}:actual={actual_schema}"
+        )
+
+    try:
+        checkpoint_duplicates = int(checkpoint["duplicate_count"])
+    except (KeyError, TypeError, ValueError):
+        mismatches.append(f"{dataset}:{unit.unit}:invalid_checkpoint_duplicate_count")
+    else:
+        if checkpoint_duplicates != 0:
+            mismatches.append(
+                f"{dataset}:{unit.unit}:checkpoint_duplicate_count={checkpoint_duplicates}"
+            )
+    return tuple(mismatches)
+
+
 def _checkpoint_info(
     data_dir: Path,
     dataset: str,
@@ -383,8 +472,12 @@ def _checkpoint_info(
         status = str(latest.get("status", "UNKNOWN")).upper() if latest else "UNKNOWN"
         statuses.add(status)
         path_exists = store.unit_file(dataset, unit.storage_parts).is_file()
-        if status == "PASS" and path_exists:
-            passed += 1
+        if status == "PASS" and path_exists and latest is not None:
+            unit_mismatches = _checkpoint_file_mismatches(data_dir, dataset, unit, latest)
+            if unit_mismatches:
+                mismatch.extend(unit_mismatches)
+            else:
+                passed += 1
         else:
             if status in {"FAILED", "PARTIAL", "UNKNOWN_EMPTY"}:
                 failed += 1
@@ -942,28 +1035,46 @@ def reference_pit_findings() -> tuple[ReferencePITFinding, ...]:
         ),
         ReferencePITFinding(
             "stock_basic",
-            "market",
+            "name",
             "stock_basic",
             "current snapshot",
-            "current board/security category",
-            "SNAPSHOT_ONLY",
+            "historical name/ST state unavailable",
+            "UNSUPPORTED_PIT",
+            "never use the current display name as historical ST/name state",
+        ),
+        ReferencePITFinding(
+            "stock_basic",
+            "status/list_status",
+            "stock_basic",
+            "current snapshot",
+            "historical listing/status state unavailable",
+            "UNSUPPORTED_PIT",
+            "do not project the current status into past dates",
+        ),
+        ReferencePITFinding(
+            "stock_basic",
+            "industry",
+            "stock_basic",
+            "current snapshot",
+            "historical industry state unavailable",
+            "UNSUPPORTED_PIT",
+            "do not project the current industry into past dates",
+        ),
+        ReferencePITFinding(
+            "stock_basic",
+            "board/market",
+            "stock_basic",
+            "current snapshot",
+            "historical board/security category unavailable",
+            "UNSUPPORTED_PIT",
             "do not project today's board into past dates",
         ),
         ReferencePITFinding(
             "stock_basic",
-            "name",
+            "is_hs/actual-control",
             "stock_basic",
             "current snapshot",
-            "current display name and possible ST label",
-            "SNAPSHOT_ONLY",
-            "never use as historical ST/name state",
-        ),
-        ReferencePITFinding(
-            "stock_basic",
-            "list_status/is_hs/industry",
-            "stock_basic",
-            "current snapshot",
-            "current status/industry/holding classification",
+            "current holding/control classification",
             "SNAPSHOT_ONLY",
             "not historical PIT state",
         ),
@@ -971,19 +1082,20 @@ def reference_pit_findings() -> tuple[ReferencePITFinding, ...]:
             "namechange",
             "name/start_date/end_date",
             "namechange",
-            "historical interval plus ann_date",
-            "historical name interval",
-            "PIT_WITH_ANN_DATE",
-            "only use an interval when ann_date <= as_of",
+            "partial/unstable source response",
+            "historical name interval not approved",
+            "UNSUPPORTED_PIT",
+            "opt-in only: the compatible endpoint exposes no stable source identity; "
+            "do not deduplicate repeated rows into a history",
         ),
         ReferencePITFinding(
             "namechange",
             "change_reason",
             "namechange",
-            "historical source row",
-            "reason evidence for ST/name changes",
-            "PIT_WITH_ANN_DATE",
-            "does not by itself prove an eligibility rule",
+            "partial/unstable source response",
+            "historical reason evidence not approved",
+            "UNSUPPORTED_PIT",
+            "source identity is unstable; does not by itself prove an eligibility rule",
         ),
         ReferencePITFinding(
             "suspend_d",
@@ -1157,10 +1269,23 @@ def verify_market_corpus(
         warnings.append("benchmark_coverage_failure")
     if integrity.status != "PASS":
         warnings.append("raw_integrity_failure")
-    critical = {"trade_cal", "daily", "daily_basic", "index_daily", "stock_basic", "index_basic"}
+    critical = {
+        "trade_cal",
+        "daily",
+        "daily_basic",
+        "index_daily",
+        "stock_basic",
+        "index_basic",
+        "suspend_d",
+    }
+    selected_names = set(selected)
     selected_critical = [value for value in coverage_values if value.dataset in critical]
-    complete_enough = all(
-        value.status in {"COMPLETE", "UNSUPPORTED_PIT"} for value in selected_critical
+    if not critical.issubset(selected_names):
+        warnings.append("critical_dataset_not_requested")
+    complete_enough = (
+        critical.issubset(selected_names)
+        and len(selected_critical) == len(critical)
+        and all(value.status in {"COMPLETE", "UNSUPPORTED_PIT"} for value in selected_critical)
     )
     cross_ok = bool(cross) and all(value.status == "PASS" for value in cross)
     status = (

@@ -412,13 +412,9 @@ def _file_entry(dataset: str, path: Path, raw_dir: Path) -> ManifestEntry:
 
 
 def _completeness(dataset: str, checkpoint_path: Path) -> str:
-    if not checkpoint_path.exists():
-        return "UNKNOWN"
-    checkpoints = BootstrapCheckpointStore(checkpoint_path).latest_for_dataset(dataset)
-    if not checkpoints:
-        return "UNKNOWN"
-    statuses = {str(value.get("status", "")).upper() for value in checkpoints.values()}
-    return "COMPLETE" if statuses == {"PASS"} else "PARTIAL"
+    """Return completeness from the checkpoint namespace that owns a dataset."""
+
+    return _checkpoint_completeness_for(dataset, checkpoint_path)[0]
 
 
 def build_raw_manifest(
