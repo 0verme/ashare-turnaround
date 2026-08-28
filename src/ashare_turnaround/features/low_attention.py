@@ -44,6 +44,24 @@ from ..scanner.contracts import FeatureVector
 from .common import add_known, new_vector, numeric
 
 SEMANTIC_VERSION = "low-attention-v2.0.0"
+LOW_ATTENTION_V2_VERSION = SEMANTIC_VERSION
+LOW_ATTENTION_CONTRACT_VERSION = SEMANTIC_VERSION
+LOW_ATTENTION_V2_FIELDS = (
+    "self_turnover_percentile",
+    "self_amount_percentile",
+    "self_volume_percentile",
+    "cross_section_turnover_percentile",
+    "cross_section_amount_percentile",
+    "cross_section_volume_percentile",
+    "abnormal_volume",
+    "attention_baseline_change",
+    "attention_surge",
+    "session_status",
+    "liquidity_eligible",
+    "liquidity_average_amount",
+    "low_attention_v2_score",
+    "low_attention_v2_opportunity",
+)
 
 
 # --------------------------------------------------------------------------
@@ -65,6 +83,8 @@ class SelfWindowConfig:
             raise ValueError("self window must be at least 2 sessions")
         if self.min_valid < 2 or self.min_valid > self.window:
             raise ValueError("min_valid must be between 2 and the window")
+        if self.min_listing_days < 0:
+            raise ValueError("min_listing_days must be non-negative")
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,6 +129,22 @@ class AbnormalVolumeConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class LiquidityConfig:
+    """Versioned liquidity floor kept independent from attention ranking."""
+
+    version: str = "liquidity-gate-v2"
+    average_lookback: int = 20
+    min_average_amount: float = 1.0
+    require_current_session: bool = True
+
+    def __post_init__(self) -> None:
+        if self.average_lookback < 1:
+            raise ValueError("average_lookback must be positive")
+        if self.min_average_amount < 0:
+            raise ValueError("min_average_amount must be non-negative")
+
+
+@dataclass(frozen=True, slots=True)
 class LowAttentionConfig:
     """Aggregate configuration for the Low Attention v2 module."""
 
@@ -116,11 +152,15 @@ class LowAttentionConfig:
     self_window: SelfWindowConfig = field(default_factory=SelfWindowConfig)
     cross_section: CrossSectionConfig = field(default_factory=CrossSectionConfig)
     abnormal_volume: AbnormalVolumeConfig = field(default_factory=AbnormalVolumeConfig)
+    liquidity: LiquidityConfig = field(default_factory=LiquidityConfig)
     low_attention_cross_percentile: float = 0.30  # threshold for the A/B classification
+    attention_surge_ratio: float = 2.0
 
     def __post_init__(self) -> None:
         if not 0.0 < self.low_attention_cross_percentile <= 1.0:
             raise ValueError("low_attention_cross_percentile must be in (0, 1]")
+        if self.attention_surge_ratio <= 0:
+            raise ValueError("attention_surge_ratio must be positive")
 
     def declared(self) -> dict[str, Any]:
         return {
@@ -128,7 +168,9 @@ class LowAttentionConfig:
             "self_window": as_dict(self.self_window),
             "cross_section": as_dict(self.cross_section),
             "abnormal_volume": as_dict(self.abnormal_volume),
+            "liquidity": as_dict(self.liquidity),
             "low_attention_cross_percentile": self.low_attention_cross_percentile,
+            "attention_surge_ratio": self.attention_surge_ratio,
         }
 
 
@@ -143,41 +185,114 @@ def as_dict(value: Any) -> dict[str, Any]:
 # --------------------------------------------------------------------------
 
 
+def _as_of_timestamp(value: str | date | datetime | pd.Timestamp) -> pd.Timestamp:
+    parsed = pd.to_datetime(value, errors="coerce")
+    if pd.isna(parsed):
+        raise ValueError(f"invalid as_of_date: {value!r}")
+    timestamp = pd.Timestamp(parsed)
+    if timestamp.tzinfo is not None:
+        timestamp = timestamp.tz_localize(None)
+    return timestamp.normalize()
+
+
+def _stable_row_key(row: pd.Series) -> str:
+    """Build a row-order-independent key for duplicate market observations."""
+
+    return "\x1f".join(
+        f"{column}={row[column]!r}"
+        for column in sorted(row.index)
+        if column not in {"_date", "_available_date", "_row_key", "_row_completeness"}
+    )
+
+
+def _deduplicate_session_rows(frame: pd.DataFrame) -> pd.DataFrame:
+    """Choose one deterministic observation per symbol and trading session.
+
+    Raw market datasets are expected to be keyed by ``(ts_code, trade_date)``,
+    but research fixtures and append-only stores can contain repeated rows.  A
+    stable tie break prevents the result from depending on input row order;
+    the most recently available revision wins when availability is supplied,
+    followed by the most complete row and a canonical value key.
+    """
+
+    if frame.empty or not {"ts_code", "_date"}.issubset(frame.columns):
+        return frame
+    result = frame.copy()
+    result["_row_completeness"] = result.notna().sum(axis=1)
+    result["_row_key"] = result.apply(_stable_row_key, axis=1)
+    sort_columns = ["ts_code", "_date"]
+    ascending = [True, True]
+    if "actual_available_date" in result.columns:
+        result["_available_date"] = normalize_date_series(result["actual_available_date"])
+        sort_columns.append("_available_date")
+        ascending.append(False)
+    sort_columns.extend(["_row_completeness", "_row_key"])
+    ascending.extend([False, True])
+    result = result.sort_values(sort_columns, ascending=ascending, kind="mergesort")
+    # ``first`` coalesces complementary daily/daily_basic rows while keeping
+    # deterministic precedence for conflicting non-null revisions.
+    result = result.groupby(
+        ["ts_code", "_date"], sort=False, as_index=False, dropna=False
+    ).first()
+    return result.drop(
+        columns=["_available_date", "_row_key", "_row_completeness"], errors="ignore"
+    )
+
+
 def _session_rows(
     frame: pd.DataFrame, as_of: pd.Timestamp, *, code: str | None = None
 ) -> pd.DataFrame:
-    """Rows of one symbol (or the whole frame) observable at or before as_of."""
+    """Rows observable by ``as_of``, normalized to one row per symbol/session."""
 
     if frame is None or frame.empty or "trade_date" not in frame.columns:
         return pd.DataFrame()
     result = frame.copy()
-    if code is not None and "ts_code" in result.columns:
-        result = result.loc[result["ts_code"].astype("string").eq(code)].copy()
+    as_of_timestamp = _as_of_timestamp(as_of)
+    if code is not None:
+        if "ts_code" not in result.columns:
+            return pd.DataFrame()
+        result = result.loc[result["ts_code"].astype("string").eq(str(code))].copy()
     dates = normalize_date_series(result["trade_date"])
-    result = result.loc[dates.notna() & dates.le(as_of)].copy()
+    result = result.loc[dates.notna() & dates.le(as_of_timestamp)].copy()
+    if result.empty:
+        return result.assign(_date=pd.Series(dtype="datetime64[ns]"))
     if "actual_available_date" in result.columns:
-        available = normalize_date_series(result["actual_available_date"])
-        result = result.loc[available.isna() | available.le(as_of)].copy()
+        raw_available = result["actual_available_date"]
+        available = normalize_date_series(raw_available)
+        missing_available = raw_available.isna() | (
+            raw_available.astype("string")
+            .str.strip()
+            .str.lower()
+            .isin({"", "nan", "nat", "none", "<na>"})
+        )
+        # Missing availability is retained for legacy market rows; a dated
+        # observation is visible only after its declared availability date.
+        # A non-empty invalid date fails closed instead of entering the PIT set.
+        result = result.loc[
+            missing_available | (available.notna() & available.le(as_of_timestamp))
+        ].copy()
     result["_date"] = normalize_date_series(result["trade_date"])
-    result = result.sort_values(["ts_code", "_date"], kind="stable") if code is None else result
-    return result.sort_values("_date", kind="stable")
+    result = _deduplicate_session_rows(result)
+    if result.empty:
+        return result
+    sort_columns = ["_date"]
+    if "ts_code" in result.columns:
+        sort_columns.append("ts_code")
+    return result.sort_values(sort_columns, kind="mergesort").reset_index(drop=True)
 
 
 def _effective_session_dates(frame: pd.DataFrame, as_of: pd.Timestamp) -> set[str]:
-    """Trading sessions across the whole supplied market frame, at or before as_of.
+    """Visible market sessions across the supplied frame, at or before as_of.
 
-    The most recent complete market session is derived from the data itself so
-    that a weekend / public-holiday decision date does not look like a
-    "suspension" for every symbol.
+    Availability filtering is deliberately shared with ``_session_rows`` so a
+    row whose publication date is in the future cannot define today's market
+    population or make a stale symbol appear suspended.
     """
 
-    if frame.empty or "trade_date" not in frame.columns:
+    visible = _session_rows(frame, pd.Timestamp(as_of).normalize())
+    if visible.empty or "_date" not in visible.columns:
         return set()
-    dates = normalize_date_series(frame["trade_date"])
-    present = pd.to_datetime(
-        frame.loc[dates.notna() & dates.le(as_of)]["trade_date"], errors="coerce"
-    )
-    return set(present.dt.normalize().dt.strftime("%Y%m%d").dropna())
+    return set(visible["_date"].dt.strftime("%Y%m%d").dropna())
 
 
 def _field_values(frame: pd.DataFrame, field: str) -> pd.Series:
@@ -191,26 +306,41 @@ def _field_values(frame: pd.DataFrame, field: str) -> pd.Series:
 # --------------------------------------------------------------------------
 
 
+def _prior_rows(history: pd.DataFrame, current_row: pd.Series | None) -> pd.DataFrame:
+    """Return rows strictly before the current observation's session."""
+
+    if history.empty or current_row is None:
+        return history.iloc[0:0]
+    current_date = current_row.get("_date")
+    if pd.isna(current_date):
+        return history.iloc[0:0]
+    return history.loc[history["_date"] < current_date].sort_values(
+        "_date", kind="mergesort"
+    )
+
+
 def _self_percentile(
     history: pd.DataFrame,
-    current_row: pd.Series,
+    current_row: pd.Series | None,
     field: str,
     *,
     cfg: SelfWindowConfig,
 ) -> tuple[float | None, str | None, int]:
-    """Percentile of the current value against the *prior* window of the same symbol.
+    """Percentile against prior valid sessions, never the current session.
 
-    ``current`` is excluded from its own baseline by slicing strictly before the
-    current session.  Returns ``(percentile, reason, valid_count)``.
+    The strict date comparison is intentional.  Slicing off the last row is
+    insufficient when a raw frame contains duplicate observations for one
+    session; duplicates are normalized by ``_session_rows`` but this helper
+    also remains safe when called with a hand-built history.
     """
 
-    if history.empty:
+    if history.empty or current_row is None:
         return None, "insufficient_self_history", 0
-    baseline = history.iloc[:-1].tail(cfg.window)
+    baseline = _prior_rows(history, current_row).tail(cfg.window)
+    values = _field_values(baseline, field).dropna()
     current = numeric(current_row.get(field))
     if current is None:
-        return None, "missing_current_field", 0
-    values = _field_values(baseline, field).dropna()
+        return None, "missing_current_field", int(len(values))
     if len(values) < cfg.min_valid:
         return None, "insufficient_self_history", int(len(values))
     percentile = float((values <= current).mean())
@@ -239,10 +369,7 @@ def build_cross_section_population(
     """
 
     settings = config or CrossSectionConfig()
-    as_of = pd.to_datetime(as_of_date, errors="coerce")
-    if pd.isna(as_of):
-        raise ValueError(f"invalid as_of_date: {as_of_date!r}")
-    as_of = pd.Timestamp(as_of).normalize()
+    as_of = _as_of_timestamp(as_of_date)
     visible = _session_rows(frame, as_of)
     sessions = _effective_session_dates(frame, as_of)
     if not sessions:
@@ -258,7 +385,20 @@ def build_cross_section_population(
         populated = populated.loc[populated["ts_code"].astype(str).isin(allowed)].copy()
     if "ts_code" not in populated.columns:
         return pd.DataFrame()
-    return populated.sort_values("ts_code", kind="stable").reset_index(drop=True)
+    populated = populated.sort_values("ts_code", kind="mergesort").reset_index(drop=True)
+    populated.attrs.update(
+        {
+            "population_scope": settings.population_scope,
+            "tie_convention": settings.tie_convention,
+            "population_session": session,
+            "as_of_date": pd.Timestamp(as_of).strftime("%Y%m%d"),
+            "population_policy": "visible_rows_at_effective_session",
+            "st_or_stock_basic_policy": "not_consulted",
+            "missing_daily_basic_policy": "row_retained_but_field_excluded_per_metric",
+            "suspension_policy": "no_row_at_effective_session",
+        }
+    )
+    return populated
 
 
 def _cross_sectional_percentile(
@@ -299,14 +439,22 @@ def _cross_sectional_percentile(
 
 
 def _prior_baseline(
-    history: pd.DataFrame, field: str, *, cfg: AbnormalVolumeConfig
+    history: pd.DataFrame,
+    field: str,
+    *,
+    cfg: AbnormalVolumeConfig,
+    current_row: pd.Series | None = None,
 ) -> tuple[float | None, str | None, int]:
-    """Median of the prior-window values strictly before the current session."""
+    """Median of prior-window values, with the current session excluded."""
 
     if history.empty:
         return None, "insufficient_baseline", 0
-    baseline = history.iloc[:-1].tail(cfg.baseline_window)
-    values = _field_values(baseline, field).dropna()
+    if current_row is None:
+        prior = history.iloc[:-1]
+    else:
+        prior = _prior_rows(history, current_row)
+    prior = prior.tail(cfg.baseline_window)
+    values = _field_values(prior, field).dropna()
     if len(values) < cfg.min_observations:
         return None, "insufficient_baseline", int(len(values))
     median = float(values.median())
@@ -359,6 +507,7 @@ def assess_liquidity_eligibility(
     min_average_amount: float,
     listing_age_days: int | None,
     min_listing_days: int,
+    require_current_session: bool = True,
     amended_reasons: tuple[str, ...] = (),
 ) -> LiquidityEligibility:
     """Evaluate the independent liquidity floor for one symbol.
@@ -387,11 +536,16 @@ def assess_liquidity_eligibility(
         traded = bool(
             pd.notna(current_row.get("_session_matches")) and current_row["_session_matches"]
         )
+        current_amount = numeric(current_row.get("amount"))
+        if traded and current_amount is None:
+            reasons.append("unknown_current_liquidity")
+        elif traded and current_amount <= 0:
+            reasons.append("no_trading_activity")
     else:
         traded = False
     if listing_age_days is not None and listing_age_days < min_listing_days:
         reasons.append("new_listing")
-    if not traded:
+    if require_current_session and not traded:
         reasons.append("no_session_at_decision")
     return LiquidityEligibility(
         eligible=not reasons,
@@ -430,19 +584,62 @@ def compute_low_attention_v2(
     self_cfg = settings.self_window
     cross_cfg = settings.cross_section
     abnormal_cfg = settings.abnormal_volume
+    liquidity_cfg = settings.liquidity
+    attention_version = settings.version
 
     vector = new_vector(code, as_of_date)
-    vector.version = SEMANTIC_VERSION
-    as_of = pd.to_datetime(as_of_date, errors="coerce")
-    if pd.isna(as_of):
-        raise ValueError(f"invalid as_of_date: {as_of_date!r}")
-    as_of = pd.Timestamp(as_of).normalize()
+    vector.version = attention_version
+    as_of = _as_of_timestamp(as_of_date)
     as_of_text = as_of.strftime("%Y%m%d")
+    vector.metadata["namespace"] = "low_attention_v2"
+    vector.metadata["low_attention_v2"] = {
+        "namespace": "low_attention_v2",
+        "contract_version": attention_version,
+        "attention_contract_version": attention_version,
+        "low_attention_version": attention_version,
+        "config": settings.declared(),
+        "fields": list(LOW_ATTENTION_V2_FIELDS),
+        "source_datasets": ["daily", "daily_basic"],
+        "as_of_date": as_of_text,
+    }
 
     frame = market_frame if market_frame is not None else pd.DataFrame()
+    parsed_list_date: pd.Timestamp | None = None
+    if list_date is not None and pd.notna(list_date):
+        parsed = pd.to_datetime(list_date, errors="coerce")
+        if pd.notna(parsed):
+            parsed_list_date = pd.Timestamp(parsed)
+            if parsed_list_date.tzinfo is not None:
+                parsed_list_date = parsed_list_date.tz_localize(None)
+            parsed_list_date = parsed_list_date.normalize()
     history = _session_rows(frame, as_of, code=code)
+    if parsed_list_date is not None and not history.empty:
+        history = history.loc[history["_date"] >= parsed_list_date].reset_index(drop=True)
     sessions = _effective_session_dates(frame, as_of)
     effective_session = max(sessions) if sessions else None
+    listing_age_days: int | None = (
+        int((as_of - parsed_list_date).days) if parsed_list_date is not None else None
+    )
+    vector.metadata["low_attention_v2"].update(
+        {
+            "effective_session": effective_session,
+            "population_scope": cross_cfg.population_scope,
+            "tie_convention": cross_cfg.tie_convention,
+            "list_date": (
+                parsed_list_date.strftime("%Y%m%d") if parsed_list_date is not None else None
+            ),
+            "listing_age_days": listing_age_days,
+            "population_policy": {
+                "membership": "visible_market_row_at_effective_session",
+                "st_or_stock_basic": "not_consulted; retained_if_row_exists",
+                "suspension": "no_row_at_effective_session_is_excluded",
+                "missing_daily_basic": "retained_for_other_fields; excluded_per_missing_metric",
+                "zero_activity_row": "retained_in_population; liquidity_gate_handles_eligibility",
+                "listing_day": "not_inferred_from_population",
+                "bse": "not_consulted; universe_policy_is_external_to_attention",
+            },
+        }
+    )
 
     # session status -----------------------------------------------------
     session_status = "no_data"
@@ -465,15 +662,12 @@ def compute_low_attention_v2(
     if current_row_df is not None:
         current_row_df["_session_matches"] = session_status == "traded"
 
-    listing_age_days: int | None = None
-    if list_date is not None and pd.notna(list_date):
-        parsed_list = pd.to_datetime(list_date, errors="coerce")
-        if pd.notna(parsed_list):
-            listing_age_days = int((as_of - pd.Timestamp(parsed_list).normalize()).days)
-
     # session status is informational but *known*: it records whether the
     # symbol actually traded on the effective decision session and how stale
     # its latest observation is.  It is never treated as a missing numeric.
+    latest_observation = (
+        history["_date"].iloc[-1].strftime("%Y%m%d") if not history.empty else None
+    )
     vector.add(
         "session_status",
         session_status,
@@ -483,36 +677,72 @@ def compute_low_attention_v2(
         periods=(),
         availability_dates=(),
         reason=None,
-        metadata={"staleness_days": staleness_days, "effective_session": effective_session},
+        metadata={
+            "attention_contract_version": attention_version,
+            "as_of_date": as_of_text,
+            "observation_date": latest_observation,
+            "effective_session": effective_session,
+            "staleness_days": staleness_days,
+            "session_presence_policy": "latest_visible_row_at_effective_session",
+        },
     )
 
     # liquidity eligibility (independent of attention aggregation) --------
     liquidity = assess_liquidity_eligibility(
         history,
         current_row_df,
-        # explicit research floor; the production floor is configured separately
-        min_average_amount=1.0,
+        average_lookback=liquidity_cfg.average_lookback,
+        min_average_amount=liquidity_cfg.min_average_amount,
         listing_age_days=listing_age_days,
         min_listing_days=self_cfg.min_listing_days,
+        require_current_session=liquidity_cfg.require_current_session,
     )
+    liquidity_metadata = {
+        "name": "liquidity_eligible",
+        "reference_type": "LIQUIDITY_GATE",
+        "reference_window": liquidity_cfg.average_lookback,
+        "reference_population": "same_symbol_trailing_sessions",
+        "history_count": int(len(history)),
+        "population_count": None,
+        "raw_value": liquidity.average_amount,
+        "value": liquidity.eligible,
+        "status": "known",
+        "reason": "|".join(liquidity.reasons) or None,
+        "valid_observation_count": int(
+            _field_values(history, "amount").notna().sum()
+        ) if "amount" in history.columns else 0,
+        "required_history": liquidity_cfg.average_lookback,
+        "observation_date": latest_observation,
+        "as_of_date": as_of_text,
+        "source_dataset": "daily_basic",
+        "source_fields": ["amount"],
+        "attention_contract_version": attention_version,
+        "semantic_version": attention_version,
+        "warnings": "|".join(liquidity.reasons) or None,
+        "average_amount": liquidity.average_amount,
+        "min_average_amount": liquidity.min_average_amount,
+        "reasons": list(liquidity.reasons),
+        "listing_age_days": liquidity.listing_age_days,
+        "traded_current_session": liquidity.traded_current_session,
+        "version": liquidity.version,
+    }
     vector.add(
         "liquidity_eligible",
         liquidity.eligible,
         status="known",
         source_datasets=("daily_basic",),
         source_fields=("amount",),
-        reason=None,
-        metadata={
-            "average_amount": liquidity.average_amount,
-            "min_average_amount": liquidity.min_average_amount,
-            "reasons": list(liquidity.reasons),
-            "listing_age_days": liquidity.listing_age_days,
-            "traded_current_session": liquidity.traded_current_session,
-            "version": liquidity.version,
-        },
+        reason="|".join(liquidity.reasons) or None,
+        metadata=liquidity_metadata,
     )
-    vector.values["liquidity_average_amount"] = (
-        liquidity.average_amount if liquidity.average_amount is not None else None
+    vector.add(
+        "liquidity_average_amount",
+        liquidity.average_amount,
+        status="known" if liquidity.average_amount is not None else "unknown",
+        source_datasets=("daily_basic",),
+        source_fields=("amount",),
+        reason="unknown_liquidity" if liquidity.average_amount is None else None,
+        metadata=liquidity_metadata,
     )
 
     # self-history proxies -------------------------------------------------
@@ -526,42 +756,62 @@ def compute_low_attention_v2(
     self_volume, self_volume_reason, self_volume_valid = _self_percentile(
         history, current_row_df, "vol", cfg=self_cfg
     )
+    # Session policy is stronger than a stale self rank: a suspended/stale
+    # observation is never an attention observation at today's decision point.
+    if session_status != "traded":
+        session_reason = {
+            "stale": "stale_data",
+            "suspended_session": "suspended_session",
+        }.get(session_status, "missing_history")
+        self_turnover = self_amount = self_volume = None
+        self_turnover_reason = self_amount_reason = self_volume_reason = session_reason
+        self_turnover_valid = self_amount_valid = self_volume_valid = 0
     # A fresh listing is a first-class `unknown` state, not a percentile of
     # its own (possibly long but irrelevant) warm-up history.
-    if is_new_listing:
+    elif is_new_listing:
         self_turnover = self_amount = self_volume = None
         self_turnover_reason = self_amount_reason = self_volume_reason = "new_listing"
         self_turnover_valid = self_amount_valid = self_volume_valid = 0
 
+    prior_history_count = int(len(_prior_rows(history, current_row_df)))
+    self_fields = {
+        "self_turnover_percentile": ("turnover_rate", ("daily_basic",)),
+        "self_amount_percentile": ("amount", ("daily_basic",)),
+        "self_volume_percentile": ("vol", ("daily",)),
+    }
     for name, value, reason, valid in (
         ("self_turnover_percentile", self_turnover, self_turnover_reason, self_turnover_valid),
         ("self_amount_percentile", self_amount, self_amount_reason, self_amount_valid),
         ("self_volume_percentile", self_volume, self_volume_reason, self_volume_valid),
     ):
-        raw_field = {
-            "self_turnover_percentile": "turnover_rate",
-            "self_amount_percentile": "amount",
-            "self_volume_percentile": "vol",
-        }[name]
+        raw_field, datasets = self_fields[name]
         raw_current = numeric(current_row_df.get(raw_field)) if current_row_df is not None else None
         add_known(
             vector,
             name,
             value,
-            datasets=("daily_basic", "daily"),
-            fields=("turnover_rate", "amount", "vol"),
+            datasets=datasets,
+            fields=(raw_field,),
             history=history,
             reason=reason,
             metadata=_proxy_metadata(
+                name=name,
                 kind="self",
+                reference_type="SELF_HISTORY",
+                reference_population="same_symbol_prior_sessions",
                 as_of=as_of_text,
-                observation=effective_session,
+                observation=latest_observation,
+                value=value,
                 percentile=value,
                 valid_count=valid,
+                history_count=prior_history_count,
+                observed_count=int(len(history)),
+                required_history=self_cfg.min_valid,
                 population_count=None,
                 window=self_cfg.window,
-                source="daily|daily_basic",
-                semantic=SEMANTIC_VERSION,
+                source="|".join(datasets),
+                source_fields=(raw_field,),
+                semantic=attention_version,
                 reason=reason,
                 extra={"raw_current_value": raw_current},
             ),
@@ -573,10 +823,10 @@ def compute_low_attention_v2(
         numeric(current_row_df.get("turnover_rate")) if current_row_df is not None else None
     )
     vol_baseline, vol_baseline_reason, vol_baseline_valid = _prior_baseline(
-        history, "vol", cfg=abnormal_cfg
+        history, "vol", cfg=abnormal_cfg, current_row=current_row_df
     )
     turnover_baseline, turnover_reason, turnover_valid = _prior_baseline(
-        history, "turnover_rate", cfg=abnormal_cfg
+        history, "turnover_rate", cfg=abnormal_cfg, current_row=current_row_df
     )
     abnormal, abnormal_reason = _ratio_versus_baseline(
         current_volume, vol_baseline, vol_baseline_reason
@@ -584,24 +834,25 @@ def compute_low_attention_v2(
     baseline_change, baseline_change_reason = _ratio_versus_baseline(
         current_turnover, turnover_baseline, turnover_reason
     )
+    raw_abnormal_ratio = abnormal
     abnormal_capped = False
     if session_status != "traded":
-        if abnormal is not None:
-            abnormal = None
-        if abnormal_reason is None:
-            abnormal_reason = (
-                "stale_data" if session_status == "stale" else "suspended_session"
-            )
-        if baseline_change is not None:
-            baseline_change = None
-        if baseline_change_reason is None:
-            baseline_change_reason = (
-                "stale_data" if session_status == "stale" else "suspended_session"
-            )
+        session_reason = {
+            "stale": "stale_data",
+            "suspended_session": "suspended_session",
+        }.get(session_status, "missing_history")
+        abnormal = None
+        abnormal_reason = session_reason
+        baseline_change = None
+        baseline_change_reason = session_reason
+        raw_abnormal_ratio = None
     if abnormal is not None and abnormal > abnormal_cfg.max_abnormal_cap:
         abnormal = float(abnormal_cfg.max_abnormal_cap)
         abnormal_capped = True
         vector.risk_flags.append("abnormal_volume_capped")
+    vector.metadata["low_attention_v2"]["research_only_risk_flags"] = [
+        flag for flag in vector.risk_flags if flag == "abnormal_volume_capped"
+    ]
     add_known(
         vector,
         "abnormal_volume",
@@ -611,19 +862,29 @@ def compute_low_attention_v2(
         history=history,
         reason=abnormal_reason,
         metadata=_proxy_metadata(
+            name="abnormal_volume",
             kind="prior_baseline",
+            reference_type="PRIOR_BASELINE",
+            reference_population="same_symbol_prior_sessions",
             as_of=as_of_text,
-            observation=effective_session,
+            observation=latest_observation,
+            value=abnormal,
             percentile=None,
             valid_count=vol_baseline_valid,
+            history_count=prior_history_count,
+            observed_count=int(len(history)),
+            required_history=abnormal_cfg.min_observations,
             population_count=None,
             window=abnormal_cfg.baseline_window,
             source="daily",
-            semantic=SEMANTIC_VERSION,
+            source_fields=("vol",),
+            semantic=attention_version,
             reason=abnormal_reason,
             extra={
+                "raw_current_value": current_volume,
                 "baseline_median_volume": vol_baseline,
                 "current_volume": current_volume,
+                "raw_ratio": raw_abnormal_ratio,
                 "capped": abnormal_capped,
                 "max_abnormal_cap": abnormal_cfg.max_abnormal_cap,
             },
@@ -638,17 +899,26 @@ def compute_low_attention_v2(
         history=history,
         reason=baseline_change_reason,
         metadata=_proxy_metadata(
+            name="attention_baseline_change",
             kind="prior_baseline",
+            reference_type="PRIOR_BASELINE",
+            reference_population="same_symbol_prior_sessions",
             as_of=as_of_text,
-            observation=effective_session,
+            observation=latest_observation,
+            value=baseline_change,
             percentile=None,
             valid_count=turnover_valid,
+            history_count=prior_history_count,
+            observed_count=int(len(history)),
+            required_history=abnormal_cfg.min_observations,
             population_count=None,
             window=abnormal_cfg.baseline_window,
             source="daily_basic",
-            semantic=SEMANTIC_VERSION,
+            source_fields=("turnover_rate",),
+            semantic=attention_version,
             reason=baseline_change_reason,
             extra={
+                "raw_current_value": current_turnover,
                 "baseline_median_turnover": turnover_baseline,
                 "current_turnover": current_turnover,
             },
@@ -672,6 +942,11 @@ def compute_low_attention_v2(
         population, code, "vol", cfg=cross_cfg
     )
 
+    cross_fields = {
+        "cross_section_turnover_percentile": ("turnover_rate", ("daily_basic",)),
+        "cross_section_amount_percentile": ("amount", ("daily_basic",)),
+        "cross_section_volume_percentile": ("vol", ("daily",)),
+    }
     for name, value, reason, pop_count in (
         (
             "cross_section_turnover_percentile",
@@ -692,38 +967,111 @@ def compute_low_attention_v2(
             cross_volume_pop,
         ),
     ):
-        raw_field = {
-            "cross_section_turnover_percentile": "turnover_rate",
-            "cross_section_amount_percentile": "amount",
-            "cross_section_volume_percentile": "vol",
-        }[name]
+        raw_field, datasets = cross_fields[name]
         raw_current = numeric(current_row_df.get(raw_field)) if current_row_df is not None else None
+        population_name = (
+            "tradable_market_at_effective_session"
+            if cross_cfg.population_scope == "tradable_market"
+            else "investable_universe_at_effective_session"
+        )
         add_known(
             vector,
             name,
             value,
-            datasets=("daily_basic", "daily"),
-            fields=("turnover_rate", "amount", "vol"),
+            datasets=datasets,
+            fields=(raw_field,),
             history=population,
             reason=reason,
             metadata=_proxy_metadata(
+                name=name,
                 kind="cross_sectional",
+                reference_type="CROSS_SECTION",
+                reference_population=population_name,
                 as_of=as_of_text,
                 observation=effective_session,
+                value=value,
                 percentile=value,
                 valid_count=None,
+                history_count=0,
+                observed_count=int(len(population)),
+                required_history=cross_cfg.min_population,
                 population_count=pop_count,
                 window=None,
-                source="daily|daily_basic",
-                semantic=SEMANTIC_VERSION,
+                source="|".join(datasets),
+                source_fields=(raw_field,),
+                semantic=attention_version,
                 reason=reason,
                 extra={
                     "population_scope": cross_cfg.population_scope,
                     "tie_convention": cross_cfg.tie_convention,
+                    "population_session": effective_session,
+                    "population_row_count": int(len(population)),
+                    "valid_population_count": pop_count,
+                    "population_policy": "visible_market_row_at_effective_session",
+                    "st_or_stock_basic_policy": "not_consulted",
+                    "bse_policy": "not_consulted",
                     "raw_current_value": raw_current,
+                    "missing_field_policy": "excluded_from_metric_population",
+                    "suspension_policy": "no_row_at_effective_session",
                 },
             ),
         )
+
+    # A volume/turnover surge is positive attention (or crowding) evidence,
+    # not a low-attention observation.  It is kept outside the four-percentile
+    # research aggregate so the aggregate remains transparent and comparable.
+    surge_ratios = tuple(
+        value for value in (raw_abnormal_ratio, baseline_change) if value is not None
+    )
+    attention_surge = (
+        any(value >= settings.attention_surge_ratio for value in surge_ratios)
+        if surge_ratios
+        else None
+    )
+    attention_surge_reason = (
+        {
+            "stale": "stale_data",
+            "suspended_session": "suspended_session",
+        }.get(session_status, "missing_history")
+        if session_status != "traded"
+        else "missing_attention_baseline"
+        if attention_surge is None
+        else None
+    )
+    vector.add(
+        "attention_surge",
+        attention_surge,
+        status="known" if attention_surge is not None else "unknown",
+        source_datasets=("daily", "daily_basic"),
+        source_fields=("vol", "turnover_rate"),
+        periods=(),
+        availability_dates=(),
+        reason=attention_surge_reason,
+        metadata={
+            "name": "attention_surge",
+            "reference_type": "PRIOR_BASELINE",
+            "reference_window": abnormal_cfg.baseline_window,
+            "reference_population": "same_symbol_prior_sessions",
+            "raw_value": raw_abnormal_ratio,
+            "value": attention_surge,
+            "status": "known" if attention_surge is not None else "unknown",
+            "reason": attention_surge_reason,
+            "valid_observation_count": max(vol_baseline_valid, turnover_valid),
+            "required_history": abnormal_cfg.min_observations,
+            "history_count": prior_history_count,
+            "population_count": None,
+            "observation_date": latest_observation,
+            "as_of_date": as_of_text,
+            "source_dataset": "daily|daily_basic",
+            "source_fields": ["vol", "turnover_rate"],
+            "attention_contract_version": attention_version,
+            "semantic_version": attention_version,
+            "warnings": attention_surge_reason,
+            "attention_surge_ratio": settings.attention_surge_ratio,
+            "abnormal_volume_ratio": raw_abnormal_ratio,
+            "attention_baseline_change": baseline_change,
+        },
+    )
 
     # research aggregate (ordered output only, never substituted into score) --
     v2_core = {
@@ -738,6 +1086,24 @@ def compute_low_attention_v2(
         )
     else:
         v2_score = None
+    gated_opportunity = (
+        v2_score is not None
+        and liquidity.eligible
+        and session_status == "traded"
+        and attention_surge is not True
+    )
+    vector.metadata["low_attention_v2"].update(
+        {
+            "core_components": list(v2_core),
+            "aggregate_is_raw_and_ungated": True,
+            "opportunity_requires": [
+                "liquidity_eligible",
+                "session_status=traded",
+                "attention_surge is not True",
+            ],
+            "gated_opportunity": bool(gated_opportunity) if v2_score is not None else None,
+        }
+    )
     add_known(
         vector,
         "low_attention_v2_score",
@@ -747,12 +1113,45 @@ def compute_low_attention_v2(
         history=history,
         reason="insufficient_attention_evidence" if v2_score is None else None,
         metadata={
-            "version": SEMANTIC_VERSION,
+            "name": "low_attention_v2_score",
+            "version": attention_version,
+            "attention_contract_version": attention_version,
             "as_of": as_of_text,
+            "as_of_date": as_of_text,
             "observation_session": effective_session,
+            "observation_date": latest_observation,
             "components": list(v2_core),
+            "status": "known" if v2_score is not None else "unknown",
+            "reason": "insufficient_attention_evidence" if v2_score is None else None,
+            "reference_type": "AGGREGATE",
+            "reference_window": self_cfg.window,
+            "reference_population": "self_and_cross_section_components",
+            "history_count": prior_history_count,
+            "population_count": cross_turnover_pop,
+            "raw_value": v2_score,
+            "source_dataset": "daily|daily_basic",
+            "source_fields": ["turnover_rate", "amount"],
+            "semantic_version": attention_version,
             "research_only": True,
             "must_be_gated_by_liquidity_eligibility": True,
+            "gated_opportunity": bool(gated_opportunity) if v2_score is not None else None,
+            "warnings": "insufficient_attention_evidence" if v2_score is None else None,
+        },
+    )
+    vector.add(
+        "low_attention_v2_opportunity",
+        gated_opportunity if v2_score is not None else None,
+        status="known" if v2_score is not None else "unknown",
+        source_datasets=("daily", "daily_basic"),
+        source_fields=("turnover_rate", "amount", "vol"),
+        reason="insufficient_attention_evidence" if v2_score is None else None,
+        metadata={
+            "attention_contract_version": attention_version,
+            "raw_score": v2_score,
+            "liquidity_eligible": liquidity.eligible,
+            "session_status": session_status,
+            "attention_surge": attention_surge,
+            "research_only": True,
         },
     )
     return vector
@@ -760,32 +1159,73 @@ def compute_low_attention_v2(
 
 def _proxy_metadata(
     *,
+    name: str,
     kind: str,
+    reference_type: str,
+    reference_population: str,
     as_of: str,
     observation: str | None,
+    value: float | None,
     percentile: float | None,
     valid_count: int | None,
+    history_count: int | None,
+    observed_count: int | None,
+    required_history: int | None,
     population_count: int | None,
     window: int | None,
     source: str,
+    source_fields: tuple[str, ...],
     semantic: str,
     reason: str | None,
     extra: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    """Return both the stable evidence vocabulary and compatibility aliases."""
+
+    extras = dict(extra or {})
+    raw_value = extras.get("raw_value", extras.get("raw_current_value"))
+    reason_alias = {
+        "insufficient_self_history": "insufficient_history",
+        "insufficient_baseline": "insufficient_history",
+        "no_market_history": "missing_history",
+        "missing_history": "missing_history",
+    }.get(reason, reason)
+    if observed_count == 0 and reason in {"insufficient_self_history", "insufficient_baseline"}:
+        reason_alias = "missing_history"
     meta: dict[str, Any] = {
+        "name": name,
         "kind": kind,
+        "reference_type": reference_type,
+        "reference_population": reference_population,
         "as_of_date": as_of,
         "observation_date": observation,
+        "raw_value": raw_value,
+        "raw_current_value": extras.get("raw_current_value", raw_value),
+        "value": value,
         "percentile": percentile,
+        "status": "known" if value is not None else "unknown",
+        "reason": reason,
+        "reason_code": reason,
+        "reason_codes": [code for code in (reason, reason_alias) if code is not None],
         "valid_observation_count": valid_count,
+        "history_count": history_count,
+        "observed_session_count": observed_count if observed_count is not None else history_count,
+        "observed_count": observed_count if observed_count is not None else history_count,
+        "required_history": required_history,
+        "required_reference_window": window,
+        "minimum_valid_history": required_history,
+        "reason_alias": reason_alias,
         "population_count": population_count,
+        "reference_window": window,
         "window": window,
+        "source_dataset": source,
+        "source_datasets": source.split("|") if source else [],
+        "source_fields": list(source_fields),
         "source": source,
+        "attention_contract_version": semantic,
         "semantic_version": semantic,
         "warnings": reason,
     }
-    if extra:
-        meta.update(extra)
+    meta.update(extras)
     return meta
 
 
@@ -856,6 +1296,8 @@ def classify_low_attention_case(
     )
     if not eligible:
         return SAMPLE_CLASS_B, reasons
+    if values.get("attention_surge") is True:
+        return SAMPLE_CLASS_NA, ("higher_attention_observed",)
     low_attention = (
         cross_turnover <= settings.low_attention_cross_percentile
         and cross_amount <= settings.low_attention_cross_percentile
@@ -893,18 +1335,26 @@ def low_attention_sample_report(
                 "liquidity_average_amount": vector.values.get("liquidity_average_amount"),
                 "self_turnover_percentile": vector.values.get("self_turnover_percentile"),
                 "self_amount_percentile": vector.values.get("self_amount_percentile"),
+                "self_volume_percentile": vector.values.get("self_volume_percentile"),
                 "cross_section_turnover_percentile": vector.values.get(
                     "cross_section_turnover_percentile"
                 ),
                 "cross_section_amount_percentile": vector.values.get(
                     "cross_section_amount_percentile"
                 ),
+                "cross_section_volume_percentile": vector.values.get(
+                    "cross_section_volume_percentile"
+                ),
                 "cross_population_count": (
                     cross_ev.metadata.get("population_count") if cross_ev else None
                 ),
                 "abnormal_volume": vector.values.get("abnormal_volume"),
                 "attention_baseline_change": vector.values.get("attention_baseline_change"),
+                "attention_surge": vector.values.get("attention_surge"),
                 "low_attention_v2_score": vector.values.get("low_attention_v2_score"),
+                "low_attention_v2_opportunity": vector.values.get(
+                    "low_attention_v2_opportunity"
+                ),
             }
         )
     frame = pd.DataFrame(rows)
@@ -912,7 +1362,14 @@ def low_attention_sample_report(
         return frame
     order = [SAMPLE_CLASS_A, SAMPLE_CLASS_NA, SAMPLE_CLASS_C, SAMPLE_CLASS_B]
     frame["_order"] = frame["class"].map(lambda value: order.index(value) if value in order else 99)
-    frame = frame.sort_values(["_order", "ts_code"], kind="stable").drop(columns="_order")
+    frame = frame.sort_values(["_order", "ts_code"], kind="mergesort").drop(columns="_order")
+    frame.attrs["attention_contract_version"] = (
+        vectors[0].metadata.get("low_attention_v2", {}).get(
+            "attention_contract_version", SEMANTIC_VERSION
+        )
+        if vectors
+        else SEMANTIC_VERSION
+    )
     return frame.reset_index(drop=True)
 
 
