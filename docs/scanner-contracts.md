@@ -33,7 +33,7 @@ replay / daily snapshot / evaluation / report
 | #11 | Trend, persistence, acceleration | `features.trend.compute_trend_features` |
 | #12 | Quality gate and false-turnaround flags | `features.quality.compute_quality_features` |
 | #13 | Low-attention proxies | `features.market.compute_attention_features` |
-| #14 | Low-expectation/crowding proxies | `features.market.compute_crowding_features` (v2 benchmark-relative, see `docs/expectation-crowding-v2.md`) |
+| #14 | Low-expectation/crowding proxies | `features.market.compute_crowding_features` (`expectation-crowding-v2`, see `docs/expectation-crowding-v2.md`) |
 | #15 | Weighted transparent score | `scanner.score.score_feature_vector` |
 | #16 | Historical PIT replay | `scanner.replay.run_replay` |
 | #17 | Forward evaluation | `scanner.evaluation.evaluate_scans` |
@@ -53,11 +53,16 @@ has the proposed adversarial PIT test/documentation in [PR #24](https://github.c
 Each candidate is represented by `scanner.contracts.FeatureVector`:
 
 - `ts_code` and normalized `as_of_date` identify the decision;
-- `version` is currently `features-v1`;
+- `version` is the feature schema version (`features-v1` for a merged scanner vector);
+- `feature_contract_versions` records group contracts, including
+  `expectation_crowding: expectation-crowding-v2`;
+- `benchmark_metadata` records the primary `000300.SH` declaration and its
+  `index_basic + index_daily` source;
 - `comparable_period_contract_version` is `comparable-period-v1`;
 - `values` contains numeric features or explicit `None`;
 - `evidence` maps every value to datasets, source fields, report periods, raw
-  values, period semantics, source versions, and actual availability dates;
+  values, period semantics, source versions, actual availability dates, and—
+  for crowding—formula, components, config, and semantic version;
 - `risk_flags` are soft penalties while `rejected_reasons` are hard gates;
 - `unknown_features` is populated for `unknown`, `insufficient_data`, and
   `unsupported` values.
@@ -108,7 +113,9 @@ full contract and denominator policy.
 
 Known components are renormalized when a component is unavailable. Risk flags
 subtract bounded penalties, while hard quality gates remain visible in the
-ranked output and cannot be mistaken for a clean candidate.
+ranked output and cannot be mistaken for a clean candidate. Score weights remain
+unchanged in this branch; `ScoreResult` and ranked rows carry the crowding
+contract and benchmark metadata for auditability.
 
 ## Runtime commands and artifacts
 
@@ -124,7 +131,8 @@ ranked output and cannot be mistaken for a clean candidate.
   `write_incremental` merges by the dataset's declared primary keys and keeps
   the latest row for an exact identity.
 - `replay --as-of YYYYMMDD` writes a ranked Parquet artifact and JSON metadata
-  under `data/derived/replays/`.
+  under `data/derived/replays/`; it loads `index_daily` separately from stock
+  `daily` and records the `expectation-crowding-v2`/benchmark declarations.
 - `replay-variants --as-of YYYYMMDD` writes the four versioned score variants
   from one verified PIT snapshot.
 - `scan` writes a daily snapshot under `data/derived/scans/`; `scan-compare`

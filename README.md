@@ -73,8 +73,9 @@ Score v2 decision`.
 - `src/ashare_turnaround/query/` — in-process DuckDB access.
 - `src/ashare_turnaround/pit/` — financial normalization and as-of selection.
 - `src/ashare_turnaround/features/` — independent fundamental, trend, quality,
-  attention, and crowding feature groups. Crowding v2 is benchmark-relative
-  (CSI 300 / `000300.SH` in the `daily` dataset); see
+  attention, and crowding feature groups. Expectation/crowding v2 is
+  benchmark-relative (CSI 300 / `000300.SH` from `index_basic` + `index_daily`);
+  see
   `docs/expectation-crowding-v2.md` for the frozen contract.
 - `src/ashare_turnaround/scanner/` — universe, score, replay, daily snapshot,
   evaluation, ablation, and explainable report workflows.
