@@ -84,7 +84,8 @@ def test_required_ablation_configs_are_cumulative_and_versioned() -> None:
     assert variants["quality_added"].enabled_groups[-1] == "quality"
     assert variants["attention_added"].enabled_groups[-1] == "attention"
     assert variants["expectation_added"].enabled_groups[-1] == "expectation"
-    assert variants["attention_added"].version == "score-v1/attention_added"
+    assert variants["attention_added"].version == "score-v2/attention_added"
+    assert variants["attention_added"].trend_contract_version == "turnaround-trend-v2"
     with pytest.raises(ValueError, match="unknown feature groups"):
         ScoreConfig(enabled_groups=("fundamental", "sentiment"))
 
