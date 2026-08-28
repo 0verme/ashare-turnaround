@@ -83,13 +83,32 @@ def candidate_report(result: ReplayResult, ts_code: str) -> dict[str, Any]:
     crowding_names = set(evidence).intersection(_CROWDING_FEATURE_NAMES)
     return {
         "metadata": result.metadata(),
+        "comparable_period_contract_version": result.comparable_period_contract_version,
+        "trend_contract_version": result.trend_contract_version,
         "expectation_crowding_contract_version": result.expectation_crowding_contract_version,
         "benchmark": dict(result.benchmark_metadata),
+        "report_metadata": {
+            "attention_contract_version": result.attention_contract_version,
+            "low_attention_version": result.attention_contract_version,
+            "attention_feature_fields": list(result.attention_feature_fields),
+            "trend_contract_version": result.trend_contract_version,
+            "expectation_crowding_contract_version": (
+                result.expectation_crowding_contract_version
+            ),
+            "benchmark_id": result.benchmark_metadata.get("benchmark_id"),
+            "benchmark_contract_version": result.benchmark_metadata.get(
+                "benchmark_contract_version", result.benchmark_metadata.get("version")
+            ),
+            "research_only": True,
+        },
         "ts_code": ts_code,
         "selected": not score.rejected and score.turnaround_score is not None,
         "score": score.as_dict(),
+        "score_input_metadata": dict(score.input_metadata),
         "features": dict(vector.values),
+        "feature_metadata": dict(vector.metadata),
         "evidence": evidence,
+        "attention_v2_evidence": dict(vector.metadata.get("low_attention_v2_evidence", {})),
         "fundamental_evidence": {
             key: evidence[key] for key in sorted(fundamental_names)
         },
@@ -107,6 +126,7 @@ def candidate_report(result: ReplayResult, ts_code: str) -> dict[str, Any]:
 def candidate_report_markdown(report: dict[str, Any]) -> str:
     score = report["score"]
     contract_version = report["metadata"].get("comparable_period_contract_version", "unknown")
+    trend_contract_version = report["metadata"].get("trend_contract_version", "unknown")
     crowding_version = report["metadata"].get(
         "expectation_crowding_contract_version", "unknown"
     )
@@ -118,7 +138,9 @@ def candidate_report_markdown(report: dict[str, Any]) -> str:
         f"- Selected: `{report['selected']}`",
         f"- Turnaround score: `{score['turnaround_score']}`",
         f"- Score version: `{score['score_version']}`",
+        f"- Low-attention contract: `{report['report_metadata']['attention_contract_version']}`",
         f"- Comparable-period contract: `{contract_version}`",
+        f"- Trend contract: `{trend_contract_version}`",
         f"- Expectation/crowding contract: `{crowding_version}`",
         f"- Primary benchmark: `{benchmark_id}`",
         f"- Risk flags: `{', '.join(report['risk_flags']) or 'none'}`",

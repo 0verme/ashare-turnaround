@@ -916,7 +916,11 @@ def test_fundamental_and_crowding_outputs_are_independent() -> None:
     trend = compute_trend_features(frames, STOCK, AS_OF)
     compute_quality_features(frames, STOCK, AS_OF)  # quality stays independent too
     assert fundamental.values["revenue_yoy"] is not None
-    assert trend.evidence["consecutive_improvement"].reason == "trend_redesign_out_of_scope"
+    assert trend.values["consecutive_improvement"] == 3
+    assert trend.evidence["consecutive_improvement"].status == "valid"
+    assert trend.evidence["consecutive_improvement"].trend_contract_version == (
+        "turnaround-trend-v2"
+    )
 
     crowded_market = make_market(
         DATES, ramp_tail(10.0, 20, 15.0), bench_close=100.0, vol=1000.0, turnover=1.0

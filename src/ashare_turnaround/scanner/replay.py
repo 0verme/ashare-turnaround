@@ -14,17 +14,21 @@ import pandas as pd
 
 from ..features import (
     EXPECTATION_CROWDING_CONTRACT_VERSION,
+    LOW_ATTENTION_V2_FIELDS,
+    LOW_ATTENTION_V2_VERSION,
     CrowdingConfig,
+    LowAttentionConfig,
     compute_attention_features,
     compute_crowding_features,
     compute_fundamental_features,
+    compute_low_attention_v2,
     compute_quality_features,
     compute_trend_features,
 )
 from ..pit.comparable import COMPARABLE_PERIOD_CONTRACT_VERSION
 from ..storage.inventory import build_coverage_report
 from ..storage.parquet import RawParquetStore
-from .contracts import FeatureVector
+from .contracts import TURNAROUND_TREND_CONTRACT_VERSION, FeatureVector
 from .score import (
     ScoreConfig,
     ScoreResult,
@@ -41,6 +45,7 @@ class ReplayConfig:
     universe: UniverseConfig = field(default_factory=UniverseConfig)
     score: ScoreConfig = field(default_factory=ScoreConfig)
     crowding: CrowdingConfig = field(default_factory=CrowdingConfig)
+    low_attention: LowAttentionConfig = field(default_factory=LowAttentionConfig)
 
     def __post_init__(self) -> None:
         if self.top_n <= 0:
@@ -50,11 +55,15 @@ class ReplayConfig:
         return {
             "top_n": self.top_n,
             "comparable_period_contract_version": COMPARABLE_PERIOD_CONTRACT_VERSION,
+            "trend_contract_version": TURNAROUND_TREND_CONTRACT_VERSION,
+            "attention_contract_version": self.low_attention.version,
+            "low_attention_version": self.low_attention.version,
             "expectation_crowding_contract_version": self.crowding.version,
             "benchmark": self.crowding.benchmark.declared(),
             "expectation_crowding": self.crowding.declared(),
             "universe": asdict(self.universe),
             "score": self.score.declared(),
+            "low_attention": self.low_attention.declared(),
         }
 
     @property
@@ -80,6 +89,9 @@ class ReplayResult:
     scores: tuple[ScoreResult, ...]
     warnings: tuple[str, ...] = ()
     comparable_period_contract_version: str = COMPARABLE_PERIOD_CONTRACT_VERSION
+    trend_contract_version: str = TURNAROUND_TREND_CONTRACT_VERSION
+    attention_contract_version: str = LOW_ATTENTION_V2_VERSION
+    attention_feature_fields: tuple[str, ...] = LOW_ATTENTION_V2_FIELDS
     expectation_crowding_contract_version: str = EXPECTATION_CROWDING_CONTRACT_VERSION
     benchmark_metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -97,7 +109,14 @@ class ReplayResult:
             "status": self.status,
             "warnings": list(self.warnings),
             "comparable_period_contract_version": self.comparable_period_contract_version,
+            "trend_contract_version": self.trend_contract_version,
+            "attention_contract_version": self.attention_contract_version,
+            "low_attention_version": self.attention_contract_version,
+            "attention_feature_fields": list(self.attention_feature_fields),
+            "attention_v2_research_only": True,
+            "production_score_attention_input": "attention_score",
             "expectation_crowding_contract_version": self.expectation_crowding_contract_version,
+            "crowding_contract_version": self.expectation_crowding_contract_version,
             "benchmark": dict(self.benchmark_metadata),
             "benchmark_config": dict(self.benchmark_metadata),
             "benchmark_id": self.benchmark_metadata.get("benchmark_id"),
@@ -106,6 +125,15 @@ class ReplayResult:
                 "benchmark_contract_version", self.benchmark_metadata.get("version")
             ),
             "benchmark_source_dataset": self.benchmark_metadata.get("source_dataset"),
+            "feature_contracts": {
+                "comparable_period": self.comparable_period_contract_version,
+                "trend": self.trend_contract_version,
+                "low_attention": self.attention_contract_version,
+                "expectation_crowding": self.expectation_crowding_contract_version,
+                "benchmark": self.benchmark_metadata.get(
+                    "benchmark_contract_version", self.benchmark_metadata.get("version")
+                ),
+            },
         }
 
     def artifact_dict(self) -> dict[str, Any]:
@@ -202,6 +230,58 @@ def _frames_from_store(data_dir: str | Path) -> dict[str, pd.DataFrame]:
     return {dataset: store.read(dataset) for dataset in datasets}
 
 
+def _attach_low_attention_evidence(
+    vector: FeatureVector, attention: FeatureVector
+) -> None:
+    """Attach v2 evidence without overwriting the v1 ``abnormal_volume`` key.
+
+    Replay vectors also carry the production v1 market group.  The two APIs
+    historically used the same name for abnormal volume, so a blind merge
+    would silently replace v1 evidence.  Non-colliding v2 fields are exposed
+    directly; a colliding field is explicitly namespaced and the complete v2
+    evidence is retained in vector metadata.
+    """
+
+    attached_evidence: dict[str, dict[str, Any]] = {}
+    namespace = str(attention.metadata.get("namespace") or "low_attention_v2").strip()
+    for name, evidence in attention.evidence.items():
+        target = name
+        if target in vector.values:
+            target = f"{namespace}_{name}"
+            suffix = 2
+            while target in vector.values:
+                target = f"{namespace}_{name}_{suffix}"
+                suffix += 1
+        vector.values[target] = attention.values.get(name)
+        vector.evidence[target] = (
+            evidence if target == name else replace(evidence, feature=target)
+        )
+        attached_evidence[target] = vector.evidence[target].as_dict()
+        if evidence.status in {
+            "unknown",
+            "insufficient_data",
+            "insufficient_history",
+            "discontinuous",
+            "unsupported",
+        } and target not in vector.unknown_features:
+            vector.unknown_features.append(target)
+
+    declared = dict(attention.metadata.get("low_attention_v2", {}))
+    existing_declared = vector.metadata.setdefault("low_attention_v2", {})
+    if isinstance(existing_declared, dict):
+        for key, value in declared.items():
+            if key not in existing_declared:
+                existing_declared[key] = value
+            elif isinstance(existing_declared[key], dict) and isinstance(value, dict):
+                existing_declared[key].update(
+                    {nested_key: nested_value for nested_key, nested_value in value.items()
+                     if nested_key not in existing_declared[key]}
+                )
+    vector.metadata.setdefault("low_attention_v2_evidence", {}).update(attached_evidence)
+    vector.metadata.setdefault("low_attention_v2_risk_flags", list(attention.risk_flags))
+    vector.metadata.setdefault("low_attention_v2_source_version", attention.version)
+
+
 def run_replay_frames(
     frames: dict[str, pd.DataFrame],
     *,
@@ -234,6 +314,7 @@ def run_replay_frames(
     vectors: list[FeatureVector] = []
     scores: list[ScoreResult] = []
     warnings = list(universe.warnings)
+    investable_codes = set(universe.included["ts_code"].astype(str))
     for _, row in universe.included.iterrows():
         code = str(row["ts_code"])
         vector = compute_fundamental_features(financial_frames, code, as_of)
@@ -248,15 +329,20 @@ def run_replay_frames(
                 config=settings.crowding,
                 calendar_frame=frames.get("trade_cal"),
                 disclosure_frame=frames.get("disclosure_date"),
-                benchmark_frame=(
-                    frames.get("index_daily")
-                    if "index_daily" in frames
-                    else None
-                ),
+                benchmark_frame=frames.get("index_daily"),
                 benchmark_definition_frame=frames.get("index_basic"),
                 suspension_frame=frames.get("suspend_d"),
             )
         )
+        low_attention = compute_low_attention_v2(
+            market,
+            code,
+            as_of,
+            config=settings.low_attention,
+            list_date=row.get("list_date"),
+            investable_codes=investable_codes,
+        )
+        _attach_low_attention_evidence(vector, low_attention)
         vectors.append(vector)
         scores.append(score_feature_vector(vector, config=settings.score))
     ranked = rank_scores(scores, top_n=settings.top_n)
@@ -288,6 +374,10 @@ def run_replay_frames(
     ranked["benchmark_contract_version"] = settings.crowding.benchmark.version
     ranked["benchmark_source_dataset"] = settings.crowding.benchmark.source_dataset
     ranked["comparable_period_contract_version"] = COMPARABLE_PERIOD_CONTRACT_VERSION
+    ranked["trend_contract_version"] = TURNAROUND_TREND_CONTRACT_VERSION
+    ranked["attention_contract_version"] = settings.low_attention.version
+    ranked["low_attention_version"] = settings.low_attention.version
+    ranked["attention_v2_research_only"] = True
     ranked["score_config_fingerprint"] = settings.score.fingerprint
     return ReplayResult(
         as_of_date=as_of_text,
@@ -305,6 +395,9 @@ def run_replay_frames(
         scores=tuple(scores),
         warnings=tuple(dict.fromkeys(warnings)),
         comparable_period_contract_version=COMPARABLE_PERIOD_CONTRACT_VERSION,
+        trend_contract_version=TURNAROUND_TREND_CONTRACT_VERSION,
+        attention_contract_version=settings.low_attention.version,
+        attention_feature_fields=LOW_ATTENTION_V2_FIELDS,
         expectation_crowding_contract_version=settings.crowding.version,
         benchmark_metadata=settings.crowding.benchmark.declared(),
     )

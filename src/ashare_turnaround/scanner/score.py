@@ -1,4 +1,4 @@
-"""Transparent Turnaround Score v1."""
+"""Transparent Turnaround Score v2 with frozen weights."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from typing import Any
 import pandas as pd
 
 from ..pit.comparable import COMPARABLE_PERIOD_CONTRACT_VERSION
-from .contracts import FeatureVector
+from .contracts import TURNAROUND_TREND_CONTRACT_VERSION, FeatureVector
 
 FEATURE_GROUP_COMPONENTS: dict[str, str] = {
     "fundamental": "fundamental_score",
@@ -37,16 +37,21 @@ _QUALITY_RISK_FLAGS = {
     "impairment_effect",
 }
 _EXPECTATION_RISK_FLAGS = {"already_repriced_or_crowded"}
+_POSITIVE_SIGN_TRANSITIONS = {"NEGATIVE_TO_POSITIVE", "ZERO_TO_POSITIVE"}
+_NEGATIVE_SIGN_TRANSITIONS = {"POSITIVE_TO_NEGATIVE", "ZERO_TO_NEGATIVE"}
 
 
 @dataclass(frozen=True, slots=True)
 class ScoreConfig:
-    version: str = "score-v1"
+    # v2 records that legacy trend inputs now use the independently versioned
+    # turnaround-trend-v2 semantics rather than adjacent-row placeholders.
+    version: str = "score-v2"
     fundamental_weight: float = 0.30
     trend_weight: float = 0.20
     quality_weight: float = 0.20
     attention_weight: float = 0.15
     expectation_weight: float = 0.15
+    trend_contract_version: str = TURNAROUND_TREND_CONTRACT_VERSION
     risk_penalty_cap: float = 50.0
     enabled_groups: tuple[str, ...] = DEFAULT_FEATURE_GROUPS
 
@@ -133,19 +138,32 @@ class ScoreResult:
     rejected: bool
     rejected_reasons: tuple[str, ...]
     comparable_period_contract_version: str = COMPARABLE_PERIOD_CONTRACT_VERSION
+    trend_contract_version: str = TURNAROUND_TREND_CONTRACT_VERSION
     expectation_crowding_contract_version: str | None = None
     benchmark_metadata: dict[str, Any] = field(default_factory=dict)
+    input_metadata: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def score_input_metadata(self) -> dict[str, Any]:
+        """Compatibility alias for the provenance of score inputs."""
+
+        return self.input_metadata
 
     def as_dict(self) -> dict[str, Any]:
         payload = asdict(self)
         payload.update(
             {
+                "trend_contract_version": self.trend_contract_version,
+                "expectation_crowding_contract_version": (
+                    self.expectation_crowding_contract_version
+                ),
                 "benchmark_id": self.benchmark_metadata.get("benchmark_id"),
                 "benchmark_name": self.benchmark_metadata.get("benchmark_name"),
                 "benchmark_contract_version": self.benchmark_metadata.get(
                     "benchmark_contract_version", self.benchmark_metadata.get("version")
                 ),
                 "benchmark_source_dataset": self.benchmark_metadata.get("source_dataset"),
+                "input_metadata": dict(self.input_metadata),
             }
         )
         return payload
@@ -179,11 +197,16 @@ def _trend_score(values: dict[str, Any]) -> float | None:
     qoq = _bounded(values.get("qoq_acceleration"), 0.02)
     persistence = values.get("consecutive_improvement")
     persistence_score = min(100.0, float(persistence) * 25.0) if persistence is not None else None
+    sign_transition = values.get("sign_transition")
     transition = (
         80.0
-        if values.get("sign_transition") is True
+        if sign_transition is True
+        or sign_transition in _POSITIVE_SIGN_TRANSITIONS
+        else 20.0
+        if sign_transition is False
+        or sign_transition in _NEGATIVE_SIGN_TRANSITIONS
         else 50.0
-        if values.get("sign_transition") is False
+        if sign_transition == "NONE"
         else None
     )
     margin = _bounded(values.get("margin_inflection"), 5.0)
@@ -206,7 +229,51 @@ def score_feature_vector(
     """Score one vector with explicit component weights and missingness."""
 
     settings = config or ScoreConfig()
+    if settings.trend_contract_version != vector.trend_contract_version:
+        raise ValueError("score and feature vectors use different trend contract versions")
     values = vector.values
+    attention_metadata = dict(vector.metadata.get("low_attention_v2", {}))
+    expectation_version = vector.expectation_crowding_contract_version
+    expectation_metadata = dict(vector.metadata.get("expectation_crowding_v2", {}))
+    benchmark_metadata = dict(vector.benchmark_metadata)
+    declared_benchmark = expectation_metadata.get(
+        "benchmark_metadata", expectation_metadata.get("benchmark", {})
+    )
+    if isinstance(declared_benchmark, dict):
+        for key, value in declared_benchmark.items():
+            benchmark_metadata.setdefault(key, value)
+    if expectation_version is not None:
+        expectation_metadata.setdefault("contract_version", expectation_version)
+        expectation_metadata.setdefault(
+            "expectation_crowding_contract_version", expectation_version
+        )
+    input_metadata = {
+        "feature_version": vector.version,
+        "comparable_period_contract_version": vector.comparable_period_contract_version,
+        "trend_contract_version": vector.trend_contract_version,
+        "attention_contract_version": attention_metadata.get(
+            "attention_contract_version"
+        ),
+        "low_attention_contract_version": attention_metadata.get(
+            "attention_contract_version"
+        ),
+        "attention_fields": list(attention_metadata.get("fields", ())),
+        "attention_v2_research_only": bool(attention_metadata),
+        "production_attention_input": "attention_score",
+        "production_score_uses_low_attention_v2": False,
+        "expectation_crowding_contract_version": expectation_version,
+        "crowding_contract_version": expectation_version,
+        "benchmark_id": benchmark_metadata.get("benchmark_id"),
+        "benchmark_name": benchmark_metadata.get("benchmark_name"),
+        "benchmark_contract_version": benchmark_metadata.get(
+            "benchmark_contract_version", benchmark_metadata.get("version")
+        ),
+        "benchmark_source_dataset": benchmark_metadata.get("source_dataset"),
+        "feature_contract_versions": dict(vector.feature_contract_versions),
+        "low_attention_v2": attention_metadata,
+        "expectation_crowding_v2": expectation_metadata,
+        "benchmark": benchmark_metadata,
+    }
     components: dict[str, float | None] = {
         "fundamental_score": _fundamental_score(values),
         "trend_score": _trend_score(values),
@@ -222,7 +289,10 @@ def score_feature_vector(
     }
     enabled = set(settings.enabled_groups)
     penalties: dict[str, float] = {}
+    research_only_flags = set(attention_metadata.get("research_only_risk_flags", ()))
     for flag in vector.risk_flags:
+        if flag in research_only_flags:
+            continue
         group = _risk_flag_group(flag)
         if group is not None and group not in enabled:
             continue
@@ -261,10 +331,10 @@ def score_feature_vector(
         rejected=bool(rejected_reasons),
         rejected_reasons=rejected_reasons,
         comparable_period_contract_version=vector.comparable_period_contract_version,
-        expectation_crowding_contract_version=vector.feature_contract_versions.get(
-            "expectation_crowding"
-        ),
-        benchmark_metadata=dict(vector.benchmark_metadata),
+        trend_contract_version=vector.trend_contract_version,
+        expectation_crowding_contract_version=expectation_version,
+        benchmark_metadata=benchmark_metadata,
+        input_metadata=input_metadata,
     )
 
 
@@ -280,6 +350,8 @@ def rank_scores(
             "as_of_date": result.as_of_date,
             "score_version": result.score_version,
             "comparable_period_contract_version": result.comparable_period_contract_version,
+            "trend_contract_version": result.trend_contract_version,
+            "attention_contract_version": result.input_metadata.get("attention_contract_version"),
             "expectation_crowding_contract_version": result.expectation_crowding_contract_version,
             "benchmark_id": result.benchmark_metadata.get("benchmark_id"),
             "benchmark_contract_version": result.benchmark_metadata.get(

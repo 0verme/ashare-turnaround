@@ -191,6 +191,7 @@ def add_known(
     formula: str | None = None,
     components: dict[str, Any] | None = None,
     config: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> None:
     parsed = numeric(value)
     evidence_components = dict(components or {})
@@ -219,6 +220,7 @@ def add_known(
         formula=formula,
         components=evidence_components,
         config=evidence_config,
+        metadata=metadata or {},
     )
 
 
@@ -383,6 +385,7 @@ def add_unknown(
     formula: str | None = None,
     components: dict[str, Any] | None = None,
     config: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
     status: str = "unknown",
 ) -> None:
     add_known(
@@ -397,5 +400,6 @@ def add_unknown(
         formula=formula,
         components=components,
         config=config,
+        metadata=metadata,
         status=status,
     )

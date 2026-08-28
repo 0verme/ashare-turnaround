@@ -712,6 +712,20 @@ def compute_crowding_features(
     vector.version = settings.version
     vector.feature_contract_versions["expectation_crowding"] = settings.version
     vector.benchmark_metadata = _benchmark_config(settings)
+    vector.metadata["namespace"] = "expectation_crowding_v2"
+    vector.metadata["expectation_crowding_v2"] = {
+        "namespace": "expectation_crowding_v2",
+        "contract_version": settings.version,
+        "expectation_crowding_contract_version": settings.version,
+        "config": settings.declared(),
+        "benchmark": dict(vector.benchmark_metadata),
+        "benchmark_metadata": dict(vector.benchmark_metadata),
+        "benchmark_id": settings.benchmark.benchmark_id,
+        "benchmark_contract_version": settings.benchmark.version,
+        "benchmark_source_dataset": settings.benchmark.source_dataset,
+        "source_datasets": list(_CROWDING_SOURCE_DATASETS),
+        "as_of_date": vector.as_of_date,
+    }
 
     if daily_basic_frame is not None:
         if market_frame is None or market_frame.empty:
