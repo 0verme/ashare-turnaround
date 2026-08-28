@@ -147,3 +147,43 @@ period, and `completeness` (`COMPLETE` only when every checkpointed period is
   (`sync-sample`, `validate-source`, `validate-vip-production`); do not leave a
   long download running unattended until capacity and the rate budget are
   confirmed.
+
+## Phase 1.6 Market / Reference bootstrap
+
+The Market / Reference historical corpus has a separate orchestration path;
+Financial P0 is not part of this command.  Use an explicit shared data path
+when running from a worktree:
+
+```bash
+export ASHARE_DATA_DIR=/vol5/1000/ai-workspace/repos/ashare-turnaround/data
+ashare-turnaround market-capacity-plan --start-date 20120101 --end-date 20251231
+ashare-turnaround bootstrap-market --dry-run \
+  --start-date 20120101 --end-date 20251231 --benchmark-code 000300.SH \
+  --snapshot-date 20260827
+ashare-turnaround bootstrap-market \
+  --start-date 20120101 --end-date 20251231 --benchmark-code 000300.SH \
+  --snapshot-date 20260827
+ashare-turnaround verify-market \
+  --start-date 20120101 --end-date 20251231 --benchmark-code 000300.SH
+```
+
+`bootstrap-market` uses exchange-range/snapshot/month units and
+`market-bootstrap-checkpoints.json`; it must not be replaced by a loop over
+`sync-daily`.  The dry-run constructs no provider and changes no RAW/state
+file.  `MarketBootstrapRunLock` rejects a second writer for the same shared
+runtime directory.  If a machine kill leaves a lock file, inspect its PID and
+remove only a confirmed stale lock.
+
+The default core set is `trade_cal`, `stock_basic`, `index_basic`, `suspend_d`,
+`daily`, `daily_basic`, and `index_daily`.  `namechange` is available only as
+an explicit opt-in because the validated compatible endpoint returned repeated
+identical visible rows without a stable source identity; it is not silently
+used to manufacture historical ST/name state.  See
+[market-reference-history.md](market-reference-history.md) for the partition,
+capacity, PIT, and final coverage contract.
+
+After the Market / Reference corpus is accepted, historical data is in
+**GAP-DRIVEN MODE**.  Do not start another full-history download for possible
+future use.  A bounded repair is allowed only when #27–#32 correctness/replay
+validation finds a real gap, a benchmark/reference gate fails, or an approved
+daily incremental sync needs the latest session.

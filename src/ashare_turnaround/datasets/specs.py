@@ -104,6 +104,32 @@ DATASET_SPECS: dict[str, DatasetSpec] = {
         date_fields=("trade_date",),
         required_fields=("ts_code", "trade_date"),
     ),
+    "index_basic": _spec(
+        "index_basic",
+        primary_keys=("ts_code",),
+        date_fields=("base_date", "list_date"),
+        required_fields=("ts_code", "name", "market", "list_date"),
+    ),
+    "index_daily": _spec(
+        "index_daily",
+        primary_keys=("ts_code", "trade_date"),
+        partition_strategy="date",
+        partition_field="trade_date",
+        date_fields=("trade_date",),
+        required_fields=("ts_code", "trade_date", "close"),
+    ),
+    "namechange": _spec(
+        "namechange",
+        primary_keys=("ts_code", "start_date", "name", "change_reason"),
+        date_fields=("start_date", "end_date", "ann_date"),
+        required_fields=("ts_code", "name", "start_date", "change_reason"),
+    ),
+    "suspend_d": _spec(
+        "suspend_d",
+        primary_keys=("ts_code", "trade_date", "suspend_type"),
+        date_fields=("trade_date",),
+        required_fields=("ts_code", "trade_date", "suspend_type"),
+    ),
     "income": _spec(
         "income",
         primary_keys=(

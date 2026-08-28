@@ -16,6 +16,9 @@ from .planning import StorageCapacityPlan, build_capacity_plan, write_capacity_p
 from .state import (
     BootstrapCheckpoint,
     BootstrapCheckpointStore,
+    MarketBootstrapCheckpoint,
+    MarketBootstrapRunLock,
+    MarketCheckpointStore,
     SyncRecord,
     SyncStateStore,
 )
@@ -23,6 +26,9 @@ from .state import (
 __all__ = [
     "BootstrapCheckpoint",
     "BootstrapCheckpointStore",
+    "MarketBootstrapCheckpoint",
+    "MarketBootstrapRunLock",
+    "MarketCheckpointStore",
     "DiskSpaceCheck",
     "CoverageReport",
     "DatasetCoverage",

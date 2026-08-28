@@ -11,12 +11,28 @@ from pathlib import Path
 
 import pandas as pd
 
-from .config import SOURCE_NAME, Settings, load_settings
+from .config import DEFAULT_BENCHMARK_CODE, SOURCE_NAME, Settings, load_settings
 from .datasets.bootstrap import (
     P0_DATASETS,
     bootstrap_datasets,
     format_dataset_progress,
     render_bootstrap_dry_run,
+)
+from .datasets.market_bootstrap import (
+    DEFAULT_MARKET_BOOTSTRAP_DATASETS,
+    DEFAULT_MARKET_EXCHANGES,
+    MARKET_BOOTSTRAP_DATASETS,
+    RESEARCH_START_DATE,
+    bootstrap_market_data,
+    default_market_end_date,
+    format_market_dataset_progress,
+    render_market_bootstrap_dry_run,
+)
+from .datasets.market_validation import (
+    format_market_coverage,
+    render_market_coverage_markdown,
+    verify_market_corpus,
+    write_market_coverage_report,
 )
 from .datasets.periods import latest_complete_annual_year
 from .datasets.production import (
@@ -61,9 +77,19 @@ from .storage.inventory import (
     write_coverage_report,
     write_raw_manifest,
 )
+from .storage.market_planning import (
+    build_market_capacity_plan,
+    render_market_capacity_plan,
+    write_market_capacity_plan,
+)
 from .storage.parquet import RawParquetStore
 from .storage.planning import build_capacity_plan, write_capacity_plan
-from .storage.state import BootstrapCheckpointStore, SyncStateStore
+from .storage.state import (
+    BootstrapCheckpointStore,
+    MarketBootstrapRunLock,
+    MarketCheckpointStore,
+    SyncStateStore,
+)
 from .validation import (
     validate_source,
     write_pit_mapping_report,
@@ -147,6 +173,80 @@ def _parser() -> argparse.ArgumentParser:
         help="Global financial bootstrap API limit; defaults to TUSHARE_REQUESTS_PER_MINUTE.",
     )
 
+    market = subparsers.add_parser(
+        "bootstrap-market",
+        aliases=("bootstrap-market-reference",),
+        help="resumable month/range-scoped Market / Reference historical bootstrap",
+    )
+    market.add_argument(
+        "--dataset",
+        nargs="+",
+        choices=(*MARKET_BOOTSTRAP_DATASETS, "all"),
+        default=["all"],
+    )
+    market.add_argument("--start-date", default=RESEARCH_START_DATE)
+    market.add_argument("--end-date", default=None)
+    market.add_argument("--benchmark-code", default=None)
+    market.add_argument("--snapshot-date", default=None)
+    market.add_argument(
+        "--exchange",
+        dest="exchanges",
+        nargs="+",
+        default=list(DEFAULT_MARKET_EXCHANGES),
+    )
+    market_resume = market.add_mutually_exclusive_group()
+    market_resume.add_argument("--resume", dest="resume", action="store_true")
+    market_resume.add_argument("--no-resume", dest="resume", action="store_false")
+    market.set_defaults(resume=True)
+    market.add_argument("--dry-run", action="store_true")
+    market.add_argument("--page-size", type=int, default=5000)
+    market.add_argument("--max-pages", type=int, default=100)
+    market.add_argument(
+        "--workers",
+        type=int,
+        default=4,
+        help="bounded concurrent market workers; all calls share one global limiter",
+    )
+    market.add_argument(
+        "--requests-per-minute",
+        type=float,
+        default=None,
+        help="global Market / Reference API limit; defaults to TUSHARE_REQUESTS_PER_MINUTE",
+    )
+
+    capacity = subparsers.add_parser(
+        "market-capacity-plan",
+        help="estimate Market / Reference historical RAW size without network",
+    )
+    capacity.add_argument("--start-date", default=RESEARCH_START_DATE)
+    capacity.add_argument("--end-date", default=None)
+    capacity.add_argument("--benchmark-code", default=None)
+    capacity.add_argument("--company-count", type=int, default=None)
+    capacity.add_argument("--company-count-source", default=None)
+    capacity.add_argument("--report", default="docs/market-capacity-plan.md")
+
+    verify_market = subparsers.add_parser(
+        "verify-market", help="verify Market / Reference coverage and RAW integrity only"
+    )
+    verify_market.add_argument("--start-date", default=RESEARCH_START_DATE)
+    verify_market.add_argument("--end-date", default=None)
+    verify_market.add_argument("--benchmark-code", default=None)
+    verify_market.add_argument(
+        "--dataset",
+        nargs="+",
+        choices=(*MARKET_BOOTSTRAP_DATASETS, "all"),
+        default=["all"],
+    )
+    verify_market.add_argument(
+        "--exchange",
+        dest="exchanges",
+        nargs="+",
+        default=list(DEFAULT_MARKET_EXCHANGES),
+    )
+    verify_market.add_argument("--snapshot-date", default=None)
+    verify_market.add_argument("--report", default="data/state/market-coverage.json")
+    verify_market.add_argument("--markdown", default="docs/market-reference-coverage.md")
+
     inventory = subparsers.add_parser("inventory", help="inventory raw Parquet and write manifest")
     inventory.add_argument("--manifest", default="data/state/raw-manifest.json")
     inventory.add_argument("--coverage", default="data/state/data-coverage.json")
@@ -213,6 +313,7 @@ def _settings_without_secret(settings: Settings) -> str:
     base = "configured" if settings.base_url else "official-default"
     return (
         f"data_dir={settings.data_dir}\n"
+        f"benchmark_code={settings.benchmark_code}\n"
         f"token_configured={settings.token_configured}\n"
         f"base_url={base}\n"
         f"timeout={settings.timeout}\n"
@@ -483,6 +584,186 @@ def _bootstrap_financials(args: argparse.Namespace) -> int:
     return 2 if failed else 0
 
 
+def _market_dataset_selection(values: list[str]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(DEFAULT_MARKET_BOOTSTRAP_DATASETS if "all" in values else values))
+
+
+def _bootstrap_market(args: argparse.Namespace) -> int:
+    settings = load_settings()
+    datasets = _market_dataset_selection(args.dataset)
+    end_date = args.end_date or default_market_end_date()
+    benchmark = args.benchmark_code or settings.benchmark_code or DEFAULT_BENCHMARK_CODE
+    requests_per_minute = (
+        settings.requests_per_minute
+        if args.requests_per_minute is None
+        else args.requests_per_minute
+    )
+    checkpoints = MarketCheckpointStore(
+        settings.data_dir / "state" / "market-bootstrap-checkpoints.json",
+        secret=settings.token,
+    )
+    store = RawParquetStore(settings.data_dir)
+    if args.dry_run:
+        try:
+            summary = bootstrap_market_data(
+                None,
+                store,
+                checkpoints,
+                start_date=args.start_date,
+                end_date=end_date,
+                datasets=datasets,
+                benchmark_code=benchmark,
+                exchanges=tuple(args.exchanges),
+                snapshot_date=args.snapshot_date,
+                resume=args.resume,
+                dry_run=True,
+                page_size=args.page_size,
+                max_pages=args.max_pages,
+                workers=args.workers,
+                requests_per_minute=requests_per_minute,
+            )
+        except (ValueError, RuntimeError) as exc:
+            print(f"market bootstrap dry-run failed: {exc}", file=sys.stderr)
+            return 2
+        print(render_market_bootstrap_dry_run(summary))
+        return 0
+
+    # The local capacity gate is evaluated before any provider is constructed.
+    # It uses existing/bounded measurements only and never rewrites Financial
+    # P0 data.
+    try:
+        capacity = build_market_capacity_plan(
+            settings.data_dir,
+            start_date=args.start_date,
+            end_date=end_date,
+            benchmark_code=benchmark,
+            exchanges=tuple(args.exchanges),
+        )
+    except (OSError, ValueError, RuntimeError) as exc:
+        print(f"market capacity plan failed: {exc}", file=sys.stderr)
+        return 2
+    print(
+        f"capacity_gate={capacity.status} expected_bytes={capacity.expected_total_bytes} "
+        f"conservative_bytes={capacity.conservative_total_bytes} "
+        f"free_bytes={capacity.initial_free_bytes}"
+    )
+    if not capacity.safe_to_download:
+        print("capacity gate blocked Market / Reference historical bootstrap", file=sys.stderr)
+        return 2
+    if not settings.token_configured:
+        print("TUSHARE_TOKEN is not configured; market bootstrap was not run", file=sys.stderr)
+        return 2
+    settings.ensure_data_dirs()
+    disk = check_disk_space(settings.data_dir)
+    print(f"free_bytes={disk.free_bytes} disk_gate={disk.recommendation}")
+    if disk.hard_stop:
+        print("disk gate blocked Market / Reference historical bootstrap", file=sys.stderr)
+        return 2
+    lock = MarketBootstrapRunLock(settings.data_dir / "state" / "market-bootstrap.lock")
+    try:
+        with lock:
+            provider = TushareProvider(
+                settings.token or "",
+                settings.base_url,
+                timeout=settings.timeout,
+                max_retries=settings.max_retries,
+                backoff_seconds=settings.backoff_seconds,
+                backoff_jitter_seconds=settings.backoff_jitter_seconds,
+            )
+            summary = bootstrap_market_data(
+                provider,
+                store,
+                checkpoints,
+                start_date=args.start_date,
+                end_date=end_date,
+                datasets=datasets,
+                benchmark_code=benchmark,
+                exchanges=tuple(args.exchanges),
+                snapshot_date=args.snapshot_date,
+                resume=args.resume,
+                dry_run=False,
+                page_size=args.page_size,
+                max_pages=args.max_pages,
+                workers=args.workers,
+                requests_per_minute=requests_per_minute,
+                progress=lambda message: print(message, flush=True),
+            )
+    except KeyboardInterrupt:
+        print(
+            "market bootstrap interrupted; completed units/checkpoints were preserved; "
+            "resume can continue unfinished units",
+            file=sys.stderr,
+        )
+        return 130
+    except (OSError, ValueError, RuntimeError) as exc:
+        print(f"market bootstrap failed before completion: {exc}", file=sys.stderr)
+        return 2
+
+    for result in summary.results:
+        error = f" error={result.error}" if result.error else ""
+        print(
+            f"{result.dataset} {result.unit} {result.status} rows={result.rows} "
+            f"pages={result.page_count} skipped={result.skipped}{error}"
+        )
+    print(format_market_dataset_progress(summary))
+    print(
+        f"window={summary.start_date}..{summary.end_date} benchmark={summary.benchmark_code} "
+        f"units={summary.requested_units} completed={summary.completed_count} "
+        f"skipped(resume)={summary.skipped_count} failed={len(summary.failures)} "
+        f"workers={summary.workers} requests={summary.api_requests} "
+        f"rows={summary.total_rows} elapsed={summary.elapsed_seconds:.3f}s"
+    )
+    return 2 if summary.failures else 0
+
+
+def _market_capacity_plan(args: argparse.Namespace) -> int:
+    settings = load_settings()
+    benchmark = args.benchmark_code or settings.benchmark_code or DEFAULT_BENCHMARK_CODE
+    try:
+        plan = build_market_capacity_plan(
+            settings.data_dir,
+            start_date=args.start_date,
+            end_date=args.end_date or default_market_end_date(),
+            benchmark_code=benchmark,
+            company_count=args.company_count,
+            company_count_source=args.company_count_source,
+        )
+        write_market_capacity_plan(plan, args.report)
+    except (OSError, ValueError, RuntimeError) as exc:
+        print(f"market capacity plan failed: {exc}", file=sys.stderr)
+        return 2
+    print(render_market_capacity_plan(plan))
+    print(f"capacity_report={args.report}")
+    return 0 if plan.safe_to_download else 2
+
+
+def _verify_market(args: argparse.Namespace) -> int:
+    settings = load_settings()
+    datasets = _market_dataset_selection(args.dataset)
+    benchmark = args.benchmark_code or settings.benchmark_code or DEFAULT_BENCHMARK_CODE
+    try:
+        report = verify_market_corpus(
+            settings.data_dir,
+            start_date=args.start_date,
+            end_date=args.end_date or default_market_end_date(),
+            benchmark_code=benchmark,
+            datasets=datasets,
+            exchanges=tuple(args.exchanges),
+            snapshot_date=args.snapshot_date,
+        )
+        write_market_coverage_report(report, args.report)
+        markdown = Path(args.markdown)
+        markdown.parent.mkdir(parents=True, exist_ok=True)
+        markdown.write_text(render_market_coverage_markdown(report), encoding="utf-8")
+    except (OSError, ValueError, RuntimeError) as exc:
+        print(f"market verification failed: {exc}", file=sys.stderr)
+        return 2
+    print(format_market_coverage(report))
+    print(f"market_coverage_json={args.report}")
+    print(f"market_coverage_markdown={args.markdown}")
+    return 0 if report.ready else 2
+
+
 def _inventory(args: argparse.Namespace) -> int:
     settings = load_settings()
     settings.ensure_data_dirs()
@@ -588,9 +869,7 @@ def _scan(args: argparse.Namespace) -> int:
             as_of_date=args.as_of,
             top_n=args.top,
         )
-        snapshot = write_scan_snapshot(
-            snapshot, args.data_dir
-        )
+        snapshot = write_scan_snapshot(snapshot, args.data_dir)
     except (OSError, ValueError, KeyError, RuntimeError) as exc:
         print(f"scan failed: {exc}", file=sys.stderr)
         return 2
@@ -631,13 +910,9 @@ def _evaluate(args: argparse.Namespace) -> int:
             else store.read("stock_basic")
         )
         exposures = (
-            _read_research_frame(args.exposures)
-            if args.exposures
-            else store.read("daily_basic")
+            _read_research_frame(args.exposures) if args.exposures else store.read("daily_basic")
         )
-        fundamentals = (
-            _read_research_frame(args.fundamentals) if args.fundamentals else None
-        )
+        fundamentals = _read_research_frame(args.fundamentals) if args.fundamentals else None
         result = evaluate_scans(
             scans,
             store.read("daily"),
@@ -822,9 +1097,7 @@ def _cumulative_semantics_evidence(store: RawParquetStore) -> dict[str, dict[str
             code_groups: list[tuple[int, pd.DataFrame]] = []
             group_keys = [column for column in identity if column != "ts_code"] + ["_year"]
             grouped = (
-                code_frame.groupby(group_keys, dropna=False)
-                if group_keys
-                else [(None, code_frame)]
+                code_frame.groupby(group_keys, dropna=False) if group_keys else [(None, code_frame)]
             )
             for key, group in grouped:
                 if not set(group["_period"].dt.strftime("%m-%d")) >= set(quarter_labels):
@@ -983,8 +1256,7 @@ def _render_pit_check(
         )
         lines.append(f"| real revision candidate | PASS | {evidence} |")
         lines.append(
-            f"| real revision chain | {check.status} | "
-            f"as-of boundary checks: {check.checks} |"
+            f"| real revision chain | {check.status} | as-of boundary checks: {check.checks} |"
         )
 
     lines.extend(
@@ -1002,10 +1274,13 @@ def _render_pit_check(
     )
     for dataset, evidence in cumulative.items():
         checks = evidence["field_checks"]
-        check_text = ", ".join(
-            f"{field}={value['single_quarter_bridge_pass']}/{value['complete_company_years']}"
-            for field, value in checks.items()
-        ) or "-"
+        check_text = (
+            ", ".join(
+                f"{field}={value['single_quarter_bridge_pass']}/{value['complete_company_years']}"
+                for field, value in checks.items()
+            )
+            or "-"
+        )
         lines.append(
             f"| {dataset} | {evidence['status']} | {evidence['semantics']} | "
             f"{evidence['company_years']} | {check_text} |"
@@ -1148,6 +1423,10 @@ def main(argv: list[str] | None = None) -> int:
         "storage-plan": _storage_plan,
         "validate-vip-production": _validate_vip_production,
         "bootstrap-financials": _bootstrap_financials,
+        "bootstrap-market": _bootstrap_market,
+        "bootstrap-market-reference": _bootstrap_market,
+        "market-capacity-plan": _market_capacity_plan,
+        "verify-market": _verify_market,
         "inventory": _inventory,
         "sync-daily": _sync_daily,
         "replay": _replay,

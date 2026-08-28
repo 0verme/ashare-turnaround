@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 # default endpoint. No private/compatible endpoint is hard-coded in source.
 DEFAULT_BASE_URL: str | None = None
 DEFAULT_DATA_DIR = Path("./data")
+DEFAULT_BENCHMARK_CODE = "000300.SH"
 SOURCE_NAME = "tushare-compatible"
 
 
@@ -23,6 +24,7 @@ class Settings:
     token: str | None = field(default=None, repr=False)
     base_url: str | None = field(default=DEFAULT_BASE_URL, repr=False)
     data_dir: Path = DEFAULT_DATA_DIR
+    benchmark_code: str = DEFAULT_BENCHMARK_CODE
     timeout: float = 30.0
     max_retries: int = 2
     backoff_seconds: float = 1.0
@@ -35,6 +37,10 @@ class Settings:
         if self.base_url is not None:
             object.__setattr__(self, "base_url", self.base_url.strip() or None)
         object.__setattr__(self, "data_dir", Path(self.data_dir).expanduser())
+        benchmark = str(self.benchmark_code).strip().upper()
+        if not benchmark or "." not in benchmark:
+            raise ValueError("benchmark_code must be a non-empty Tushare symbol")
+        object.__setattr__(self, "benchmark_code", benchmark)
         if self.max_retries < 0:
             raise ValueError("max_retries must be non-negative")
         if self.timeout <= 0:
@@ -72,11 +78,13 @@ def load_settings(env_file: str | Path | None = None) -> Settings:
     raw_base_url = os.getenv("TUSHARE_BASE_URL")
     base_url = (raw_base_url or "").strip() or None
     raw_data_dir = os.getenv("ASHARE_DATA_DIR", str(DEFAULT_DATA_DIR))
+    benchmark_code = os.getenv("ASHARE_BENCHMARK_CODE", DEFAULT_BENCHMARK_CODE)
 
     return Settings(
         token=token,
         base_url=base_url,
         data_dir=Path(raw_data_dir),
+        benchmark_code=benchmark_code,
         timeout=float(os.getenv("TUSHARE_TIMEOUT", "30")),
         max_retries=int(os.getenv("TUSHARE_MAX_RETRIES", "2")),
         backoff_seconds=float(os.getenv("TUSHARE_BACKOFF_SECONDS", "1")),
