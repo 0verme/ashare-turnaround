@@ -187,9 +187,17 @@ class FeatureVector:
             status
             in {
                 "unknown",
+                "missing",
                 "insufficient_data",
                 "insufficient_history",
                 "discontinuous",
+                "stale",
+                "invalid",
+                "future_unsafe",
+                "future-unsafe",
+                "pit_warning",
+                "unsupported_pit",
+                "pit_unsupported",
                 "unsupported",
             }
             and name not in self.unknown_features

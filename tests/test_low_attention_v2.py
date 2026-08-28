@@ -892,8 +892,11 @@ def test_replay_and_candidate_report_carry_low_attention_contract_metadata() -> 
     assert result.metadata()["attention_contract_version"] == SEMANTIC
     assert result.metadata()["attention_v2_research_only"] is True
     assert result.metadata()["trend_contract_version"] == "turnaround-trend-v2"
-    assert result.ranked.iloc[0]["attention_contract_version"] == SEMANTIC
-    assert result.ranked.iloc[0]["trend_contract_version"] == "turnaround-trend-v2"
+    # The candidate is retained in the full diagnostic output but is no
+    # longer admitted to formal Top-N without the required evidence gate.
+    assert result.ranked.empty
+    assert result.full_ranked.iloc[0]["attention_contract_version"] == SEMANTIC
+    assert result.full_ranked.iloc[0]["trend_contract_version"] == "turnaround-trend-v2"
     vector = result.vectors[0]
     assert vector.values["abnormal_volume"] is not None  # v1 field is preserved
     assert "low_attention_v2_abnormal_volume" in vector.values

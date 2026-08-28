@@ -24,24 +24,32 @@ from ashare_turnaround.scanner.stability import (
 
 def _complete_vector() -> FeatureVector:
     vector = FeatureVector(ts_code="600000.SH", as_of_date="20250630")
-    vector.values.update(
-        {
-            "revenue_yoy": 0.2,
-            "net_profit_yoy": 0.3,
-            "operating_profit_yoy": 0.25,
-            "gross_margin": 0.3,
-            "operating_margin": 0.2,
-            "net_margin": 0.1,
-            "yoy_acceleration": 2.0,
-            "qoq_acceleration": 1.0,
-            "consecutive_improvement": 3,
-            "sign_transition": True,
-            "margin_inflection": 0.02,
-            "quality_score": 10.0,
-            "attention_score": 20.0,
-            "expectation_score": 30.0,
-        }
-    )
+    for name, value in {
+        "revenue_yoy": 0.2,
+        "net_profit_yoy": 0.3,
+        "operating_profit_yoy": 0.25,
+        "gross_margin": 0.3,
+        "operating_margin": 0.2,
+        "net_margin": 0.1,
+        "yoy_acceleration": 2.0,
+        "qoq_acceleration": 1.0,
+        "consecutive_improvement": 3,
+        "sign_transition": True,
+        "margin_inflection": 0.02,
+        "quality_score": 10.0,
+        "quality_gate_status": "pass",
+        "turnover_percentile": 0.2,
+        "amount_percentile": 0.2,
+        "abnormal_volume": 1.0,
+        "attention_score": 20.0,
+        "repricing_20d": 0.0,
+        "repricing_60d": 0.0,
+        "high_proximity": 0.0,
+        "volume_spike_penalty": 0.0,
+        "turnover_spike_penalty": 0.0,
+        "expectation_score": 30.0,
+    }.items():
+        vector.add(name, value)
     vector.risk_flags.extend(
         ["profit_dominated_by_non_recurring_items", "already_repriced_or_crowded"]
     )
@@ -96,7 +104,7 @@ def test_top_n_never_promotes_a_higher_scoring_rejected_candidate() -> None:
     accepted_vector.ts_code = "600001.SH"
     accepted_vector.risk_flags.clear()
     accepted_vector.rejected_reasons.clear()
-    accepted_vector.values["quality_score"] = 1.0
+    accepted_vector.add("quality_score", 1.0)
 
     ranked = rank_scores(
         [score_feature_vector(rejected_vector), score_feature_vector(accepted_vector)],

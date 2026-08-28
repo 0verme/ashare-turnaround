@@ -17,6 +17,7 @@ fundamental | trend | quality | attention | crowding
 FeatureVector + FeatureEvidence
         ↓
 Turnaround Score (score-v2; frozen weights)
+        + evidence-confidence-v1 gate
         ↓
 replay / daily snapshot / evaluation / report
 ```
@@ -35,6 +36,7 @@ replay / daily snapshot / evaluation / report
 | #13 | Low-attention proxies | `features.market.compute_attention_features` |
 | #29 | Low-attention v2 calibration (cross-sectional context) | `features.low_attention.compute_low_attention_v2` — research-only; see [docs/low-attention-v2.md](low-attention-v2.md); v1/v2 boundary preserved (production score still reads v1 `attention_score`) |
 | #14 | Low-expectation/crowding proxies | `features.market.compute_crowding_features` (`expectation-crowding-v2`, see `docs/expectation-crowding-v2.md`) |
+| #30 | Expectation/crowding v2 benchmark-relative semantics | `features.market.compute_crowding_features` / `docs/expectation-crowding-v2.md` |
 | #15 | Weighted transparent score | `scanner.score.score_feature_vector` |
 | #16 | Historical PIT replay | `scanner.replay.run_replay` |
 | #17 | Forward evaluation | `scanner.evaluation.evaluate_scans` |
@@ -44,6 +46,7 @@ replay / daily snapshot / evaluation / report
 | #34 | Market / Reference historical corpus | `datasets.market_bootstrap` / `datasets.market_validation` |
 | #27 | Comparable financial period semantics | `pit.comparable` / `features.fundamental` |
 | #28 | Turnaround trend and acceleration semantics | `features.trend` / `docs/trend-semantics.md` |
+| #31 | Evidence coverage and confidence gate | `scanner.evidence` / `scanner.score` / `docs/evidence-confidence-v1.md` |
 
 Issue #7 is deliberately not duplicated in this branch: the repository already
 has the proposed adversarial PIT test/documentation in [PR #24](https://github.com/0verme/ashare-turnaround/pull/24).
@@ -72,8 +75,13 @@ Each candidate is represented by `scanner.contracts.FeatureVector`:
   values, period semantics, source versions, actual availability dates, and—
   for crowding—formula, components, config, and semantic version;
 - `risk_flags` are soft penalties while `rejected_reasons` are hard gates;
-- `unknown_features` is populated for `unknown`, `insufficient_data`,
-  `insufficient_history`, `discontinuous`, and `unsupported` values;
+- `unknown_features` is populated for `unknown`, `missing`, `insufficient_data`,
+  `insufficient_history`, `discontinuous`, `stale`, `invalid`, PIT-unsafe, and
+  `unsupported` values;
+- the additive `evidence-confidence-v1` score result records field/group
+  coverage, confidence, unknown groups, ranking eligibility, and all missing /
+  invalid / unsupported required fields; PIT warnings do not count as valid
+  evidence;
 - score inputs, replay metadata, and candidate reports repeat the low-attention
   contract version and fields. The score still consumes only v1
   `attention_score`; v2 metadata/evidence is research-only.
@@ -149,9 +157,11 @@ absolute stock return. Crowding/expectation penalties and evidence remain
 separate from fundamental and trend evidence. See
 [docs/expectation-crowding-v2.md](expectation-crowding-v2.md).
 
-### Score
+### Score and evidence-confidence gate
 
-`ScoreConfig` is `score-v2` with these unchanged weights:
+`ScoreConfig` remains `score-v2` with these unchanged weights.  The separate
+`EvidenceConfidenceConfig` is `evidence-confidence-v1` with a versioned
+`feature-group-registry-v1`; it does not tune or redefine the score:
 
 | Component | Weight |
 | --- | ---: |
@@ -161,11 +171,21 @@ separate from fundamental and trend evidence. See
 | Attention | 0.15 |
 | Expectation/crowding | 0.15 |
 
-Known components are renormalized when a component is unavailable. Risk flags
-subtract bounded penalties, while hard quality gates remain visible in the
-ranked output and cannot be mistaken for a clean candidate. Score weights remain
-unchanged in this branch; `ScoreResult` and ranked rows carry the crowding
-contract and benchmark metadata for auditability.
+The backward-compatible `turnaround_score` may remain a diagnostic partial
+score when a component is unavailable.  If known components are renormalized,
+`ScoreResult` explicitly reports `configured_weight_total`, `observed_weight`,
+`missing_weight`, and `score_is_partial`; no missing group is filled with a
+neutral value.  Risk flags subtract bounded penalties, while hard quality gates
+remain visible in the ranked output.
+
+The independent gate reports `evidence_coverage` as the unweighted ratio of
+valid required fields to all required fields, per-group coverage/status, the
+configured critical groups, `confidence` (`HIGH`/`MEDIUM`/`LOW`/
+`INSUFFICIENT`), `unknown_groups`, `ranking_eligible`, and
+`eligibility_reason`.  `rank_scores(top_n=None)` retains the full diagnostic
+ordering; a finite Top-N contains only `ranking_eligible` candidates.  Score
+weights remain unchanged and confidence is evidence completeness, not a
+probability of positive return.  See [docs/evidence-confidence-v1.md](evidence-confidence-v1.md).
 
 ## Runtime commands and artifacts
 
@@ -182,7 +202,9 @@ contract and benchmark metadata for auditability.
   the latest row for an exact identity.
 - `replay --as-of YYYYMMDD` writes a ranked Parquet artifact and JSON metadata
   under `data/derived/replays/`; it loads `index_daily` separately from stock
-  `daily` and records the `expectation-crowding-v2`/benchmark declarations.
+  `daily`, records the `expectation-crowding-v2`/benchmark declarations, and
+  persists evidence-confidence fields for every candidate (including the full
+  diagnostic ordering in JSON).
 - `replay-variants --as-of YYYYMMDD` writes the four versioned score variants
   from one verified PIT snapshot.
 - `scan` writes a daily snapshot under `data/derived/scans/`; `scan-compare`

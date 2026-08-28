@@ -30,6 +30,13 @@ v1 lives in `features/market.py::compute_attention_features`. It produces
 | 5 | No per-proxy evidence beyond datasets/fields/periods. | No observation date, population size, valid counts, window, or version is queryable per proxy. |
 | 6 | New listings with as little as 1 session produce a "percentile". | Single-row self-percentile is self-referential (`1.0`). |
 
+The additive evidence-confidence gate in issue #31 also hardens the v1 score
+boundary: `attention_score` is now published only when all three v1 primitives
+are known. It no longer fills a missing percentile/baseline with `0.5` or
+`1.0`; the omitted component is disclosed by `ScoreResult` instead. This does
+not turn v1 into the Low Attention v2 score and does not change ScoreConfig
+weights.
+
 **Root cause in one sentence:** v1 collapses *self-history*, *cross-sectional
 context*, *liquidity eligibility* and *missing evidence* into one blended
 number, which makes inactivity and missingness indistinguishable from "low

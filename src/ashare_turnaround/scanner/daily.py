@@ -60,6 +60,7 @@ def scan_data(
             score=config.score,
             crowding=config.crowding,
             low_attention=config.low_attention,
+            evidence_confidence=config.evidence_confidence,
         )
     result = run_replay(data_dir, as_of_date=as_of_date, config=settings)
     return ScanSnapshot(result)
