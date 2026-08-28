@@ -136,8 +136,58 @@ def test_excess_return_is_stock_minus_benchmark() -> None:
     assert evidence.components["excess_return"] == pytest.approx(0.10)
     assert "R_bench" in (evidence.formula or "")
     assert evidence.config["benchmark_id"] == BENCH
-    assert evidence.semantic_version == "crowding-v2"
+    assert evidence.semantic_version == "expectation-crowding-v2"
     assert evidence.config["version"] == "benchmark-v1"
+    assert evidence.config["source_dataset"] == "index_basic + index_daily"
+    assert evidence.components["start_session"] < evidence.components["end_session"]
+    assert evidence.components["stock_start"] == pytest.approx(10.0)
+    assert evidence.components["stock_end"] == pytest.approx(11.0)
+    serialized = evidence.as_dict()
+    assert serialized["start_session"] == evidence.components["start_session"]
+    assert serialized["benchmark_id"] == BENCH
+
+
+def test_separate_index_daily_benchmark_source_is_recorded() -> None:
+    closes = ramp_tail(100.0, 20, 120.0)
+    stock = make_market(DATES, closes, bench_close=None, bench_dates=[])
+    benchmark = pd.DataFrame(
+        {
+            "ts_code": [BENCH] * len(DATES),
+            "trade_date": fmt(DATES),
+            "close": ramp_tail(100.0, 20, 110.0),
+        }
+    )
+    definition = pd.DataFrame(
+        {
+            "ts_code": [BENCH],
+            "name": ["CSI 300"],
+            "list_date": ["20050101"],
+        }
+    )
+    vector = compute_crowding_features(
+        stock,
+        STOCK,
+        AS_OF,
+        benchmark_frame=benchmark,
+        benchmark_definition_frame=definition,
+    )
+
+    assert vector.values["stock_return_20d"] == pytest.approx(0.20)
+    assert vector.values["benchmark_return_20d"] == pytest.approx(0.10)
+    assert vector.values["excess_return_20d"] == pytest.approx(0.10)
+    assert vector.feature_contract_versions["expectation_crowding"] == (
+        "expectation-crowding-v2"
+    )
+    assert vector.benchmark_metadata["benchmark_id"] == BENCH
+    assert vector.benchmark_metadata["source_dataset"] == "index_basic + index_daily"
+    assert vector.evidence["excess_return_20d"].source_datasets == (
+        "daily",
+        "index_daily",
+    )
+    scored = score_feature_vector(vector)
+    assert scored.expectation_crowding_contract_version == "expectation-crowding-v2"
+    assert scored.benchmark_metadata["benchmark_name"] == "CSI 300 Index"
+    assert scored.as_dict()["benchmark_source_dataset"] == "index_basic + index_daily"
 
 
 def test_absolute_stock_return_is_not_excess_return() -> None:
@@ -197,6 +247,28 @@ def test_suspension_at_anchor_is_unknown() -> None:
     assert vector.values["expectation_score"] is None
 
 
+def test_explicit_suspend_d_row_blocks_stock_endpoint() -> None:
+    market = make_market(
+        DATES,
+        flat_closes(10.0),
+        bench_close=100.0,
+        vol=1000.0,
+        turnover=1.0,
+    )
+    suspension = pd.DataFrame(
+        {"ts_code": [STOCK], "trade_date": [AS_OF], "suspend_type": ["S"]}
+    )
+    vector = compute_crowding_features(
+        market,
+        STOCK,
+        AS_OF,
+        suspension_frame=suspension,
+    )
+
+    assert vector.evidence["excess_return_20d"].status == "unknown"
+    assert vector.evidence["excess_return_20d"].reason == "stock_no_quote_at_anchor_session"
+
+
 def test_suspension_at_window_start_is_unknown() -> None:
     closes = flat_closes(10.0)
     # drop the stock quote exactly at t-20 (session offset 20 from the end)
@@ -238,11 +310,13 @@ def test_missing_benchmark_is_unknown_and_never_falls_back() -> None:
     vector = compute_crowding_features(market, STOCK, AS_OF)
 
     # fail-closed: without a benchmark there is no session axis and every
-    # crowding-v2 feature is unknown; the stock-only return is NOT published
+    # expectation-crowding-v2 feature is unknown; the stock-only return is NOT published
     # under the excess name and no feature quietly degenerates to it
     assert vector.values["recent_return_20d"] is None
     assert vector.values["recent_excess_return"] is None
-    assert vector.evidence["recent_excess_return"].reason == "benchmark_unavailable"
+    assert vector.values["excess_return_20d"] is None
+    assert vector.evidence["recent_excess_return"].reason == "missing_benchmark_endpoint"
+    assert vector.evidence["excess_return_20d"].reason == "missing_benchmark_endpoint"
     assert vector.values["momentum_60d"] is None
     assert vector.values["expectation_score"] is None
     assert vector.values["crowding_penalty"] is None
@@ -263,6 +337,28 @@ def test_stale_benchmark_is_unknown() -> None:
 
     assert vector.values["recent_excess_return"] is None
     assert vector.evidence["recent_excess_return"].reason == "benchmark_stale_at_as_of"
+
+
+def test_missing_benchmark_window_start_with_calendar_is_unknown() -> None:
+    benchmark_dates = list(DATES)
+    benchmark_dates.remove(DATES[-21])
+    market = make_market(
+        DATES,
+        flat_closes(10.0),
+        bench_close=100.0,
+        bench_dates=benchmark_dates,
+        vol=1000.0,
+        turnover=1.0,
+    )
+    vector = compute_crowding_features(
+        market,
+        STOCK,
+        AS_OF,
+        calendar_frame=calendar_frame(DATES),
+    )
+
+    assert vector.values["excess_return_20d"] is None
+    assert vector.evidence["excess_return_20d"].reason == "benchmark_missing_at_window_start"
 
 
 def test_missing_benchmark_anchor_session_with_calendar_is_unknown() -> None:
@@ -348,12 +444,12 @@ def test_normal_repricing_scales_with_threshold() -> None:
 
 
 def test_52w_high_proximity_and_distance() -> None:
-    # Stock at its 52-week high
+    # Stock makes a new high; the prior-252-session reference excludes today.
     closes = [8.0] * (len(DATES) - 21) + ramp_tail(8.0, 20, 10.0)[-21:]
     at_high = compute_crowding_features(
         make_market(DATES, closes, bench_close=100.0, vol=1000.0, turnover=1.0), STOCK, AS_OF
     )
-    assert at_high.values["distance_52w_high"] == pytest.approx(0.0)
+    assert at_high.values["distance_52w_high"] == pytest.approx(10.0 / 9.9 - 1.0)
     assert at_high.values["high_proximity"] == pytest.approx(1.0)
 
     # Stock 20% below its 52-week high (high reached earlier, then pulled back)
@@ -361,7 +457,7 @@ def test_52w_high_proximity_and_distance() -> None:
     vector = compute_crowding_features(
         make_market(DATES, high_series, bench_close=100.0, vol=1000.0, turnover=1.0), STOCK, AS_OF
     )
-    assert vector.values["distance_52w_high"] == pytest.approx(1.0 - 10.0 / 12.0)
+    assert vector.values["distance_52w_high"] == pytest.approx(10.0 / 12.0 - 1.0)
     assert vector.values["high_proximity"] == pytest.approx(10.0 / 12.0)
 
 
@@ -372,14 +468,14 @@ def test_52w_high_evidence_records_window_details() -> None:
     )
     evidence = vector.evidence["distance_52w_high"]
     assert evidence.components["current_price"] == pytest.approx(11.0)
-    assert evidence.components["high"] == pytest.approx(11.0)
-    assert evidence.components["distance"] == pytest.approx(0.0)
+    assert evidence.components["high"] == pytest.approx(10.95)
+    assert evidence.components["distance"] == pytest.approx(11.0 / 10.95 - 1.0)
     assert evidence.components["observation_count"] == 252
-    assert vector.values["high_52w"] == pytest.approx(11.0)
+    assert vector.values["high_52w"] == pytest.approx(10.95)
     assert vector.values["current_price"] == pytest.approx(11.0)
     assert vector.values["high_52w_obs_count"] == 252
-    assert vector.values["high_52w_window_end"] == AS_OF
-    assert vector.values["high_52w_window_start"] < AS_OF
+    assert vector.values["high_52w_window_end"] < AS_OF
+    assert vector.values["high_52w_window_start"] < vector.values["high_52w_window_end"]
 
 
 def test_insufficient_52w_history_is_unknown() -> None:
@@ -390,9 +486,13 @@ def test_insufficient_52w_history_is_unknown() -> None:
     assert vector.evidence["distance_52w_high"].status == "unknown"
     assert vector.evidence["distance_52w_high"].reason == "insufficient_52w_history"
     assert vector.evidence["high_proximity"].status == "unknown"
-    # 20D/60D remain computable with 100 sessions
+    # 20D/60D remain computable with 100 sessions, but the aggregate is
+    # unknown because the mandatory prior-252 high evidence is unavailable.
     assert vector.values["recent_excess_return"] is not None
-    assert vector.values["crowding_penalty"] is not None
+    assert vector.values["crowding_penalty"] is None
+    assert vector.evidence["crowding_penalty"].reason == (
+        "missing_penalty_component:high_proximity"
+    )
 
 
 def test_abnormal_volume_penalty() -> None:
@@ -425,6 +525,25 @@ def test_extreme_outlier_saturates_penalty() -> None:
     assert "already_repriced_or_crowded" in vector.risk_flags
 
 
+def test_extreme_numeric_overflow_is_unknown_and_finite() -> None:
+    dates = list(DATES)
+    market = make_market(
+        dates,
+        [1e-308] * (len(dates) - 1) + [1e308],
+        bench_close=100.0,
+        vol=1000.0,
+        turnover=1.0,
+    )
+    vector = compute_crowding_features(market, STOCK, AS_OF)
+
+    assert vector.evidence["excess_return_20d"].status == "unknown"
+    assert vector.evidence["excess_return_20d"].reason == "invalid_window_price"
+    for value in vector.values.values():
+        if isinstance(value, float):
+            assert pd.notna(value)
+            assert value not in {float("inf"), -float("inf")}
+
+
 def test_single_session_limit_move_is_repricing() -> None:
     closes = [10.0] * (len(DATES) - 1) + [11.0]  # one +10% limit-up session at the anchor
     market = make_market(DATES, closes, bench_close=100.0, vol=1000.0, turnover=1.0)
@@ -434,6 +553,16 @@ def test_single_session_limit_move_is_repricing() -> None:
     assert vector.values["recent_excess_return"] == pytest.approx(0.10)
     assert vector.values["repricing_20d"] == pytest.approx(0.10 / 0.15)
     assert vector.values["repricing_60d"] == pytest.approx(0.10 / 0.30)
+
+
+def test_limit_down_sequence_is_negative_repricing_not_positive_crowding() -> None:
+    closes = ramp_tail(10.0, 20, 5.0)
+    market = make_market(DATES, closes, bench_close=100.0, vol=1000.0, turnover=1.0)
+    vector = compute_crowding_features(market, STOCK, AS_OF)
+
+    assert vector.values["excess_return_20d"] == pytest.approx(-0.5)
+    assert vector.values["repricing_20d"] == pytest.approx(0.0)
+    assert "already_repriced_or_crowded" not in vector.risk_flags
 
 
 def test_ordinary_low_attention_security_has_no_crowding_flag() -> None:
@@ -448,6 +577,23 @@ def test_ordinary_low_attention_security_has_no_crowding_flag() -> None:
     assert vector.values["turnover_spike_penalty"] == pytest.approx(0.0)
     assert "already_repriced_or_crowded" not in vector.risk_flags
     assert vector.values["crowding_penalty"] is not None
+
+
+def test_non_positive_valuation_is_unsupported_not_a_percentile() -> None:
+    negative_pe = make_market(
+        DATES,
+        flat_closes(10.0),
+        bench_close=100.0,
+        vol=1000.0,
+        turnover=1.0,
+        pe=[-5.0] * len(DATES),
+    )
+    vector = compute_crowding_features(negative_pe, STOCK, AS_OF)
+
+    assert vector.values["valuation_percentile"] is None
+    assert vector.evidence["valuation_percentile"].reason == "valuation_non_positive"
+    assert vector.evidence["valuation_percentile"].status == "unknown"
+    assert vector.values["valuation_penalty"] is None
 
 
 def test_missing_valuation_is_unknown_and_excluded_from_penalty() -> None:
@@ -474,7 +620,7 @@ def test_missing_valuation_is_unknown_and_excluded_from_penalty() -> None:
     # enabling valuation in the penalty changes the composition
     enabled = CrowdingConfig(include_valuation_in_penalty=True)
     vector3 = compute_crowding_features(with_pe, STOCK, AS_OF, config=enabled)
-    assert vector3.values["valuation_penalty"] == pytest.approx(0.0)
+    assert vector3.values["valuation_penalty"] == pytest.approx(1.0)
 
 
 def test_missing_evidence_is_fully_unknown() -> None:
@@ -486,12 +632,16 @@ def test_missing_evidence_is_fully_unknown() -> None:
     assert vector.evidence["recent_excess_return"].reason == "no_market_history"
     assert "already_repriced_or_crowded" not in vector.risk_flags
     assert set(vector.unknown_features) == {
+        "stock_return_20d",
         "recent_return_20d",
         "benchmark_return_20d",
+        "excess_return_20d",
         "recent_excess_return",
+        "stock_return_60d",
         "momentum_60d",
         "benchmark_return_60d",
         "excess_return_60d",
+        "distance_to_52w_high",
         "distance_52w_high",
         "high_52w",
         "current_price",
@@ -698,43 +848,63 @@ def test_disclosure_timing_unprovable_is_unknown() -> None:
 
 
 def financial_frames() -> dict[str, pd.DataFrame]:
-    periods = ["20240331", "20240630", "20240930", "20241231"]
-    available = ["20240430", "20240830", "20241030", "20250330"]
+    periods = [
+        "20230331",
+        "20230630",
+        "20230930",
+        "20231231",
+        "20240331",
+        "20240630",
+        "20240930",
+        "20241231",
+    ]
+    available = [
+        "20230430",
+        "20230830",
+        "20231030",
+        "20240330",
+        "20240430",
+        "20240830",
+        "20241030",
+        "20250330",
+    ]
     common = {
-        "ts_code": [STOCK] * 4,
+        "ts_code": [STOCK] * 8,
         "end_date": periods,
         "ann_date": available,
         "f_ann_date": available,
-        "report_type": ["1"] * 4,
-        "update_flag": ["0"] * 4,
+        "report_type": ["1"] * 8,
+        "update_flag": ["0"] * 8,
     }
     return {
         "income": pd.DataFrame(
             {
                 **common,
-                "revenue": [100.0, 115.0, 135.0, 160.0],
-                "n_income_attr_p": [4.0, 7.0, 11.0, 17.0],
-                "operate_profit": [8.0, 11.0, 16.0, 23.0],
-                "gross_profit": [25.0, 30.0, 38.0, 48.0],
-                "total_profit": [5.0, 8.0, 12.0, 18.0],
-                "non_oper_income": [0.2, 0.2, 0.3, 0.3],
-                "assets_impair_loss": [0.1, 0.1, 0.1, 0.1],
+                "revenue": [80.0, 90.0, 100.0, 110.0, 100.0, 115.0, 135.0, 160.0],
+                "n_income_attr_p": [3.0, 3.5, 4.0, 4.5, 4.0, 7.0, 11.0, 17.0],
+                "operate_profit": [6.0, 7.0, 8.0, 9.0, 8.0, 11.0, 16.0, 23.0],
+                "gross_profit": [20.0, 22.0, 25.0, 27.0, 25.0, 30.0, 38.0, 48.0],
+                "total_profit": [4.0, 4.5, 5.0, 5.5, 5.0, 8.0, 12.0, 18.0],
+                "non_oper_income": [0.2, 0.2, 0.2, 0.2, 0.2, 0.2, 0.3, 0.3],
+                "assets_impair_loss": [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1],
             }
         ),
         "balancesheet": pd.DataFrame(
             {
                 **common,
-                "total_assets": [200.0, 205.0, 210.0, 220.0],
-                "total_hldr_eqy_inc_min_int": [100.0, 102.0, 105.0, 110.0],
-                "total_liab": [100.0, 103.0, 105.0, 110.0],
-                "inventories": [20.0, 21.0, 22.0, 23.0],
-                "accounts_receiv": [18.0, 19.0, 20.0, 21.0],
+                "total_assets": [190.0, 195.0, 200.0, 202.0, 200.0, 205.0, 210.0, 220.0],
+                "total_hldr_eqy_inc_min_int": [
+                    95.0, 97.0, 100.0, 101.0, 100.0, 102.0, 105.0, 110.0
+                ],
+                "total_liab": [95.0, 98.0, 100.0, 101.0, 100.0, 103.0, 105.0, 110.0],
+                "inventories": [19.0, 20.0, 20.0, 21.0, 20.0, 21.0, 22.0, 23.0],
+                "accounts_receiv": [17.0, 18.0, 18.0, 19.0, 18.0, 19.0, 20.0, 21.0],
             }
         ),
         "cashflow": pd.DataFrame(
             {
                 **common,
-                "n_cashflow_act": [6.0, 8.0, 12.0, 18.0],
+                "n_cashflow_act": [5.0, 5.5, 6.0, 6.5, 6.0, 8.0, 12.0, 18.0],
             }
         ),
     }
@@ -746,7 +916,7 @@ def test_fundamental_and_crowding_outputs_are_independent() -> None:
     trend = compute_trend_features(frames, STOCK, AS_OF)
     compute_quality_features(frames, STOCK, AS_OF)  # quality stays independent too
     assert fundamental.values["revenue_yoy"] is not None
-    assert trend.values["consecutive_improvement"] == 3
+    assert trend.evidence["consecutive_improvement"].reason == "trend_redesign_out_of_scope"
 
     crowded_market = make_market(
         DATES, ramp_tail(10.0, 20, 15.0), bench_close=100.0, vol=1000.0, turnover=1.0
@@ -811,4 +981,7 @@ def test_outputs_are_deterministic() -> None:
     )
     first = compute_crowding_features(market, STOCK, AS_OF)
     second = compute_crowding_features(market, STOCK, AS_OF)
-    assert first.as_dict() == second.as_dict()
+    shuffled = compute_crowding_features(
+        market.sample(frac=1.0, random_state=19).reset_index(drop=True), STOCK, AS_OF
+    )
+    assert first.as_dict() == second.as_dict() == shuffled.as_dict()
