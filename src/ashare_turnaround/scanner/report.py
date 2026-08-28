@@ -30,6 +30,7 @@ def candidate_report(result: ReplayResult, ts_code: str) -> dict[str, Any]:
 
 def candidate_report_markdown(report: dict[str, Any]) -> str:
     score = report["score"]
+    contract_version = report["metadata"].get("comparable_period_contract_version", "unknown")
     lines = [
         f"# Turnaround candidate report: {report['ts_code']}",
         "",
@@ -37,6 +38,7 @@ def candidate_report_markdown(report: dict[str, Any]) -> str:
         f"- Selected: `{report['selected']}`",
         f"- Turnaround score: `{score['turnaround_score']}`",
         f"- Score version: `{score['score_version']}`",
+        f"- Comparable-period contract: `{contract_version}`",
         f"- Risk flags: `{', '.join(report['risk_flags']) or 'none'}`",
         f"- Rejected reasons: `{', '.join(report['rejected_reasons']) or 'none'}`",
         "",

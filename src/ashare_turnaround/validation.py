@@ -128,9 +128,7 @@ def _frame_result(
 
     full_market = "NOT_TESTED"
     if api in VIP_API_NAMES:
-        notes = (
-            f"bounded period probe period={params.get('period')} without ts_code; " + notes
-        )
+        notes = f"bounded period probe period={params.get('period')} without ts_code; " + notes
         if status == "PASS" and "ts_code" in frame.columns:
             full_market = "YES (bounded period probe)"
         elif status == "EMPTY":
@@ -357,7 +355,9 @@ def render_pit_mapping_markdown(report: ValidationReport) -> str:
         "# Financial PIT field mapping",
         "",
         "The canonical PIT columns are `report_period`, `announcement_date`, "
-        "`actual_available_date`, `report_type`, `update_flag`, `retrieved_at`, and `source`.",
+        "`actual_available_date`, `report_type`, `update_flag`, `retrieved_at`, and `source`; "
+        "comparable-period columns include fiscal year/period, quarter, report family, "
+        "statement type, duration semantics, scope, unit, and source version identity.",
         "A row with no usable `actual_available_date` is excluded from an as-of query; "
         "the implementation does not invent a date.",
         "",
@@ -449,9 +449,10 @@ def render_pit_mapping_markdown(report: ValidationReport) -> str:
             "",
             "## Quarterization scope",
             "",
-            "The code contains only a prototype for cumulative `income`/`cashflow` "
-            "values: Q1, H1-Q1, Q3-H1, and FY-Q3. Live bounded checks are recorded "
-            "in `docs/pit-validation.md`; this is not a factor calculation.",
+            "Cumulative `income`/`cashflow` values are quarterized only through the "
+            "validated Q1, H1-Q1, Q3-H1, and FY-Q3 chain; ambiguity returns UNKNOWN. "
+            "A balance sheet is point-in-time and is not quarterized. Live bounded "
+            "checks are recorded in `docs/pit-validation.md`; this is not a factor calculation.",
             "",
         ]
     )

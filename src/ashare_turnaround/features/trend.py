@@ -1,4 +1,4 @@
-"""Trend, persistence, and acceleration features."""
+"""Existing trend feature seam with comparable-period input protection."""
 
 from __future__ import annotations
 
@@ -6,42 +6,49 @@ from datetime import date, datetime
 
 import pandas as pd
 
-from ..pit.financial import derive_single_quarter
+from ..pit.comparable import COMPARABLE_PERIOD_CONTRACT_VERSION
 from ..scanner.contracts import FeatureVector
-from .common import add_known, add_unknown, canonical_history, new_vector, period_texts
+from .common import (
+    add_unknown,
+    canonical_history,
+    latest_validated_row,
+    new_vector,
+    single_quarter_history,
+)
+
+_TREND_REDESIGN_REASON = "trend_redesign_out_of_scope"
 
 
-def _series(history: pd.DataFrame, *fields: str) -> tuple[pd.Series, str | None]:
-    if history.empty:
-        return pd.Series(dtype="float64"), None
-    for field in fields:
-        if field in history.columns:
-            values = pd.to_numeric(history[field], errors="coerce")
-            if values.notna().any():
-                return values, field
-    return pd.Series(dtype="float64"), None
+def _field(history: pd.DataFrame, *fields: str) -> str | None:
+    for field_name in fields:
+        if (
+            field_name in history.columns
+            and pd.to_numeric(history[field_name], errors="coerce").notna().any()
+        ):
+            return field_name
+    return None
 
 
-def _acceleration(values: pd.Series) -> float | None:
-    values = values.dropna()
-    if len(values) < 3:
-        return None
-    first_change = float(values.iloc[-2] - values.iloc[-3])
-    second_change = float(values.iloc[-1] - values.iloc[-2])
-    return second_change - first_change
+def _valid_values(frame: pd.DataFrame, value_column: str | None) -> pd.Series:
+    if value_column is None or value_column not in frame.columns:
+        return pd.Series(dtype="float64")
+    status = frame.get(f"{value_column}_status", pd.Series("known", index=frame.index))
+    values = pd.to_numeric(frame[value_column], errors="coerce")
+    return values.where(status.astype("string").eq("known"))
 
 
-def _improvement_count(values: pd.Series) -> int | None:
-    values = values.dropna()
-    if len(values) < 3:
-        return None
-    count = 0
-    for left, right in zip(values.iloc[-1:0:-1], values.iloc[-2::-1]):
-        if left > right:
-            count += 1
-        else:
-            break
-    return count
+def _add_trend_unknowns(
+    vector: FeatureVector, fields: tuple[str, ...], history: pd.DataFrame
+) -> None:
+    for name in ("yoy_acceleration", "qoq_acceleration", "margin_inflection", "ttm_trend"):
+        add_unknown(
+            vector,
+            name,
+            datasets=("income",),
+            fields=fields,
+            history=history,
+            reason=_TREND_REDESIGN_REASON,
+        )
 
 
 def compute_trend_features(
@@ -49,6 +56,13 @@ def compute_trend_features(
     code: str,
     as_of_date: str | date | datetime | pd.Timestamp,
 ) -> FeatureVector:
+    """Keep #28 calculations out while refusing invalid adjacent periods.
+
+    Sign-transition input is restricted to validated single quarters.  The
+    persistence/acceleration/margin-inflection/TTM trend redesign remains
+    explicit ``UNKNOWN`` until the separately scoped #28 work.
+    """
+
     vector = new_vector(code, as_of_date)
     income = canonical_history("income", financial_frames.get("income"), code, as_of_date)
     if income.empty:
@@ -61,82 +75,87 @@ def compute_trend_features(
             "ttm_trend",
         ):
             add_unknown(
-                vector, name, datasets=("income",), fields=(), reason="no PIT income history"
+                vector,
+                name,
+                datasets=("income",),
+                fields=(),
+                reason="no PIT income history",
             )
         return vector
-    income = income.copy()
-    income["end_date"] = income["report_period"]
-    profit_values, profit_field = _series(income, "n_income_attr_p", "n_income", "net_profit")
-    revenue_values, revenue_field = _series(income, "revenue", "total_revenue")
-    operating_values, operating_field = _series(income, "operate_profit", "operating_profit")
-    try:
-        profit_quarters = derive_single_quarter(
-            income.assign(**{profit_field or "net_profit": profit_values}),
-            profit_field or "net_profit",
-        )["single_quarter"]
-    except (KeyError, ValueError):
-        profit_quarters = pd.Series(dtype="float64")
-    periods = period_texts(income)
-    source_fields = (profit_field,) if profit_field else ("n_income_attr_p", "n_income")
-    add_known(
-        vector,
-        "yoy_acceleration",
-        _acceleration(profit_values),
-        datasets=("income",),
-        fields=source_fields,
-        history=income,
+
+    profit_field = _field(income, "n_income_attr_p", "n_income", "net_profit")
+    revenue_field = _field(income, "revenue", "total_revenue")
+    operating_field = _field(income, "operate_profit", "operating_profit")
+    fields = tuple(
+        field_name
+        for field_name in (profit_field, revenue_field, operating_field)
+        if field_name is not None
     )
-    add_known(
-        vector,
-        "qoq_acceleration",
-        _acceleration(profit_quarters),
-        datasets=("income",),
-        fields=source_fields,
-        history=income,
+    single, columns = single_quarter_history(
+        income,
+        "income",
+        fields,
+        as_of_date=as_of_date,
     )
-    add_known(
+    if single.empty or profit_field is None:
+        _add_trend_unknowns(vector, fields, single)
+        add_unknown(
+            vector,
+            "consecutive_improvement",
+            datasets=("income",),
+            fields=fields,
+            history=single,
+            reason=_TREND_REDESIGN_REASON,
+        )
+        vector.add(
+            "sign_transition",
+            None,
+            status="insufficient_data",
+            source_datasets=("income",),
+            source_fields=fields,
+            periods=(),
+            availability_dates=(),
+            reason="missing_value",
+            contract_version=COMPARABLE_PERIOD_CONTRACT_VERSION,
+        )
+        return vector
+
+    profit_column = columns[profit_field]
+    profit_values = _valid_values(single, profit_column)
+    fields = (profit_field,)
+    _add_trend_unknowns(vector, fields, single)
+    add_unknown(
         vector,
         "consecutive_improvement",
-        _improvement_count(profit_values),
         datasets=("income",),
-        fields=source_fields,
-        history=income,
+        fields=fields,
+        history=single,
+        reason=_TREND_REDESIGN_REASON,
     )
-    sign_transition = None
+
     clean_profit = profit_values.dropna()
+    sign_transition = None
     if len(clean_profit) >= 2:
         sign_transition = bool(clean_profit.iloc[-2] <= 0 < clean_profit.iloc[-1])
+    latest, latest_reason = latest_validated_row(single, value_column=profit_column)
+    periods = ()
+    availability = ()
+    if latest is not None and pd.notna(latest.get("report_period")):
+        periods = (pd.Timestamp(latest["report_period"]).strftime("%Y%m%d"),)
+        available = pd.to_datetime(latest.get("actual_available_date"), errors="coerce")
+        if pd.notna(available):
+            availability = (pd.Timestamp(available).strftime("%Y%m%d"),)
     vector.add(
         "sign_transition",
         sign_transition,
         status="known" if sign_transition is not None else "insufficient_data",
         source_datasets=("income",),
-        source_fields=source_fields,
+        source_fields=fields,
         periods=periods,
-        reason=None if sign_transition is not None else "at least two comparable periods required",
-    )
-    margins = pd.Series(dtype="float64")
-    if not revenue_values.empty and not operating_values.empty:
-        margins = operating_values / revenue_values.replace(0, pd.NA)
-    add_known(
-        vector,
-        "margin_inflection",
-        _acceleration(margins),
-        datasets=("income",),
-        fields=tuple(value for value in (operating_field, revenue_field) if value),
-        history=income,
-    )
-    if len(profit_quarters.dropna()) >= 8:
-        ttm = profit_quarters.rolling(4).sum().dropna()
-        ttm_trend = float(ttm.iloc[-1] - ttm.iloc[-5]) if len(ttm) >= 5 else None
-    else:
-        ttm_trend = None
-    add_known(
-        vector,
-        "ttm_trend",
-        ttm_trend,
-        datasets=("income",),
-        fields=source_fields,
-        history=income,
+        availability_dates=availability,
+        reason=latest_reason if sign_transition is None else None,
+        current_period=periods[0] if periods else None,
+        period_semantics="SINGLE_QUARTER",
+        contract_version=COMPARABLE_PERIOD_CONTRACT_VERSION,
     )
     return vector

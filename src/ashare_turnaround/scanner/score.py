@@ -10,6 +10,7 @@ from typing import Any
 
 import pandas as pd
 
+from ..pit.comparable import COMPARABLE_PERIOD_CONTRACT_VERSION
 from .contracts import FeatureVector
 
 FEATURE_GROUP_COMPONENTS: dict[str, str] = {
@@ -131,6 +132,7 @@ class ScoreResult:
     unknown_flags: tuple[str, ...]
     rejected: bool
     rejected_reasons: tuple[str, ...]
+    comparable_period_contract_version: str = COMPARABLE_PERIOD_CONTRACT_VERSION
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -245,6 +247,7 @@ def score_feature_vector(
         unknown_flags=tuple(vector.unknown_features),
         rejected=bool(rejected_reasons),
         rejected_reasons=rejected_reasons,
+        comparable_period_contract_version=vector.comparable_period_contract_version,
     )
 
 
@@ -259,6 +262,7 @@ def rank_scores(
             "ts_code": result.ts_code,
             "as_of_date": result.as_of_date,
             "score_version": result.score_version,
+            "comparable_period_contract_version": result.comparable_period_contract_version,
             "enabled_groups": "|".join(result.enabled_groups),
             "turnaround_score": result.turnaround_score,
             "risk_flags": "|".join(result.risk_flags),
