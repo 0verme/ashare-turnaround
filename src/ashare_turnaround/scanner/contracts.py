@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from typing import Any
 
 from ..pit.comparable import COMPARABLE_PERIOD_CONTRACT_VERSION
@@ -37,6 +37,7 @@ class FeatureEvidence:
     contract_version: str = COMPARABLE_PERIOD_CONTRACT_VERSION
     trend_contract_version: str | None = None
     provenance: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -56,6 +57,7 @@ class FeatureVector:
     unknown_features: list[str] = field(default_factory=list)
     comparable_period_contract_version: str = COMPARABLE_PERIOD_CONTRACT_VERSION
     trend_contract_version: str = TURNAROUND_TREND_CONTRACT_VERSION
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     def add(
         self,
@@ -79,6 +81,7 @@ class FeatureVector:
         contract_version: str | None = None,
         trend_contract_version: str | None = None,
         provenance: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         resolved_contract_version = contract_version or self.comparable_period_contract_version
         if resolved_contract_version != self.comparable_period_contract_version:
@@ -109,6 +112,7 @@ class FeatureVector:
             contract_version=resolved_contract_version,
             trend_contract_version=trend_contract_version,
             provenance=provenance or {},
+            metadata=metadata or {},
         )
         if (
             status
@@ -130,8 +134,24 @@ class FeatureVector:
             raise ValueError("feature vectors must share comparable-period contract version")
         if self.trend_contract_version != other.trend_contract_version:
             raise ValueError("feature vectors must share trend contract version")
-        self.values.update(other.values)
-        self.evidence.update(other.evidence)
+        namespace = other.metadata.get("namespace")
+        name_map: dict[str, str] = {}
+        for name, value in other.values.items():
+            target = name
+            if namespace and target in self.values:
+                target = f"{namespace}_{name}"
+                suffix = 2
+                while target in self.values:
+                    target = f"{namespace}_{name}_{suffix}"
+                    suffix += 1
+            name_map[name] = target
+            self.values[target] = value
+            evidence = other.evidence.get(name)
+            if evidence is not None:
+                self.evidence[target] = (
+                    evidence if target == name else replace(evidence, feature=target)
+                )
+        self.metadata.update(other.metadata)
         for value in (*other.risk_flags,):
             if value not in self.risk_flags:
                 self.risk_flags.append(value)
@@ -139,13 +159,20 @@ class FeatureVector:
             if value not in self.rejected_reasons:
                 self.rejected_reasons.append(value)
         for value in (*other.unknown_features,):
-            if value not in self.unknown_features:
-                self.unknown_features.append(value)
+            target = name_map.get(value, value)
+            if target not in self.unknown_features:
+                self.unknown_features.append(target)
         return self
 
     @property
     def rejected(self) -> bool:
         return bool(self.rejected_reasons)
+
+    @property
+    def feature_metadata(self) -> dict[str, Any]:
+        """Compatibility alias for callers that name this field explicitly."""
+
+        return self.metadata
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -159,6 +186,7 @@ class FeatureVector:
             "risk_flags": list(self.risk_flags),
             "rejected_reasons": list(self.rejected_reasons),
             "unknown_features": list(self.unknown_features),
+            "metadata": dict(self.metadata),
         }
 
 
@@ -178,6 +206,7 @@ def flatten_feature_vectors(vectors: list[FeatureVector] | tuple[FeatureVector, 
             "risk_flags": "|".join(vector.risk_flags),
             "rejected_reasons": "|".join(vector.rejected_reasons),
             "unknown_features": "|".join(vector.unknown_features),
+            "feature_metadata": dict(vector.metadata),
         }
         row.update(vector.values)
         rows.append(row)

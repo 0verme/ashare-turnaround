@@ -33,6 +33,7 @@ replay / daily snapshot / evaluation / report
 | #11 | Trend, persistence, acceleration | `features.trend.compute_trend_features` |
 | #12 | Quality gate and false-turnaround flags | `features.quality.compute_quality_features` |
 | #13 | Low-attention proxies | `features.market.compute_attention_features` |
+| #29 | Low-attention v2 calibration (cross-sectional context) | `features.low_attention.compute_low_attention_v2` — research-only; see [docs/low-attention-v2.md](low-attention-v2.md); v1/v2 boundary preserved (production score still reads v1 `attention_score`) |
 | #14 | Low-expectation/crowding proxies | `features.market.compute_crowding_features` |
 | #15 | Weighted transparent score | `scanner.score.score_feature_vector` |
 | #16 | Historical PIT replay | `scanner.replay.run_replay` |
@@ -54,7 +55,9 @@ has the proposed adversarial PIT test/documentation in [PR #24](https://github.c
 Each candidate is represented by `scanner.contracts.FeatureVector`:
 
 - `ts_code` and normalized `as_of_date` identify the decision;
-- `version` is currently `features-v1`;
+- `version` is currently `features-v1` for the production composite; the
+  additive Low Attention v2 group declares `low-attention-v2.0.0` in
+  `FeatureVector.metadata["low_attention_v2"]`;
 - `comparable_period_contract_version` is `comparable-period-v1`;
 - `trend_contract_version` is `turnaround-trend-v2`; this is independent of
   the comparable-period version;
@@ -63,7 +66,10 @@ Each candidate is represented by `scanner.contracts.FeatureVector`:
   values, period semantics, source versions, and actual availability dates;
 - `risk_flags` are soft penalties while `rejected_reasons` are hard gates;
 - `unknown_features` is populated for `unknown`, `insufficient_data`,
-  `insufficient_history`, `discontinuous`, and `unsupported` values.
+  `insufficient_history`, `discontinuous`, and `unsupported` values;
+- score inputs, replay metadata, and candidate reports repeat the low-attention
+  contract version and fields. The score still consumes only v1
+  `attention_score`; v2 metadata/evidence is research-only.
 
 Feature groups only add namespaced values to this object. They do not change the
 universe, score weights, CLI parser, or another feature group's data. This keeps

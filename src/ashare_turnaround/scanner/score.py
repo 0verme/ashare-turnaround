@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from typing import Any
 
 import pandas as pd
@@ -139,6 +139,13 @@ class ScoreResult:
     rejected_reasons: tuple[str, ...]
     comparable_period_contract_version: str = COMPARABLE_PERIOD_CONTRACT_VERSION
     trend_contract_version: str = TURNAROUND_TREND_CONTRACT_VERSION
+    input_metadata: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def score_input_metadata(self) -> dict[str, Any]:
+        """Compatibility alias for the provenance of score inputs."""
+
+        return self.input_metadata
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -207,6 +214,21 @@ def score_feature_vector(
     if settings.trend_contract_version != vector.trend_contract_version:
         raise ValueError("score and feature vectors use different trend contract versions")
     values = vector.values
+    attention_metadata = vector.metadata.get("low_attention_v2", {})
+    input_metadata = {
+        "feature_version": vector.version,
+        "comparable_period_contract_version": vector.comparable_period_contract_version,
+        "attention_contract_version": attention_metadata.get(
+            "attention_contract_version"
+        ),
+        "low_attention_contract_version": attention_metadata.get(
+            "attention_contract_version"
+        ),
+        "attention_fields": list(attention_metadata.get("fields", ())),
+        "attention_v2_research_only": bool(attention_metadata),
+        "production_attention_input": "attention_score",
+        "production_score_uses_low_attention_v2": False,
+    }
     components: dict[str, float | None] = {
         "fundamental_score": _fundamental_score(values),
         "trend_score": _trend_score(values),
@@ -222,7 +244,10 @@ def score_feature_vector(
     }
     enabled = set(settings.enabled_groups)
     penalties: dict[str, float] = {}
+    research_only_flags = set(attention_metadata.get("research_only_risk_flags", ()))
     for flag in vector.risk_flags:
+        if flag in research_only_flags:
+            continue
         group = _risk_flag_group(flag)
         if group is not None and group not in enabled:
             continue
@@ -262,6 +287,7 @@ def score_feature_vector(
         rejected_reasons=rejected_reasons,
         comparable_period_contract_version=vector.comparable_period_contract_version,
         trend_contract_version=vector.trend_contract_version,
+        input_metadata=input_metadata,
     )
 
 
@@ -278,6 +304,7 @@ def rank_scores(
             "score_version": result.score_version,
             "comparable_period_contract_version": result.comparable_period_contract_version,
             "trend_contract_version": result.trend_contract_version,
+            "attention_contract_version": result.input_metadata.get("attention_contract_version"),
             "enabled_groups": "|".join(result.enabled_groups),
             "turnaround_score": result.turnaround_score,
             "risk_flags": "|".join(result.risk_flags),

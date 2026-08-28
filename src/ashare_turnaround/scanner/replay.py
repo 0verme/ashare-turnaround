@@ -13,9 +13,13 @@ from typing import Any
 import pandas as pd
 
 from ..features import (
+    LOW_ATTENTION_V2_FIELDS,
+    LOW_ATTENTION_V2_VERSION,
+    LowAttentionConfig,
     compute_attention_features,
     compute_crowding_features,
     compute_fundamental_features,
+    compute_low_attention_v2,
     compute_quality_features,
     compute_trend_features,
 )
@@ -38,6 +42,7 @@ class ReplayConfig:
     top_n: int = 20
     universe: UniverseConfig = field(default_factory=UniverseConfig)
     score: ScoreConfig = field(default_factory=ScoreConfig)
+    low_attention: LowAttentionConfig = field(default_factory=LowAttentionConfig)
 
     def __post_init__(self) -> None:
         if self.top_n <= 0:
@@ -48,8 +53,11 @@ class ReplayConfig:
             "top_n": self.top_n,
             "comparable_period_contract_version": COMPARABLE_PERIOD_CONTRACT_VERSION,
             "trend_contract_version": TURNAROUND_TREND_CONTRACT_VERSION,
+            "attention_contract_version": self.low_attention.version,
+            "low_attention_version": self.low_attention.version,
             "universe": asdict(self.universe),
             "score": self.score.declared(),
+            "low_attention": self.low_attention.declared(),
         }
 
     @property
@@ -76,6 +84,8 @@ class ReplayResult:
     warnings: tuple[str, ...] = ()
     comparable_period_contract_version: str = COMPARABLE_PERIOD_CONTRACT_VERSION
     trend_contract_version: str = TURNAROUND_TREND_CONTRACT_VERSION
+    attention_contract_version: str = LOW_ATTENTION_V2_VERSION
+    attention_feature_fields: tuple[str, ...] = LOW_ATTENTION_V2_FIELDS
 
     def metadata(self) -> dict[str, Any]:
         return {
@@ -92,6 +102,11 @@ class ReplayResult:
             "warnings": list(self.warnings),
             "comparable_period_contract_version": self.comparable_period_contract_version,
             "trend_contract_version": self.trend_contract_version,
+            "attention_contract_version": self.attention_contract_version,
+            "low_attention_version": self.attention_contract_version,
+            "attention_feature_fields": list(self.attention_feature_fields),
+            "attention_v2_research_only": True,
+            "production_score_attention_input": "attention_score",
         }
 
     def artifact_dict(self) -> dict[str, Any]:
@@ -183,6 +198,37 @@ def _frames_from_store(data_dir: str | Path) -> dict[str, pd.DataFrame]:
     return {dataset: store.read(dataset) for dataset in datasets}
 
 
+def _attach_low_attention_evidence(
+    vector: FeatureVector, attention: FeatureVector
+) -> None:
+    """Attach v2 evidence without overwriting the v1 ``abnormal_volume`` key.
+
+    Replay vectors also carry the production v1 market group.  The two APIs
+    historically used the same name for abnormal volume, so a blind merge
+    would silently replace v1 evidence.  Non-colliding v2 fields are exposed
+    directly; a colliding field is explicitly namespaced and the complete v2
+    evidence is retained in vector metadata.
+    """
+
+    attached_evidence: dict[str, dict[str, Any]] = {}
+    for name, evidence in attention.evidence.items():
+        target = name if name not in vector.values else f"low_attention_v2_{name}"
+        if target in vector.values:
+            target = f"{target}_research"
+        vector.values[target] = attention.values.get(name)
+        vector.evidence[target] = (
+            evidence if target == name else replace(evidence, feature=target)
+        )
+        attached_evidence[target] = vector.evidence[target].as_dict()
+        if evidence.status in {"unknown", "insufficient_data", "unsupported"}:
+            if target not in vector.unknown_features:
+                vector.unknown_features.append(target)
+    vector.metadata["low_attention_v2"] = dict(attention.metadata.get("low_attention_v2", {}))
+    vector.metadata["low_attention_v2_evidence"] = attached_evidence
+    vector.metadata["low_attention_v2_risk_flags"] = list(attention.risk_flags)
+    vector.metadata["low_attention_v2_source_version"] = attention.version
+
+
 def run_replay_frames(
     frames: dict[str, pd.DataFrame],
     *,
@@ -215,6 +261,7 @@ def run_replay_frames(
     vectors: list[FeatureVector] = []
     scores: list[ScoreResult] = []
     warnings = list(universe.warnings)
+    investable_codes = set(universe.included["ts_code"].astype(str))
     for _, row in universe.included.iterrows():
         code = str(row["ts_code"])
         vector = compute_fundamental_features(financial_frames, code, as_of)
@@ -222,6 +269,15 @@ def run_replay_frames(
         vector.merge(compute_quality_features(financial_frames, code, as_of))
         vector.merge(compute_attention_features(market, code, as_of))
         vector.merge(compute_crowding_features(market, code, as_of))
+        low_attention = compute_low_attention_v2(
+            market,
+            code,
+            as_of,
+            config=settings.low_attention,
+            list_date=row.get("list_date"),
+            investable_codes=investable_codes,
+        )
+        _attach_low_attention_evidence(vector, low_attention)
         vectors.append(vector)
         scores.append(score_feature_vector(vector, config=settings.score))
     ranked = rank_scores(scores, top_n=settings.top_n)
@@ -248,6 +304,9 @@ def run_replay_frames(
     ranked["feature_version"] = "features-v1"
     ranked["comparable_period_contract_version"] = COMPARABLE_PERIOD_CONTRACT_VERSION
     ranked["trend_contract_version"] = TURNAROUND_TREND_CONTRACT_VERSION
+    ranked["attention_contract_version"] = settings.low_attention.version
+    ranked["low_attention_version"] = settings.low_attention.version
+    ranked["attention_v2_research_only"] = True
     ranked["score_config_fingerprint"] = settings.score.fingerprint
     return ReplayResult(
         as_of_date=as_of_text,
@@ -266,6 +325,8 @@ def run_replay_frames(
         warnings=tuple(dict.fromkeys(warnings)),
         comparable_period_contract_version=COMPARABLE_PERIOD_CONTRACT_VERSION,
         trend_contract_version=TURNAROUND_TREND_CONTRACT_VERSION,
+        attention_contract_version=settings.low_attention.version,
+        attention_feature_fields=LOW_ATTENTION_V2_FIELDS,
     )
 
 
