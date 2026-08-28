@@ -1,0 +1,408 @@
+from __future__ import annotations
+
+import json
+
+import pandas as pd
+import pytest
+
+from ashare_turnaround.scanner.replay_validation import (
+    HISTORICAL_UNIVERSE_CONTRACT_VERSION,
+    MARKET_REGIME_CONTRACT_VERSION,
+    MONTHLY_SELECTION_RULE_VERSION,
+    PIT_REPLAY_VALIDATION_CONTRACT_VERSION,
+    ResourceBlocked,
+    build_input_manifest,
+    classify_market_regime,
+    run_adversarial_fixtures,
+    run_replay_validation,
+    run_replay_validation_frames,
+    select_monthly_snapshot_dates,
+    validate_replay_pit,
+    write_replay_validation_artifacts,
+)
+from ashare_turnaround.scanner.universe import UniverseConfig, build_investable_universe
+from ashare_turnaround.storage.parquet import RawParquetStore
+
+CODE = "600000.SH"
+BENCHMARK = "000300.SH"
+
+
+def _calendar(start: str = "2025-03-03", end: str = "2025-06-30") -> pd.DataFrame:
+    dates = pd.date_range(start, end, freq="B")
+    return pd.DataFrame(
+        {
+            "exchange": ["SSE"] * len(dates),
+            "cal_date": dates.strftime("%Y%m%d"),
+            "is_open": [1] * len(dates),
+        }
+    )
+
+
+def _validation_frames() -> dict[str, pd.DataFrame]:
+    calendar = _calendar()
+    dates = calendar["cal_date"].tolist()
+    stock_dates = dates
+    market = pd.DataFrame(
+        {
+            "ts_code": [CODE] * len(stock_dates),
+            "trade_date": stock_dates,
+            "close": [10.0 + index * 0.03 for index in range(len(stock_dates))],
+            "vol": [1000.0 + index * 2 for index in range(len(stock_dates))],
+        }
+    )
+    daily_basic = pd.DataFrame(
+        {
+            "ts_code": [CODE] * len(stock_dates),
+            "trade_date": stock_dates,
+            "close": market["close"],
+            "turnover_rate": [1.0 + (index % 5) * 0.1 for index in range(len(stock_dates))],
+            "amount": [10000.0 + index * 10 for index in range(len(stock_dates))],
+        }
+    )
+    periods = ["20240331", "20240630", "20240930", "20241231"]
+    available = ["20240430", "20240830", "20241030", "20250330"]
+    common = {
+        "ts_code": [CODE] * 4,
+        "end_date": periods,
+        "ann_date": available,
+        "f_ann_date": available,
+        "report_type": ["1"] * 4,
+        "update_flag": ["0"] * 4,
+    }
+    income = pd.DataFrame(
+        {
+            **common,
+            "revenue": [100.0, 115.0, 135.0, 160.0],
+            "n_income_attr_p": [4.0, 7.0, 11.0, 17.0],
+            "operate_profit": [8.0, 11.0, 16.0, 23.0],
+            "gross_profit": [25.0, 30.0, 38.0, 48.0],
+            "total_profit": [5.0, 8.0, 12.0, 18.0],
+            "non_oper_income": [0.2, 0.2, 0.3, 0.3],
+            "assets_impair_loss": [0.1, 0.1, 0.1, 0.1],
+        }
+    )
+    balance = pd.DataFrame(
+        {
+            **common,
+            "total_assets": [200.0, 205.0, 210.0, 220.0],
+            "total_hldr_eqy_inc_min_int": [100.0, 102.0, 105.0, 110.0],
+            "total_liab": [100.0, 103.0, 105.0, 110.0],
+            "inventories": [20.0, 21.0, 22.0, 23.0],
+            "accounts_receiv": [18.0, 19.0, 20.0, 21.0],
+        }
+    )
+    cashflow = pd.DataFrame({**common, "n_cashflow_act": [6.0, 8.0, 12.0, 18.0]})
+    return {
+        "stock_basic": pd.DataFrame(
+            {
+                "ts_code": [CODE],
+                "symbol": ["600000"],
+                "name": ["Current name must not be projected"],
+                "list_status": ["L"],
+                "list_date": ["20100101"],
+            }
+        ),
+        "trade_cal": calendar,
+        "daily": market,
+        "daily_basic": daily_basic,
+        "index_basic": pd.DataFrame({"ts_code": [BENCHMARK], "name": ["CSI 300"]}),
+        "index_daily": pd.DataFrame(
+            {
+                "ts_code": [BENCHMARK] * len(stock_dates),
+                "trade_date": stock_dates,
+                "close": [100.0 + index * 0.02 for index in range(len(stock_dates))],
+            }
+        ),
+        "suspend_d": pd.DataFrame(columns=["ts_code", "trade_date", "suspend_type"]),
+        "disclosure_date": pd.DataFrame(),
+        "income": income,
+        "balancesheet": balance,
+        "cashflow": cashflow,
+        # The production feature path does not consume this group yet, but the
+        # validation corpus still treats its absence as an explicit input gap.
+        "fina_indicator": pd.DataFrame(
+            {"ts_code": [CODE], "end_date": ["20241231"], "ann_date": ["20250330"]}
+        ),
+    }
+
+
+def test_monthly_selection_uses_fixed_anchor_and_does_not_cross_month() -> None:
+    calendar = pd.DataFrame(
+        {
+            "exchange": ["SSE"] * 5,
+            "cal_date": ["20250114", "20250115", "20250116", "20250214", "20250217"],
+            "is_open": [1, 0, 1, 0, 1],
+        }
+    )
+
+    targets = select_monthly_snapshot_dates(
+        calendar,
+        "2025-01",
+        "2025-03",
+        today="2025-12-31",
+    )
+
+    assert targets[0].selected_trading_date == "20250116"
+    assert targets[0].selection_reason.startswith("first open trade_cal")
+    assert targets[1].selected_trading_date == "20250217"
+    assert targets[2].status == "UNAVAILABLE"
+    assert all(target.calendar_source == "trade_cal" for target in targets)
+    assert all(target.status != "AVAILABLE" or target.selected_trading_date for target in targets)
+
+
+def test_future_months_are_marked_unavailable_without_neighbor_substitution() -> None:
+    calendar = _calendar("2025-01-02", "2025-03-31")
+    targets = select_monthly_snapshot_dates(
+        calendar,
+        "2025-02",
+        "2026-02",
+        today="2025-03-31",
+    )
+
+    future = [target for target in targets if target.target_month == "2026-02"][0]
+    assert future.status == "UNAVAILABLE_FUTURE"
+    assert future.selected_trading_date is None
+    assert future.selection_reason.endswith("future substitution")
+
+
+def test_historical_universe_ignores_unsafe_current_reference_fields() -> None:
+    stock_basic = pd.DataFrame(
+        {
+            "ts_code": ["600000.SH", "600001.SH", "600002.SH", "430001.BJ"],
+            "name": ["ST Current", "delisted", "future", "BSE"],
+            "list_status": ["L", "D", "P", "L"],
+            "industry": ["changed", "changed", "changed", "changed"],
+            "market": ["主板", "主板", "主板", "BSE"],
+            "list_date": ["20100101", "20100101", "20260101", "20100101"],
+            "delist_date": [None, "20250629", None, None],
+        }
+    )
+    basic = pd.DataFrame(
+        {
+            "ts_code": stock_basic["ts_code"],
+            "trade_date": ["20250630"] * 4,
+            "amount": [100.0] * 4,
+        }
+    )
+
+    result = build_investable_universe(
+        stock_basic,
+        as_of_date="20250630",
+        daily_basic=basic,
+        config=UniverseConfig(
+            min_financial_periods=0,
+            pit_safe_only=True,
+            include_bse=False,
+        ),
+    )
+
+    assert set(result.included["ts_code"]) == {"600000.SH"}
+    assert {item.reason for item in result.excluded} == {
+        "delisted_by_as_of",
+        "listed_after_as_of",
+        "bse_excluded_by_identifier_policy",
+    }
+    assert "name" not in result.included.columns
+    assert "industry" not in result.included.columns
+    assert result.source_evidence["safe_fields"] == ["ts_code", "list_date", "delist_date"]
+    assert "status_fields_consulted" not in result.source_evidence
+
+
+def test_regime_rule_is_as_of_only_and_versioned() -> None:
+    calendar = _calendar("2025-01-02", "2025-06-30")
+    dates = calendar["cal_date"].tolist()
+    for closes, expected in (
+        ([100.0 + index * 2.0 for index in range(len(dates))], "bull"),
+        ([300.0 - index * 2.0 for index in range(len(dates))], "bear"),
+        ([100.0] * len(dates), "range"),
+    ):
+        index_daily = pd.DataFrame(
+            {"ts_code": [BENCHMARK] * len(dates), "trade_date": dates, "close": closes}
+        )
+        regime = classify_market_regime(
+            index_daily,
+            dates[-1],
+            trade_calendar=calendar,
+            lookback_sessions=20,
+        )
+        assert regime.label == expected
+        assert regime.contract_version == MARKET_REGIME_CONTRACT_VERSION
+        assert regime.endpoint_date == dates[-1]
+
+
+def test_synthetic_adversarial_matrix_passes() -> None:
+    result = run_adversarial_fixtures()
+
+    assert result["status"] == "PASS"
+    assert {value["status"] for value in result["fixtures"].values()} == {"PASS"}
+    assert "forward" in result["scope"]
+
+
+def test_validation_uses_production_replay_and_writes_complete_audit_artifacts(tmp_path) -> None:
+    frames = _validation_frames()
+    result = run_replay_validation_frames(
+        frames,
+        start="2025-06",
+        end="2025-06",
+        today="2025-12-31",
+        top_n=3,
+        stage="monthly",
+        determinism_sample=1,
+    )
+
+    assert result.contract_version == PIT_REPLAY_VALIDATION_CONTRACT_VERSION
+    assert result.selection_rule == MONTHLY_SELECTION_RULE_VERSION
+    assert result.summary["pit_violation_count"] == 0
+    assert result.summary["failed_count"] == 0
+    assert result.summary["ready_count"] == 1
+    assert result.summary["determinism_failure_count"] == 0
+    snapshot = result.snapshots[0]
+    assert snapshot.result is not None
+    assert snapshot.result.universe_pit_safe is True
+    assert snapshot.result.universe_version == HISTORICAL_UNIVERSE_CONTRACT_VERSION
+    assert snapshot.result.universe_decisions
+    assert snapshot.result.vectors
+    assert snapshot.result.scores
+    assert snapshot.result.full_ranked is snapshot.result.diagnostic_ranked
+    assert result.manual_review["review_count"] == 1
+
+    paths = write_replay_validation_artifacts(result, tmp_path / "artifacts")
+    assert set(paths) >= {"manifest", "summary", "manual_review", "snapshots"}
+    machine = json.loads(paths["summary"].read_text(encoding="utf-8"))
+    assert machine["summary"]["ranking_eligible_count"] >= 0
+    snapshot_files = list((tmp_path / "artifacts" / "snapshots").glob("*.json"))
+    assert len(snapshot_files) == 1
+    snapshot_payload = json.loads(snapshot_files[0].read_text(encoding="utf-8"))
+    assert snapshot_payload["replay"]["vectors"]
+    assert snapshot_payload["replay"]["universe"]["decisions"]
+    assert "feature_group_registry_version" in snapshot_payload["replay"]["scores"][0]
+
+
+def test_streaming_validation_writes_full_snapshot_before_releasing_result(tmp_path) -> None:
+    frames = _validation_frames()
+    output = tmp_path / "streamed"
+    result = run_replay_validation_frames(
+        frames,
+        start="2025-06",
+        end="2025-06",
+        today="2025-12-31",
+        top_n=3,
+        stage="monthly",
+        determinism_sample=0,
+        artifact_output=output,
+    )
+
+    assert result.status == "READY"
+    assert result.snapshots[0].result is None
+    snapshot_path = next((output / "snapshots").glob("*.json"))
+    snapshot_payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    assert snapshot_payload["replay"]["vectors"]
+    assert snapshot_payload["replay"]["diagnostic_ranked"]
+    assert snapshot_payload["replay"]["scores"][0]["evidence_confidence_contract_version"]
+    checkpoint = json.loads((output / "checkpoint.json").read_text(encoding="utf-8"))
+    assert checkpoint["status"] == "COMPLETE"
+    assert checkpoint["completed"][0]["status"] == "READY"
+
+
+def test_data_directory_validation_projects_only_as_of_inputs(tmp_path) -> None:
+    frames = _validation_frames()
+    data_dir = tmp_path / "data"
+    store = RawParquetStore(data_dir)
+    for dataset, frame in frames.items():
+        if frame.empty:
+            continue
+        if dataset in {"trade_cal", "daily", "daily_basic", "index_daily"}:
+            store.write(dataset, frame)
+        elif dataset in {"income", "balancesheet", "cashflow", "fina_indicator"}:
+            store.write(dataset, frame)
+        else:
+            store.write(dataset, frame)
+
+    result = run_replay_validation(
+        data_dir,
+        start="2025-06",
+        end="2025-06",
+        today="2025-12-31",
+        top_n=3,
+        content_hash=False,
+        determinism_sample=0,
+    )
+
+    assert result.summary["failed_count"] == 0
+    assert result.summary["pit_violation_count"] == 0
+    assert result.snapshots[0].result is not None
+    assert result.snapshots[0].result.input_rows["daily"] < len(frames["daily"])
+    assert result.snapshots[0].result.input_rows["daily_basic"] < len(frames["daily_basic"])
+
+
+def test_manifest_identity_is_repeatable_and_tracks_partition_metadata(tmp_path) -> None:
+    store = RawParquetStore(tmp_path / "data")
+    store.write(
+        "daily",
+        pd.DataFrame(
+            {
+                "ts_code": [CODE],
+                "trade_date": ["20250630"],
+                "close": [10.0],
+            }
+        ),
+    )
+
+    first = build_input_manifest(tmp_path / "data", content_hash=False)
+    second = build_input_manifest(tmp_path / "data", content_hash=False)
+
+    assert first["manifest_id"] == second["manifest_id"]
+    assert first["dataset_manifest_ids"] == second["dataset_manifest_ids"]
+    entry = first["datasets"]["daily"]["files"][0]
+    assert entry["rows"] == 1
+    assert entry["schema_hash"]
+    assert entry["content_hash"] is None
+
+
+def test_large_corpus_resource_gate_blocks_low_available_ram(monkeypatch, tmp_path) -> None:
+    import ashare_turnaround.scanner.replay_validation as validation
+
+    monkeypatch.setattr(validation, "_raw_corpus_bytes", lambda _: validation.LARGE_CORPUS_BYTES)
+    monkeypatch.setattr(
+        validation,
+        "_host_memory",
+        lambda: {
+            "available_bytes": 3 * 1024**3,
+            "swap_total_bytes": 4 * 1024**3,
+            "swap_free_bytes": 3 * 1024**3,
+            "swap_used_bytes": 1 * 1024**3,
+            "peak_rss_bytes": 0,
+        },
+    )
+
+    with pytest.raises(ResourceBlocked, match="available RAM"):
+        validation._assert_initial_resource_gate(tmp_path)
+
+
+def test_pit_validator_detects_future_evidence_as_hard_violation() -> None:
+    frames = _validation_frames()
+    result = (
+        run_replay_validation_frames(
+            frames,
+            start="2025-06",
+            end="2025-06",
+            today="2025-12-31",
+            determinism_sample=0,
+        )
+        .snapshots[0]
+        .result
+    )
+    assert result is not None
+    vector = result.vectors[0]
+    vector.add(
+        "future_probe",
+        1.0,
+        availability_dates=("20250701",),
+        metadata={"observation_date": "20250701"},
+    )
+    violations = validate_replay_pit(
+        result,
+        as_of_date="20250616",
+        require_historical_universe=True,
+    )
+    assert any("observation_after_as_of" in violation for violation in violations)

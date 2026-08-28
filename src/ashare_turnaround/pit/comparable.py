@@ -14,6 +14,7 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from numbers import Real
 from typing import Any
 
 import pandas as pd
@@ -131,6 +132,23 @@ def _numeric(value: Any) -> float | None:
 def _date(value: Any) -> pd.Timestamp | None:
     if _is_missing(value):
         return None
+    # Provenance-heavy trend calculations repeatedly inspect already parsed
+    # timestamps.  Avoid constructing a one-element Series for that hot path;
+    # the fallback retains the shared parser for numeric/odd raw values.
+    if isinstance(value, (pd.Timestamp, datetime, date)):
+        return pd.Timestamp(value).normalize()
+    if isinstance(value, str):
+        parsed = pd.to_datetime(value, errors="coerce")
+        return None if pd.isna(parsed) else pd.Timestamp(parsed).normalize()
+    if isinstance(value, Real):
+        parsed = normalize_date_series(pd.Series([value])).iloc[0]
+        return None if pd.isna(parsed) else pd.Timestamp(parsed).normalize()
+    try:
+        parsed = pd.Timestamp(value)
+        if not pd.isna(parsed):
+            return parsed.normalize()
+    except (TypeError, ValueError, OverflowError):
+        pass
     parsed = normalize_date_series(pd.Series([value])).iloc[0]
     return None if pd.isna(parsed) else pd.Timestamp(parsed).normalize()
 
@@ -532,11 +550,20 @@ def _has_identity_columns(frame: pd.DataFrame) -> bool:
 
 
 def _prepared_frame(dataset: str, frame: pd.DataFrame) -> pd.DataFrame:
-    output = (
-        annotate_period_identity(dataset, frame)
-        if not _has_identity_columns(frame)
-        else frame.reset_index(drop=True).copy()
-    )
+    if _has_identity_columns(frame):
+        # Canonical histories already carry normalized identity/date columns.
+        # They are read-only in all matching paths, so return them directly
+        # instead of copying/rewriting the row payload per endpoint.
+        date_columns = [
+            column
+            for column in ("report_period", "announcement_date", "actual_available_date")
+            if column in frame.columns
+        ]
+        if all(pd.api.types.is_datetime64_any_dtype(frame[column]) for column in date_columns):
+            return frame
+        output = frame.reset_index(drop=True).copy()
+    else:
+        output = annotate_period_identity(dataset, frame)
     output["report_period"] = normalize_date_series(output["report_period"])
     if "announcement_date" in output.columns:
         output["announcement_date"] = normalize_date_series(output["announcement_date"])
@@ -666,7 +693,14 @@ def identity_unknown_reason(identity: PeriodIdentity) -> str:
 def period_identity(row: Mapping[str, Any], dataset: str = "income") -> PeriodIdentity:
     """Return a :class:`PeriodIdentity` for a raw or annotated row."""
 
-    if not _has_identity_columns(pd.DataFrame([dict(row)])):
+    required_identity = {
+        "report_period",
+        "fiscal_year",
+        "quarter",
+        "duration_semantics",
+        "source_version_identity",
+    }
+    if not required_identity.issubset(row):
         row = annotate_period_identity(dataset, pd.DataFrame([dict(row)])).iloc[0].to_dict()
     year_value = row.get("fiscal_year")
     quarter_value = row.get("quarter")

@@ -14,9 +14,11 @@ from .evidence import (
     assess_evidence_coverage,
 )
 from .universe import (
+    HISTORICAL_UNIVERSE_CONTRACT_VERSION,
     UniverseConfig,
     UniverseDecision,
     UniverseResult,
+    build_historical_investable_universe,
     build_investable_universe,
 )
 
@@ -33,9 +35,11 @@ __all__ = [
     "FEATURE_GROUP_REGISTRY_VERSION",
     "UNKNOWN_EVIDENCE_STATUSES",
     "assess_evidence_coverage",
+    "HISTORICAL_UNIVERSE_CONTRACT_VERSION",
     "UniverseConfig",
     "UniverseDecision",
     "UniverseResult",
+    "build_historical_investable_universe",
     "build_investable_universe",
     "flatten_feature_vectors",
 ]

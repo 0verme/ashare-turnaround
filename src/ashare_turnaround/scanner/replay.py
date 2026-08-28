@@ -18,6 +18,7 @@ from ..features import (
     LOW_ATTENTION_V2_VERSION,
     CrowdingConfig,
     LowAttentionConfig,
+    build_cross_section_population,
     compute_attention_features,
     compute_crowding_features,
     compute_fundamental_features,
@@ -41,19 +42,28 @@ from .score import (
     rank_scores,
     score_feature_vector,
 )
-from .universe import UniverseConfig, build_investable_universe
+from .universe import (
+    HISTORICAL_UNIVERSE_CONTRACT_VERSION,
+    UniverseConfig,
+    UniverseDecision,
+    _financial_period_counts,
+    build_investable_universe,
+)
 
 
 @dataclass(frozen=True, slots=True)
 class ReplayConfig:
     top_n: int = 20
-    universe: UniverseConfig = field(default_factory=UniverseConfig)
+    universe: UniverseConfig = field(
+        default_factory=lambda: UniverseConfig(
+            version=HISTORICAL_UNIVERSE_CONTRACT_VERSION,
+            pit_safe_only=True,
+        )
+    )
     score: ScoreConfig = field(default_factory=ScoreConfig)
     crowding: CrowdingConfig = field(default_factory=CrowdingConfig)
     low_attention: LowAttentionConfig = field(default_factory=LowAttentionConfig)
-    evidence_confidence: EvidenceConfidenceConfig = field(
-        default_factory=EvidenceConfidenceConfig
-    )
+    evidence_confidence: EvidenceConfidenceConfig = field(default_factory=EvidenceConfidenceConfig)
 
     def __post_init__(self) -> None:
         if self.top_n <= 0:
@@ -110,6 +120,14 @@ class ReplayResult:
     diagnostic_ranked: pd.DataFrame | None = None
     evidence_confidence_contract_version: str = EVIDENCE_CONFIDENCE_CONTRACT_VERSION
     feature_group_registry_version: str = FEATURE_GROUP_REGISTRY_VERSION
+    # The complete universe decision log is retained for PIT audit. Formal
+    # ranking rows alone cannot explain why a security never entered a
+    # candidate set.
+    universe_decisions: tuple[UniverseDecision, ...] = ()
+    universe_warnings: tuple[str, ...] = ()
+    universe_source_evidence: dict[str, Any] = field(default_factory=dict)
+    universe_pit_safe: bool = False
+    universe_limitations: tuple[str, ...] = ()
 
     @property
     def full_ranked(self) -> pd.DataFrame:
@@ -150,6 +168,23 @@ class ReplayResult:
             "evidence_confidence_contract_version": self.evidence_confidence_contract_version,
             "feature_group_registry_version": self.feature_group_registry_version,
             "evidence_confidence": self.configuration.get("evidence_confidence", {}),
+            "universe": {
+                "version": self.universe_version,
+                "as_of_date": self.as_of_date,
+                "pit_safe": self.universe_pit_safe,
+                "decision_count": len(self.universe_decisions),
+                "included_count": sum(
+                    1 for decision in self.universe_decisions if decision.included
+                ),
+                "excluded_count": sum(
+                    1 for decision in self.universe_decisions if not decision.included
+                ),
+                "warnings": list(self.universe_warnings),
+                "source_evidence": dict(self.universe_source_evidence),
+                "limitations": list(self.universe_limitations),
+            },
+            "historical_universe_pit_safe": self.universe_pit_safe,
+            "historical_universe_limitations": list(self.universe_limitations),
             "critical_groups": self.configuration.get("evidence_confidence", {}).get(
                 "critical_groups", []
             ),
@@ -184,6 +219,18 @@ class ReplayResult:
             ),
             "vectors": [vector.as_dict() for vector in self.vectors],
             "scores": [score.as_dict() for score in self.scores],
+            "universe": {
+                "as_of_date": self.as_of_date,
+                "version": self.universe_version,
+                "pit_safe": self.universe_pit_safe,
+                "included": [
+                    decision.ts_code for decision in self.universe_decisions if decision.included
+                ],
+                "decisions": [decision.as_dict() for decision in self.universe_decisions],
+                "warnings": list(self.universe_warnings),
+                "source_evidence": dict(self.universe_source_evidence),
+                "limitations": list(self.universe_limitations),
+            },
         }
 
 
@@ -192,6 +239,7 @@ _SNAPSHOT_DATE_FIELDS: dict[str, tuple[str, ...]] = {
     "daily": ("trade_date",),
     "daily_basic": ("trade_date",),
     "index_daily": ("trade_date",),
+    "suspend_d": ("trade_date",),
     "index_basic": ("reference_snapshot_date", "list_date"),
     "income": ("actual_available_date", "f_ann_date", "ann_date"),
     "balancesheet": ("actual_available_date", "f_ann_date", "ann_date"),
@@ -272,9 +320,7 @@ def _frames_from_store(data_dir: str | Path) -> dict[str, pd.DataFrame]:
     return {dataset: store.read(dataset) for dataset in datasets}
 
 
-def _attach_low_attention_evidence(
-    vector: FeatureVector, attention: FeatureVector
-) -> None:
+def _attach_low_attention_evidence(vector: FeatureVector, attention: FeatureVector) -> None:
     """Attach v2 evidence without overwriting the v1 ``abnormal_volume`` key.
 
     Replay vectors also carry the production v1 market group.  The two APIs
@@ -295,25 +341,27 @@ def _attach_low_attention_evidence(
                 target = f"{namespace}_{name}_{suffix}"
                 suffix += 1
         vector.values[target] = attention.values.get(name)
-        vector.evidence[target] = (
-            evidence if target == name else replace(evidence, feature=target)
-        )
+        vector.evidence[target] = evidence if target == name else replace(evidence, feature=target)
         attached_evidence[target] = vector.evidence[target].as_dict()
-        if evidence.status in {
-            "unknown",
-            "missing",
-            "insufficient_data",
-            "insufficient_history",
-            "discontinuous",
-            "stale",
-            "invalid",
-            "future_unsafe",
-            "future-unsafe",
-            "pit_warning",
-            "unsupported_pit",
-            "pit_unsupported",
-            "unsupported",
-        } and target not in vector.unknown_features:
+        if (
+            evidence.status
+            in {
+                "unknown",
+                "missing",
+                "insufficient_data",
+                "insufficient_history",
+                "discontinuous",
+                "stale",
+                "invalid",
+                "future_unsafe",
+                "future-unsafe",
+                "pit_warning",
+                "unsupported_pit",
+                "pit_unsupported",
+                "unsupported",
+            }
+            and target not in vector.unknown_features
+        ):
             vector.unknown_features.append(target)
 
     declared = dict(attention.metadata.get("low_attention_v2", {}))
@@ -324,8 +372,11 @@ def _attach_low_attention_evidence(
                 existing_declared[key] = value
             elif isinstance(existing_declared[key], dict) and isinstance(value, dict):
                 existing_declared[key].update(
-                    {nested_key: nested_value for nested_key, nested_value in value.items()
-                     if nested_key not in existing_declared[key]}
+                    {
+                        nested_key: nested_value
+                        for nested_key, nested_value in value.items()
+                        if nested_key not in existing_declared[key]
+                    }
                 )
     vector.metadata.setdefault("low_attention_v2_evidence", {}).update(attached_evidence)
     vector.metadata.setdefault("low_attention_v2_risk_flags", list(attention.risk_flags))
@@ -346,25 +397,31 @@ def run_replay_frames(
         raise ValueError(f"invalid replay as_of_date: {as_of_date!r}")
     as_of = pd.Timestamp(parsed).normalize()
     as_of_text = as_of.strftime("%Y%m%d")
-    universe = build_investable_universe(
-        frames.get("stock_basic", pd.DataFrame()),
-        as_of_date=as_of,
-        daily_basic=frames.get("daily_basic"),
-        financial_frames={
-            key: frames.get(key, pd.DataFrame())
-            for key in ("income", "balancesheet", "cashflow", "fina_indicator")
-        },
-        config=settings.universe,
-    )
-    market = _market_frame(frames)
     financial_frames = {
         key: frames.get(key, pd.DataFrame())
         for key in ("income", "balancesheet", "cashflow", "fina_indicator")
     }
+    financial_period_counts = _financial_period_counts(financial_frames, as_of)
+    universe = build_investable_universe(
+        frames.get("stock_basic", pd.DataFrame()),
+        as_of_date=as_of,
+        daily_basic=frames.get("daily_basic"),
+        financial_frames=financial_frames,
+        financial_period_counts=financial_period_counts,
+        suspension_frame=frames.get("suspend_d"),
+        config=settings.universe,
+    )
+    market = _market_frame(frames)
     vectors: list[FeatureVector] = []
     scores: list[ScoreResult] = []
     warnings = list(universe.warnings)
     investable_codes = set(universe.included["ts_code"].astype(str))
+    low_attention_population = build_cross_section_population(
+        market,
+        as_of_date=as_of,
+        config=settings.low_attention.cross_section,
+        investable_codes=investable_codes,
+    )
     for _, row in universe.included.iterrows():
         code = str(row["ts_code"])
         vector = compute_fundamental_features(financial_frames, code, as_of)
@@ -391,6 +448,7 @@ def run_replay_frames(
             config=settings.low_attention,
             list_date=row.get("list_date"),
             investable_codes=investable_codes,
+            population_frame=low_attention_population,
         )
         _attach_low_attention_evidence(vector, low_attention)
         vectors.append(vector)
@@ -477,6 +535,11 @@ def run_replay_frames(
         diagnostic_ranked=diagnostic_ranked,
         evidence_confidence_contract_version=settings.evidence_confidence.version,
         feature_group_registry_version=settings.evidence_confidence.registry_version,
+        universe_decisions=universe.decisions,
+        universe_warnings=universe.warnings,
+        universe_source_evidence=universe.source_evidence,
+        universe_pit_safe=settings.universe.pit_safe_only,
+        universe_limitations=universe.limitations,
     )
 
 

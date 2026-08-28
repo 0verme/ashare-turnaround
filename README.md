@@ -46,10 +46,11 @@ Phase 0/1 and the first complete scanner path are implemented:
 - idempotent date-scoped incremental synchronization for market and disclosure
   data;
 - a PIT-safe investable universe, independent feature groups, transparent scoring,
-  historical replay, provenance-complete forward evaluation, precommitted feature
-  stability analysis, and provenance-first candidate reports.
+  historical replay, a versioned PIT replay validation sample, provenance-complete
+  forward evaluation, precommitted feature stability analysis, and provenance-first
+  candidate reports.
 
-The live source validation report is at [docs/data-source-validation.md](docs/data-source-validation.md), the VIP assessment is at [docs/vip-api-evaluation.md](docs/vip-api-evaluation.md), and the PIT evidence is at [docs/pit-field-mapping.md](docs/pit-field-mapping.md) and [docs/pit-validation.md](docs/pit-validation.md). The comparable-period contract is documented in [docs/comparable-period-semantics.md](docs/comparable-period-semantics.md). The scanner contracts and issue-to-module mapping are documented in [docs/scanner-contracts.md](docs/scanner-contracts.md). Evaluation assumptions are frozen in [docs/scanner-evaluation.md](docs/scanner-evaluation.md), and the ablation decision rule is in [docs/feature-ablation.md](docs/feature-ablation.md). Phase 1.6 decisions and final gates are documented in [docs/market-reference-history.md](docs/market-reference-history.md) and [docs/market-reference-coverage.md](docs/market-reference-coverage.md). Full-market historical bootstrap is an explicit, resumable operation; tests use synthetic fixtures and local Parquet only.
+The live source validation report is at [docs/data-source-validation.md](docs/data-source-validation.md), the VIP assessment is at [docs/vip-api-evaluation.md](docs/vip-api-evaluation.md), and the PIT evidence is at [docs/pit-field-mapping.md](docs/pit-field-mapping.md) and [docs/pit-validation.md](docs/pit-validation.md). The comparable-period contract is documented in [docs/comparable-period-semantics.md](docs/comparable-period-semantics.md). The scanner contracts and issue-to-module mapping are documented in [docs/scanner-contracts.md](docs/scanner-contracts.md). The #32 replay validation contract is documented in [docs/pit-replay-validation.md](docs/pit-replay-validation.md). Evaluation assumptions are frozen in [docs/scanner-evaluation.md](docs/scanner-evaluation.md), and the ablation decision rule is in [docs/feature-ablation.md](docs/feature-ablation.md). Phase 1.6 decisions and final gates are documented in [docs/market-reference-history.md](docs/market-reference-history.md) and [docs/market-reference-coverage.md](docs/market-reference-coverage.md). Full-market historical bootstrap is an explicit, resumable operation; tests use synthetic fixtures and local Parquet only.
 
 ## Phase 2.5 hand-off
 
@@ -59,10 +60,9 @@ now follows **GAP-DRIVEN MODE**: only a correctness/replay gate failure or an
 approved incremental-sync need may request a bounded repair. No full-history
 redownload is implied by this hand-off.
 
-The next main-path issue is [#27](https://github.com/0verme/ashare-turnaround/issues/27),
-which must branch from the latest `origin/main` after #34 is merged. The planned
-sequence is `#27 → #28 → #29/#30 → #31 → #32 → calibrated Evaluation/Ablation →
-Score v2 decision`.
+The #32 validation path is read-only and must remain separate from Evaluation
+and Ablation. The planned post-calibration sequence is `#32 → calibrated
+Evaluation (#17) → Ablation / Stability (#18) → Score v2 decision`.
 
 ## Architecture
 
@@ -108,6 +108,7 @@ The minimal CLI is:
 .venv/bin/python -m ashare_turnaround sync-daily --date 20250630
 .venv/bin/python -m ashare_turnaround replay --as-of 20250630 --top 20
 .venv/bin/python -m ashare_turnaround replay-variants --as-of 20250630 --top 20
+.venv/bin/python -m ashare_turnaround replay-validate --stage smoke --start 2017-01 --end 2026-12
 .venv/bin/python -m ashare_turnaround scan --top 20
 .venv/bin/python -m ashare_turnaround evaluate --scans data/derived/scans/scan-20250630.parquet --benchmark-code 000300.SH --fundamentals data/derived/research/fundamental-history.parquet
 .venv/bin/python -m ashare_turnaround ablate fundamental_only=data/reports/evaluation-fundamental_only.json quality_added=data/reports/evaluation-quality_added.json attention_added=data/reports/evaluation-attention_added.json expectation_added=data/reports/evaluation-expectation_added.json

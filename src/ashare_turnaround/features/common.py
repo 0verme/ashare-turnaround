@@ -80,11 +80,17 @@ def canonical_history(
     *,
     disclosure_frame: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
-    if frame is None or frame.empty:
+    if frame is None or frame.empty or "ts_code" not in frame.columns:
+        return pd.DataFrame()
+    # Canonicalization is row-local.  Restricting to the requested security
+    # first avoids rebuilding the entire historical corpus once per candidate
+    # while preserving every raw column and the source-version identity.
+    scoped = frame.loc[frame["ts_code"].astype("string").eq(str(code))].copy()
+    if scoped.empty:
         return pd.DataFrame()
     canonical = canonicalize_financial_frame(
         dataset,
-        frame,
+        scoped,
         disclosure_frame=disclosure_frame,
     )
     selected = select_financial_as_of(

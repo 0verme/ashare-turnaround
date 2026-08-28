@@ -67,6 +67,13 @@ from .scanner.replay import (
     write_replay_artifacts,
     write_replay_variant_artifacts,
 )
+from .scanner.replay_validation import (
+    DEFAULT_END_MONTH,
+    DEFAULT_START_MONTH,
+    MONTHLY_SELECTION_RULE_VERSION,
+    run_replay_validation,
+    write_replay_validation_artifacts,
+)
 from .scanner.report import write_candidate_reports
 from .scanner.stability import StabilityConfig, analyze_feature_stability, write_stability_report
 from .storage.guards import check_disk_space
@@ -271,6 +278,34 @@ def _parser() -> argparse.ArgumentParser:
     replay_variants.add_argument("--as-of", required=True)
     replay_variants.add_argument("--top", type=int, default=20)
     replay_variants.add_argument("--directory", default=None)
+
+    replay_validation = subparsers.add_parser(
+        "replay-validate",
+        help="run the historical PIT replay validation sample (no forward evaluation)",
+    )
+    replay_validation.add_argument("--data-dir", default="data")
+    replay_validation.add_argument("--start", default=DEFAULT_START_MONTH)
+    replay_validation.add_argument("--end", default=DEFAULT_END_MONTH)
+    replay_validation.add_argument("--selection-rule", default=MONTHLY_SELECTION_RULE_VERSION)
+    replay_validation.add_argument("--anchor-day", type=int, default=15)
+    replay_validation.add_argument("--calendar-exchange", default="SSE")
+    replay_validation.add_argument("--today", default=None)
+    replay_validation.add_argument("--top-n", type=int, default=20)
+    replay_validation.add_argument(
+        "--stage", choices=("smoke", "yearly", "monthly"), default="smoke"
+    )
+    replay_validation.add_argument("--seed", type=int, default=0)
+    replay_validation.add_argument("--determinism-sample", type=int, default=3)
+    replay_validation.add_argument("--output", default="data/reports/replay-validation")
+    replay_validation.add_argument("--summary", default="docs/pit-replay-validation-summary.md")
+    replay_validation.add_argument(
+        "--no-content-hash",
+        action="store_true",
+        help=(
+            "omit full file hashes from the local input manifest "
+            "(identity remains row/schema based)"
+        ),
+    )
 
     scan = subparsers.add_parser("scan", help="run and persist the daily Top-N scanner")
     scan.add_argument("--data-dir", default="data")
@@ -863,6 +898,56 @@ def _replay_variants(args: argparse.Namespace) -> int:
     return 0 if all(result.status == "PASS" for result in results.values()) else 2
 
 
+def _replay_validate(args: argparse.Namespace) -> int:
+    try:
+        result = run_replay_validation(
+            args.data_dir,
+            start=args.start,
+            end=args.end,
+            selection_rule=args.selection_rule,
+            anchor_day=args.anchor_day,
+            calendar_exchange=args.calendar_exchange,
+            today=args.today,
+            top_n=args.top_n,
+            config=ReplayConfig(top_n=args.top_n),
+            seed=args.seed,
+            stage=args.stage,
+            determinism_sample=args.determinism_sample,
+            content_hash=not args.no_content_hash,
+            artifact_output=args.output,
+            retain_snapshot_results=False,
+        )
+        paths = write_replay_validation_artifacts(
+            result,
+            args.output,
+            summary_path=args.summary,
+        )
+    except (OSError, ValueError, KeyError, RuntimeError, TypeError) as exc:
+        print(f"replay-validate failed: {exc}", file=sys.stderr)
+        return 2
+    summary = result.summary
+    print(
+        "replay_validation_status="
+        f"ready={summary['ready_count']} incomplete={summary['incomplete_count']} "
+        f"failed={summary['failed_count']} unavailable={summary['unavailable_count']}"
+    )
+    for name, path in paths.items():
+        print(f"replay_validation_{name}={path}")
+    print(f"pit_violations={summary['pit_violation_count']}")
+    print(f"determinism_failures={summary['determinism_failure_count']}")
+    if result.synthetic_fixtures.get("status") != "PASS":
+        print("synthetic_fixture_status=FAIL", file=sys.stderr)
+    return (
+        0
+        if result.status == "READY"
+        and summary["failed_count"] == 0
+        and summary["pit_violation_count"] == 0
+        and summary["determinism_failure_count"] == 0
+        and result.synthetic_fixtures.get("status") == "PASS"
+        else 2
+    )
+
+
 def _scan(args: argparse.Namespace) -> int:
     try:
         snapshot = scan_data(
@@ -1434,6 +1519,7 @@ def main(argv: list[str] | None = None) -> int:
         "sync-daily": _sync_daily,
         "replay": _replay,
         "replay-variants": _replay_variants,
+        "replay-validate": _replay_validate,
         "scan": _scan,
         "scan-compare": _scan_compare,
         "evaluate": _evaluate,
