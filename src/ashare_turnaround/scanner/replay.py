@@ -13,6 +13,8 @@ from typing import Any
 import pandas as pd
 
 from ..features import (
+    EXPECTATION_CROWDING_CONTRACT_VERSION,
+    CrowdingConfig,
     compute_attention_features,
     compute_crowding_features,
     compute_fundamental_features,
@@ -38,6 +40,7 @@ class ReplayConfig:
     top_n: int = 20
     universe: UniverseConfig = field(default_factory=UniverseConfig)
     score: ScoreConfig = field(default_factory=ScoreConfig)
+    crowding: CrowdingConfig = field(default_factory=CrowdingConfig)
 
     def __post_init__(self) -> None:
         if self.top_n <= 0:
@@ -47,6 +50,9 @@ class ReplayConfig:
         return {
             "top_n": self.top_n,
             "comparable_period_contract_version": COMPARABLE_PERIOD_CONTRACT_VERSION,
+            "expectation_crowding_contract_version": self.crowding.version,
+            "benchmark": self.crowding.benchmark.declared(),
+            "expectation_crowding": self.crowding.declared(),
             "universe": asdict(self.universe),
             "score": self.score.declared(),
         }
@@ -74,6 +80,8 @@ class ReplayResult:
     scores: tuple[ScoreResult, ...]
     warnings: tuple[str, ...] = ()
     comparable_period_contract_version: str = COMPARABLE_PERIOD_CONTRACT_VERSION
+    expectation_crowding_contract_version: str = EXPECTATION_CROWDING_CONTRACT_VERSION
+    benchmark_metadata: dict[str, Any] = field(default_factory=dict)
 
     def metadata(self) -> dict[str, Any]:
         return {
@@ -89,6 +97,15 @@ class ReplayResult:
             "status": self.status,
             "warnings": list(self.warnings),
             "comparable_period_contract_version": self.comparable_period_contract_version,
+            "expectation_crowding_contract_version": self.expectation_crowding_contract_version,
+            "benchmark": dict(self.benchmark_metadata),
+            "benchmark_config": dict(self.benchmark_metadata),
+            "benchmark_id": self.benchmark_metadata.get("benchmark_id"),
+            "benchmark_name": self.benchmark_metadata.get("benchmark_name"),
+            "benchmark_contract_version": self.benchmark_metadata.get(
+                "benchmark_contract_version", self.benchmark_metadata.get("version")
+            ),
+            "benchmark_source_dataset": self.benchmark_metadata.get("source_dataset"),
         }
 
     def artifact_dict(self) -> dict[str, Any]:
@@ -104,6 +121,8 @@ _SNAPSHOT_DATE_FIELDS: dict[str, tuple[str, ...]] = {
     "trade_cal": ("cal_date",),
     "daily": ("trade_date",),
     "daily_basic": ("trade_date",),
+    "index_daily": ("trade_date",),
+    "index_basic": ("reference_snapshot_date", "list_date"),
     "income": ("actual_available_date", "f_ann_date", "ann_date"),
     "balancesheet": ("actual_available_date", "f_ann_date", "ann_date"),
     "cashflow": ("actual_available_date", "f_ann_date", "ann_date"),
@@ -169,8 +188,11 @@ def _frames_from_store(data_dir: str | Path) -> dict[str, pd.DataFrame]:
     datasets = (
         "stock_basic",
         "trade_cal",
+        "index_basic",
+        "suspend_d",
         "daily",
         "daily_basic",
+        "index_daily",
         "income",
         "balancesheet",
         "cashflow",
@@ -223,8 +245,16 @@ def run_replay_frames(
                 market,
                 code,
                 as_of,
+                config=settings.crowding,
                 calendar_frame=frames.get("trade_cal"),
                 disclosure_frame=frames.get("disclosure_date"),
+                benchmark_frame=(
+                    frames.get("index_daily")
+                    if "index_daily" in frames
+                    else None
+                ),
+                benchmark_definition_frame=frames.get("index_basic"),
+                suspension_frame=frames.get("suspend_d"),
             )
         )
         vectors.append(vector)
@@ -242,6 +272,8 @@ def run_replay_frames(
     missing = sorted(dataset for dataset in required if frames.get(dataset, pd.DataFrame()).empty)
     if missing:
         warnings.append(f"missing_required_datasets={','.join(missing)}")
+    if frames.get("index_daily", pd.DataFrame()).empty:
+        warnings.append("missing_benchmark_dataset=index_daily")
     status = "PASS" if ranked.shape[0] > 0 and not missing else "PARTIAL" if vectors else "EMPTY"
     snapshot_id = _snapshot_id(frames, as_of_text)
     config_fingerprint = settings.fingerprint
@@ -251,6 +283,10 @@ def run_replay_frames(
     ranked["run_id"] = run_id
     ranked["universe_version"] = universe.version
     ranked["feature_version"] = "features-v1"
+    ranked["expectation_crowding_contract_version"] = settings.crowding.version
+    ranked["benchmark_id"] = settings.crowding.benchmark.benchmark_id
+    ranked["benchmark_contract_version"] = settings.crowding.benchmark.version
+    ranked["benchmark_source_dataset"] = settings.crowding.benchmark.source_dataset
     ranked["comparable_period_contract_version"] = COMPARABLE_PERIOD_CONTRACT_VERSION
     ranked["score_config_fingerprint"] = settings.score.fingerprint
     return ReplayResult(
@@ -269,6 +305,8 @@ def run_replay_frames(
         scores=tuple(scores),
         warnings=tuple(dict.fromkeys(warnings)),
         comparable_period_contract_version=COMPARABLE_PERIOD_CONTRACT_VERSION,
+        expectation_crowding_contract_version=settings.crowding.version,
+        benchmark_metadata=settings.crowding.benchmark.declared(),
     )
 
 

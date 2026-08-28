@@ -1,24 +1,13 @@
-"""Versioned benchmark-relative return contract (``benchmark-v1``).
+"""Versioned benchmark-relative market-session calculations.
 
-Excess return is defined only as::
-
-    R_stock(t, L)     = P_stock(t) / P_stock(t-L) - 1
-    R_benchmark(t, L) = B(t) / B(t-L) - 1
-    excess_return(t,L)= R_stock(t, L) - R_benchmark(t, L)
-
-where ``t`` is the as-of anchor trading session and ``t-L`` is the ``L``-th
-prior open session on the session axis.  Excess return is *never* approximated
-with stock-only returns: when the benchmark cannot be resolved at the required
-sessions the affected features are ``unknown`` with an explicit reason
-(fail-closed).
-
-The benchmark is stored as index rows inside the ``daily`` dataset
-(``ts_code == benchmark_id``), which is the same convention the forward
-evaluation layer already uses for ``EvaluationConfig.benchmark_code``.
+The benchmark contract is deliberately small and fail-closed.  A stock return
+is never published as an excess return when the configured benchmark endpoint
+is unavailable or is on a different session.
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import asdict, dataclass
 from datetime import date, datetime
 from typing import Any
@@ -28,55 +17,85 @@ import pandas as pd
 from ..dates import normalize_date_series
 from .common import market_history, numeric
 
+BENCHMARK_CONTRACT_VERSION = "benchmark-v1"
 DEFAULT_BENCHMARK_ID = "000300.SH"
 DEFAULT_BENCHMARK_NAME = "CSI 300 Index"
+BENCHMARK_SOURCE_DATASET = "index_basic + index_daily"
 
 
 @dataclass(frozen=True, slots=True)
 class BenchmarkConfig:
-    """Versioned, explicit benchmark identity and resolution conventions.
+    """Explicit identity and conventions for the primary benchmark."""
 
-    Every field is recorded in feature evidence so any consumer can reproduce
-    what a benchmark-relative value means.
-    """
-
-    version: str = "benchmark-v1"
+    version: str = BENCHMARK_CONTRACT_VERSION
     benchmark_id: str = DEFAULT_BENCHMARK_ID
     benchmark_name: str = DEFAULT_BENCHMARK_NAME
-    data_source: str = (
-        "tushare 'daily' dataset rows with ts_code == benchmark_id; "
-        "same storage convention as scanner.evaluation.benchmark_code"
-    )
+    source_dataset: str = BENCHMARK_SOURCE_DATASET
+    definition_dataset: str = "index_basic"
+    price_dataset: str = "index_daily"
     price_convention: str = "close"
-    adjustment_convention: str = "unadjusted close exactly as stored in the PIT snapshot"
+    adjustment_convention: str = (
+        "raw/unadjusted close exactly as stored; corporate-action adjustment is not proven"
+    )
     trading_calendar: str = (
-        "open sessions of the SSE/SZSE calendar (trade_cal is_open=1) when supplied; "
-        "otherwise the benchmark rows themselves are the session authority"
+        "trade_cal is_open=1 sessions when supplied; otherwise union of stock/index_daily sessions"
     )
     lookbacks: tuple[int, ...] = (20, 60)
     endpoint_inclusion: str = (
-        "as-of session t is the inclusive anchor; window start is the L-th prior open session"
+        "inclusive anchor t and the L-th prior open session t-L; exact endpoint alignment"
+    )
+    stock_suspension_policy: str = (
+        "market-session axis; missing stock endpoint is unknown, interior gaps are retained"
     )
     high_window_sessions: int = 252
-    high_include_as_of: bool = True
+    high_include_as_of: bool = False
     high_min_sessions: int = 60
     missing_benchmark_policy: str = "unknown + reason; never fall back to stock-only return"
 
+    def __post_init__(self) -> None:
+        benchmark_id = str(self.benchmark_id).strip().upper()
+        if not benchmark_id or "." not in benchmark_id:
+            raise ValueError("benchmark_id must be a non-empty Tushare symbol")
+        object.__setattr__(self, "benchmark_id", benchmark_id)
+        if not self.lookbacks or any(int(value) <= 0 for value in self.lookbacks):
+            raise ValueError("benchmark lookbacks must be positive")
+        if self.high_window_sessions <= 0 or self.high_min_sessions <= 0:
+            raise ValueError("52-week window settings must be positive")
+        if self.high_min_sessions > self.high_window_sessions:
+            raise ValueError("high_min_sessions must not exceed high_window_sessions")
+
+    @property
+    def benchmark_contract_version(self) -> str:
+        """Readable alias used by report consumers."""
+
+        return self.version
+
+    @property
+    def data_source(self) -> str:
+        """Backward-compatible name for the declared source dataset."""
+
+        return self.source_dataset
+
     def declared(self) -> dict[str, Any]:
-        return asdict(self)
+        payload = asdict(self)
+        payload["benchmark_contract_version"] = self.version
+        payload["data_source"] = self.source_dataset
+        return payload
 
 
 def _valid_close_rows(history: pd.DataFrame) -> pd.DataFrame:
     if history.empty or "_date" not in history.columns or "close" not in history.columns:
         return pd.DataFrame()
     closes = pd.to_numeric(history["close"], errors="coerce")
-    return history.loc[closes.notna()].copy()
+    finite = closes.replace([float("inf"), -float("inf")], pd.NA).notna()
+    return history.loc[finite & closes.gt(0)].copy()
 
 
 def _calendar_sessions(
     calendar_frame: pd.DataFrame | None, as_of: pd.Timestamp
 ) -> pd.DatetimeIndex | None:
-    """Return open sessions from trade_cal up to as-of, if usable."""
+    """Return unique open trade-calendar sessions through ``as_of``."""
+
     if (
         calendar_frame is None
         or calendar_frame.empty
@@ -84,27 +103,22 @@ def _calendar_sessions(
         or "is_open" not in calendar_frame.columns
     ):
         return None
-    frame = calendar_frame.copy()
-    open_rows = pd.to_numeric(frame["is_open"], errors="coerce").fillna(0).eq(1)
-    frame = frame.loc[open_rows].copy()
-    if frame.empty:
+    open_mask = pd.to_numeric(calendar_frame["is_open"], errors="coerce").eq(1)
+    dates = normalize_date_series(calendar_frame["cal_date"])
+    values = dates.loc[open_mask & dates.notna() & dates.le(as_of)].drop_duplicates()
+    if values.empty:
         return None
-    dates = normalize_date_series(frame["cal_date"])
-    sessions = pd.DatetimeIndex(
-        dates.loc[dates.notna() & dates.le(as_of)].drop_duplicates().sort_values()
-    )
-    if len(sessions) == 0:
-        return None
-    return pd.DatetimeIndex(sessions)
+    return pd.DatetimeIndex(values.sort_values())
 
 
 def _column_at(history: pd.DataFrame, session: pd.Timestamp, column: str) -> float | None:
     if history.empty or "_date" not in history.columns or column not in history.columns:
         return None
-    rows = history.loc[history["_date"] == session, column]
+    rows = history.loc[history["_date"].eq(session), column]
     if rows.empty:
         return None
-    return numeric(pd.to_numeric(rows, errors="coerce").dropna().iloc[-1]) if len(rows) else None
+    clean = pd.to_numeric(rows, errors="coerce").dropna()
+    return numeric(clean.iloc[-1]) if not clean.empty else None
 
 
 def _column_at_sessions(
@@ -120,12 +134,7 @@ def _column_at_sessions(
 
 @dataclass(frozen=True, slots=True)
 class BenchmarkContext:
-    """Resolved anchor session plus the session axis and PIT histories.
-
-    ``status == \"known\"`` means the anchor session ``t`` exists and both the
-    stock and the benchmark have a valid close at ``t``.  Anything else carries
-    a machine-readable ``reason`` and must be treated as unknown end-to-end.
-    """
+    """PIT histories resolved to one shared market-session anchor."""
 
     status: str
     reason: str | None
@@ -136,6 +145,7 @@ class BenchmarkContext:
     benchmark_history: pd.DataFrame
     stock_close: float | None
     benchmark_close: float | None
+    benchmark_id: str = DEFAULT_BENCHMARK_ID
 
     @property
     def known(self) -> bool:
@@ -144,6 +154,7 @@ class BenchmarkContext:
 
 def _unknown_context(
     reason: str,
+    benchmark_id: str,
     *,
     stock_history: pd.DataFrame | None = None,
     benchmark_history: pd.DataFrame | None = None,
@@ -151,6 +162,7 @@ def _unknown_context(
     return BenchmarkContext(
         status="unknown",
         reason=reason,
+        benchmark_id=benchmark_id,
         anchor=None,
         axis=(),
         axis_source="",
@@ -169,108 +181,157 @@ def _unknown_context(
     )
 
 
+def _contains_code(frame: pd.DataFrame | None, code: str) -> bool:
+    return bool(
+        frame is not None
+        and not frame.empty
+        and "ts_code" in frame.columns
+        and frame["ts_code"].astype("string").eq(str(code)).any()
+    )
+
+
 def resolve_benchmark(
     market_frame: pd.DataFrame | None,
     stock_code: str,
     benchmark_id: str,
     as_of_date: str | date | datetime | pd.Timestamp,
     *,
+    benchmark_frame: pd.DataFrame | None = None,
+    benchmark_definition_frame: pd.DataFrame | None = None,
+    suspension_frame: pd.DataFrame | None = None,
     session_lookback: int = 400,
     calendar_frame: pd.DataFrame | None = None,
 ) -> BenchmarkContext:
-    """Resolve the shared as-of anchor session for stock and benchmark.
+    """Resolve one exact stock/benchmark session axis.
 
-    Session axis priority:
-
-    1. ``trade_cal`` open sessions (``is_open == 1``) when supplied and when
-       the calendar reaches as-of; a stale calendar (its last open session is
-       before the stock's last quote) is reported as ``calendar_stale``.
-    2. The benchmark's own valid-close rows (the recorded trading sessions).
-
-    Anchor, stock quote and benchmark quote must all agree on the same session.
-    Misalignment is never resolved by shifting one side quietly.
+    ``benchmark_frame`` is the preferred separate ``index_daily`` input.  For
+    compatibility with small synthetic fixtures, when it is omitted and the
+    supplied market frame contains the benchmark code, that frame is used as a
+    combined input.  Production replay passes an explicit (possibly empty)
+    ``index_daily`` frame and therefore never falls back to stock ``daily``.
+    When supplied, ``suspension_frame`` removes explicitly suspended stock
+    sessions before endpoint resolution.
     """
 
     parsed = pd.to_datetime(as_of_date, errors="coerce")
     if pd.isna(parsed):
         raise ValueError(f"invalid benchmark as_of_date: {as_of_date!r}")
     as_of = pd.Timestamp(parsed).normalize()
+    benchmark_code = str(benchmark_id).strip().upper()
+    if session_lookback <= 0:
+        raise ValueError("session_lookback must be positive")
 
     stock_history = market_history(market_frame, stock_code, as_of, session_lookback)
-    benchmark_history = market_history(market_frame, benchmark_id, as_of, session_lookback)
-    benchmark_clean = _valid_close_rows(benchmark_history)
-    if benchmark_history.empty or benchmark_clean.empty:
+    if suspension_frame is not None and not suspension_frame.empty:
+        required = {"ts_code", "trade_date"}
+        if required.issubset(suspension_frame.columns) and not stock_history.empty:
+            suspended = suspension_frame.loc[
+                suspension_frame["ts_code"].astype("string").eq(str(stock_code))
+            ]
+            suspended_dates = normalize_date_series(suspended["trade_date"]).dropna()
+            stock_history = stock_history.loc[
+                ~stock_history["_date"].isin(set(suspended_dates))
+            ].reset_index(drop=True)
+    if benchmark_frame is None:
+        benchmark_input = market_frame if _contains_code(market_frame, benchmark_code) else None
+    else:
+        benchmark_input = benchmark_frame
+    benchmark_history = market_history(
+        benchmark_input, benchmark_code, as_of, session_lookback
+    )
+
+    # A supplied definition snapshot is optional for synthetic unit fixtures,
+    # but if it contains rows it must identify the configured benchmark.
+    if (
+        benchmark_definition_frame is not None
+        and not benchmark_definition_frame.empty
+        and "ts_code" in benchmark_definition_frame.columns
+        and not _contains_code(benchmark_definition_frame, benchmark_code)
+    ):
         return _unknown_context(
-            "benchmark_unavailable",
+            "benchmark_definition_missing",
+            benchmark_code,
             stock_history=stock_history,
             benchmark_history=benchmark_history,
         )
-    if stock_history.empty:
+
+    benchmark_clean = _valid_close_rows(benchmark_history)
+    stock_clean = _valid_close_rows(stock_history)
+    if benchmark_clean.empty:
+        return _unknown_context(
+            "missing_benchmark_endpoint",
+            benchmark_code,
+            stock_history=stock_history,
+            benchmark_history=benchmark_history,
+        )
+    if stock_clean.empty:
         return _unknown_context(
             "stock_no_market_history",
+            benchmark_code,
             stock_history=stock_history,
             benchmark_history=benchmark_history,
         )
 
-    stock_closes = _valid_close_rows(stock_history)
-    stock_last = (
-        pd.Timestamp(stock_closes["_date"].iloc[-1]) if not stock_closes.empty else None
-    )
-    if stock_last is None:
-        return _unknown_context(
-            "stock_no_quote_at_anchor_session",
-            stock_history=stock_history,
-            benchmark_history=benchmark_history,
-        )
-
+    stock_last = pd.Timestamp(stock_clean["_date"].iloc[-1])
+    benchmark_last = pd.Timestamp(benchmark_clean["_date"].iloc[-1])
     calendar_sessions = _calendar_sessions(calendar_frame, as_of)
     if calendar_sessions is not None:
-        axis = tuple(calendar_sessions)
+        axis = tuple(pd.Timestamp(value) for value in calendar_sessions)
         axis_source = "trade_cal"
         anchor = axis[-1]
-        if pd.Timestamp(axis[-1]) < stock_last:
+        if axis[-1] < stock_last or axis[-1] < benchmark_last:
             return _unknown_context(
                 "calendar_stale",
+                benchmark_code,
                 stock_history=stock_history,
                 benchmark_history=benchmark_history,
             )
     else:
-        axis = tuple(pd.Timestamp(value) for value in benchmark_clean["_date"])
-        axis_source = "benchmark_rows"
+        session_values = {pd.Timestamp(value) for value in benchmark_clean["_date"]}
+        session_values.update(pd.Timestamp(value) for value in stock_clean["_date"])
+        axis = tuple(sorted(session_values))
+        axis_source = "market_rows_union"
         anchor = axis[-1]
-        benchmark_last = axis[-1]
         if benchmark_last < stock_last:
             return _unknown_context(
                 "benchmark_stale_at_as_of",
+                benchmark_code,
                 stock_history=stock_history,
                 benchmark_history=benchmark_history,
             )
         if stock_last < benchmark_last:
             return _unknown_context(
                 "stock_no_quote_at_anchor_session",
+                benchmark_code,
                 stock_history=stock_history,
                 benchmark_history=benchmark_history,
             )
 
     stock_close = _column_at(stock_history, anchor, "close")
-    if stock_close is None:
+    if stock_close is None or stock_close <= 0:
         return _unknown_context(
             "stock_no_quote_at_anchor_session",
+            benchmark_code,
             stock_history=stock_history,
             benchmark_history=benchmark_history,
         )
     benchmark_close = _column_at(benchmark_history, anchor, "close")
-    if benchmark_close is None:
-        if not benchmark_clean.empty and pd.Timestamp(benchmark_clean["_date"].iloc[-1]) < anchor:
-            reason = "benchmark_stale_at_as_of"
-        else:
-            reason = "benchmark_missing_at_anchor_session"
+    if benchmark_close is None or benchmark_close <= 0:
+        reason = (
+            "benchmark_stale_at_as_of"
+            if benchmark_last < anchor
+            else "benchmark_missing_at_anchor_session"
+        )
         return _unknown_context(
-            reason, stock_history=stock_history, benchmark_history=benchmark_history
+            reason,
+            benchmark_code,
+            stock_history=stock_history,
+            benchmark_history=benchmark_history,
         )
     return BenchmarkContext(
         status="known",
         reason=None,
+        benchmark_id=benchmark_code,
         anchor=anchor,
         axis=axis,
         axis_source=axis_source,
@@ -283,7 +344,7 @@ def resolve_benchmark(
 
 @dataclass(frozen=True, slots=True)
 class WindowReturn:
-    """Stock, benchmark and excess return over the same L-session window."""
+    """Stock, benchmark, and excess return over the same L-session window."""
 
     status: str
     reason: str | None
@@ -301,53 +362,98 @@ class WindowReturn:
 
 
 def window_return(ctx: BenchmarkContext, lookback: int) -> WindowReturn:
-    """Return over the window ``[t-L, t]`` on the shared session axis."""
+    """Calculate returns from exact ``t-L`` to exact ``t`` sessions."""
 
+    if lookback <= 0:
+        raise ValueError("lookback must be positive")
     if not ctx.known:
         return WindowReturn(
-            "unknown", ctx.reason, lookback, None, None, 0, None, None, None, None, None, None, None
+            "unknown",
+            ctx.reason,
+            lookback,
+            None,
+            None,
+            0,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
         )
     axis = list(ctx.axis)
     try:
         position = axis.index(ctx.anchor)
     except ValueError:
         return WindowReturn(
-            "unknown", "anchor_not_on_session_axis", lookback, ctx.anchor, None, 0,
-            None, None, None, None, None, None, None,
+            "unknown",
+            "anchor_not_on_session_axis",
+            lookback,
+            ctx.anchor,
+            None,
+            0,
+            None,
+            None,
+            None,
+            None,
+            ctx.stock_close,
+            None,
+            ctx.benchmark_close,
         )
     if position < lookback:
         return WindowReturn(
-            "unknown", "insufficient_benchmark_history", lookback, ctx.anchor, None, 0,
-            None, None, None, None, None, None, None,
+            "unknown",
+            "insufficient_benchmark_history",
+            lookback,
+            ctx.anchor,
+            None,
+            0,
+            None,
+            None,
+            None,
+            None,
+            ctx.stock_close,
+            None,
+            ctx.benchmark_close,
         )
+
     window_start = axis[position - lookback]
     stock_start = _column_at(ctx.stock_history, window_start, "close")
-    if stock_start is None:
-        return WindowReturn(
-            "unknown", "stock_missing_at_window_start", lookback, ctx.anchor, window_start,
-            lookback + 1, None, None, None, None, ctx.stock_close, None, None,
-        )
     benchmark_start = _column_at(ctx.benchmark_history, window_start, "close")
-    if benchmark_start is None:
-        return WindowReturn(
-            "unknown", "benchmark_missing_at_window_start", lookback, ctx.anchor, window_start,
-            lookback + 1, None, None, None, ctx.stock_close, ctx.stock_close, None, None,
-        )
-    stock_return = (
-        ctx.stock_close / stock_start - 1.0 if stock_start not in {None, 0.0} else None
-    )
-    benchmark_return = (
-        ctx.benchmark_close / benchmark_start - 1.0
-        if benchmark_start not in {None, 0.0}
-        else None
-    )
-    if stock_return is None or benchmark_return is None:
+    if stock_start is None:
+        reason = "stock_missing_at_window_start"
+    elif benchmark_start is None:
+        reason = "benchmark_missing_at_window_start"
+    elif stock_start <= 0 or benchmark_start <= 0:
         reason = "invalid_window_price"
     else:
         reason = None
+    stock_return = (
+        ctx.stock_close / stock_start - 1.0
+        if reason not in {"stock_missing_at_window_start", "invalid_window_price"}
+        and stock_start not in {None, 0.0}
+        else None
+    )
+    benchmark_return = (
+        ctx.benchmark_close / benchmark_start - 1.0
+        if reason not in {"benchmark_missing_at_window_start", "invalid_window_price"}
+        and benchmark_start not in {None, 0.0}
+        else None
+    )
+    if reason is None and (stock_return is None or benchmark_return is None):
+        reason = "invalid_window_price"
+    if reason is None and any(
+        value is None or not math.isfinite(float(value))
+        for value in (stock_return, benchmark_return, stock_return - benchmark_return)
+    ):
+        reason = "invalid_window_price"
+    if reason == "invalid_window_price":
+        stock_return = numeric(stock_return)
+        benchmark_return = numeric(benchmark_return)
     excess = stock_return - benchmark_return if reason is None else None
     return WindowReturn(
-        "unknown" if reason is not None else "known",
+        "known" if reason is None else "unknown",
         reason,
         lookback,
         ctx.anchor,
@@ -365,7 +471,7 @@ def window_return(ctx: BenchmarkContext, lookback: int) -> WindowReturn:
 
 @dataclass(frozen=True, slots=True)
 class HighWindow:
-    """52-week-high statistics over a bounded session window ending at anchor."""
+    """Price versus a bounded prior/high window ending before or at anchor."""
 
     status: str
     reason: str | None
@@ -382,16 +488,18 @@ def high_window(
     ctx: BenchmarkContext,
     *,
     window_sessions: int = 252,
-    include_as_of: bool = True,
+    include_as_of: bool = False,
     min_sessions: int = 60,
 ) -> HighWindow:
-    """Distance from the high over the trailing ``window_sessions`` sessions.
+    """Calculate ``current_close / prior_high - 1``.
 
-    ``include_as_of=True`` counts the anchor session inside the window; the
-    window then spans ``window_sessions + 1`` sessions ending at the anchor.
-    The distance is ``1 - close(t) / max(close over window)``.
+    The default is the recommended prior-252-session rule: the current session
+    is excluded from the reference high, so a new high has a positive distance
+    rather than contaminating its own denominator.
     """
 
+    if window_sessions <= 0 or min_sessions <= 0:
+        raise ValueError("high window settings must be positive")
     if not ctx.known:
         return HighWindow("unknown", ctx.reason, None, None, 0, 0, None, None, None)
     axis = list(ctx.axis)
@@ -401,28 +509,41 @@ def high_window(
         return HighWindow(
             "unknown", "anchor_not_on_session_axis", None, None, 0, 0, None, None, None
         )
-    offset = window_sessions - 1 if include_as_of else window_sessions
-    if position < offset:
-        return HighWindow(
-            "unknown", "insufficient_52w_history", None, None, 0, 0, None, None, None
-        )
-    start = position - offset
-    window = axis[start : position + 1]
-    closes = _column_at_sessions(ctx.stock_history, window, "close")
+    if include_as_of:
+        if position + 1 < window_sessions:
+            return HighWindow(
+                "unknown", "insufficient_52w_history", None, None, 0, 0, None, None, None
+            )
+        start = position - window_sessions + 1
+        end = position + 1
+    else:
+        if position < window_sessions:
+            return HighWindow(
+                "unknown", "insufficient_52w_history", None, None, 0, 0, None, None, None
+            )
+        start = position - window_sessions
+        end = position
+    window = axis[start:end]
+    closes = [
+        value
+        for session in window
+        for value in (_column_at(ctx.stock_history, session, "close"),)
+        if value is not None and value > 0
+    ]
     if len(closes) < min_sessions:
         return HighWindow(
             "unknown",
             "insufficient_52w_history",
-            window[0],
-            window[-1],
+            window[0] if window else None,
+            window[-1] if window else None,
             len(window),
             len(closes),
             None,
-            None,
+            ctx.stock_close,
             None,
         )
     high = max(closes)
-    if high in {None, 0.0}:
+    if high <= 0:
         return HighWindow(
             "unknown",
             "invalid_high_price",
@@ -431,10 +552,22 @@ def high_window(
             len(window),
             len(closes),
             None,
-            None,
+            ctx.stock_close,
             None,
         )
-    distance = 1.0 - ctx.stock_close / high
+    distance = ctx.stock_close / high - 1.0
+    if not math.isfinite(distance):
+        return HighWindow(
+            "unknown",
+            "invalid_high_price",
+            window[0],
+            window[-1],
+            len(window),
+            len(closes),
+            high,
+            ctx.stock_close,
+            None,
+        )
     return HighWindow(
         "known",
         None,
@@ -450,7 +583,7 @@ def high_window(
 
 @dataclass(frozen=True, slots=True)
 class PriorBaseline:
-    """Median of a column over the ``window`` sessions strictly before anchor."""
+    """Median of a metric over sessions strictly before the anchor."""
 
     status: str
     reason: str | None
@@ -468,8 +601,10 @@ def prior_baseline(
     window: int = 60,
     min_observations: int = 20,
 ) -> PriorBaseline:
-    """Median of ``column`` over the ``window`` sessions before the anchor."""
+    """Calculate a past-only baseline without filling missing stock sessions."""
 
+    if window <= 0 or min_observations <= 0:
+        raise ValueError("baseline settings must be positive")
     if not ctx.known:
         return PriorBaseline("unknown", ctx.reason, None, None, 0, None, None)
     if column not in ctx.stock_history.columns:
@@ -478,16 +613,26 @@ def prior_baseline(
     try:
         position = axis.index(ctx.anchor)
     except ValueError:
-        return PriorBaseline(
-            "unknown", "anchor_not_on_session_axis", None, None, 0, None, None
-        )
+        return PriorBaseline("unknown", "anchor_not_on_session_axis", None, None, 0, None, None)
     if position < window:
-        return PriorBaseline(
-            "unknown", "insufficient_price_history", None, None, 0, None, None
-        )
+        return PriorBaseline("unknown", "insufficient_price_history", None, None, 0, None, None)
     baseline_sessions = axis[position - window : position]
-    values = _column_at_sessions(ctx.stock_history, baseline_sessions, column)
+    values = [
+        value
+        for value in _column_at_sessions(ctx.stock_history, baseline_sessions, column)
+        if value > 0
+    ]
     current = _column_at(ctx.stock_history, ctx.anchor, column)
+    if current is None or current <= 0:
+        return PriorBaseline(
+            "unknown",
+            f"{column}_missing_at_anchor",
+            None,
+            current,
+            len(values),
+            baseline_sessions[0],
+            baseline_sessions[-1],
+        )
     if len(values) < min_observations:
         return PriorBaseline(
             "insufficient_data",
@@ -498,11 +643,21 @@ def prior_baseline(
             baseline_sessions[0],
             baseline_sessions[-1],
         )
-    median_value = float(pd.Series(values).median())
+    baseline = float(pd.Series(values, dtype="float64").median())
+    if baseline <= 0:
+        return PriorBaseline(
+            "unknown",
+            f"{column}_invalid_baseline",
+            None,
+            current,
+            len(values),
+            baseline_sessions[0],
+            baseline_sessions[-1],
+        )
     return PriorBaseline(
         "known",
         None,
-        median_value,
+        baseline,
         current,
         len(values),
         baseline_sessions[0],
@@ -511,4 +666,6 @@ def prior_baseline(
 
 
 def session_axis(ctx: BenchmarkContext) -> tuple[pd.Timestamp, ...]:
+    """Expose the resolved market-session axis for evidence/test consumers."""
+
     return ctx.axis

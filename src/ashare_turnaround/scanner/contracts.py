@@ -36,7 +36,29 @@ class FeatureEvidence:
     config: dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        payload = asdict(self)
+        # Keep the structured components authoritative while exposing the
+        # contract's endpoint keys at the artifact boundary as well.
+        for key in (
+            "start_session",
+            "end_session",
+            "stock_start",
+            "stock_end",
+            "benchmark_start",
+            "benchmark_end",
+            "benchmark_id",
+            "stock_return",
+            "benchmark_return",
+            "excess_return",
+        ):
+            if key in self.components:
+                payload[key] = self.components[key]
+        return payload
+
+    def component(self, name: str, default: Any = None) -> Any:
+        """Read a derived contract component without flattening evidence."""
+
+        return self.components.get(name, default)
 
 
 @dataclass(slots=True)
@@ -52,6 +74,8 @@ class FeatureVector:
     rejected_reasons: list[str] = field(default_factory=list)
     unknown_features: list[str] = field(default_factory=list)
     comparable_period_contract_version: str = COMPARABLE_PERIOD_CONTRACT_VERSION
+    feature_contract_versions: dict[str, str] = field(default_factory=dict)
+    benchmark_metadata: dict[str, Any] = field(default_factory=dict)
 
     def add(
         self,
@@ -82,6 +106,8 @@ class FeatureVector:
         resolved_contract_version = contract_version or self.comparable_period_contract_version
         if resolved_contract_version != self.comparable_period_contract_version:
             raise ValueError("feature evidence uses a different comparable-period contract version")
+        if value is None and status == "known":
+            status = "unknown"
         self.values[name] = value
         self.evidence[name] = FeatureEvidence(
             feature=name,
@@ -120,6 +146,9 @@ class FeatureVector:
             raise ValueError("feature vectors must share comparable-period contract version")
         self.values.update(other.values)
         self.evidence.update(other.evidence)
+        self.feature_contract_versions.update(other.feature_contract_versions)
+        if other.benchmark_metadata:
+            self.benchmark_metadata.update(other.benchmark_metadata)
         for value in (*other.risk_flags,):
             if value not in self.risk_flags:
                 self.risk_flags.append(value)
@@ -130,6 +159,10 @@ class FeatureVector:
             if value not in self.unknown_features:
                 self.unknown_features.append(value)
         return self
+
+    @property
+    def expectation_crowding_contract_version(self) -> str | None:
+        return self.feature_contract_versions.get("expectation_crowding")
 
     @property
     def rejected(self) -> bool:
@@ -146,6 +179,15 @@ class FeatureVector:
             "risk_flags": list(self.risk_flags),
             "rejected_reasons": list(self.rejected_reasons),
             "unknown_features": list(self.unknown_features),
+            "feature_contract_versions": dict(self.feature_contract_versions),
+            "expectation_crowding_contract_version": self.expectation_crowding_contract_version,
+            "benchmark_metadata": dict(self.benchmark_metadata),
+            "benchmark_id": self.benchmark_metadata.get("benchmark_id"),
+            "benchmark_name": self.benchmark_metadata.get("benchmark_name"),
+            "benchmark_contract_version": self.benchmark_metadata.get(
+                "benchmark_contract_version", self.benchmark_metadata.get("version")
+            ),
+            "benchmark_source_dataset": self.benchmark_metadata.get("source_dataset"),
         }
 
 
@@ -161,6 +203,15 @@ def flatten_feature_vectors(vectors: list[FeatureVector] | tuple[FeatureVector, 
             "as_of_date": vector.as_of_date,
             "feature_version": vector.version,
             "comparable_period_contract_version": vector.comparable_period_contract_version,
+            "expectation_crowding_contract_version": vector.feature_contract_versions.get(
+                "expectation_crowding"
+            ),
+            "benchmark_id": vector.benchmark_metadata.get("benchmark_id"),
+            "benchmark_name": vector.benchmark_metadata.get("benchmark_name"),
+            "benchmark_contract_version": vector.benchmark_metadata.get(
+                "benchmark_contract_version", vector.benchmark_metadata.get("version")
+            ),
+            "benchmark_source_dataset": vector.benchmark_metadata.get("source_dataset"),
             "risk_flags": "|".join(vector.risk_flags),
             "rejected_reasons": "|".join(vector.rejected_reasons),
             "unknown_features": "|".join(vector.unknown_features),

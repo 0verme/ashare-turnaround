@@ -54,7 +54,12 @@ def scan_data(
         as_of_date = latest_completed_trading_date(store.read("trade_cal"))
     settings = config or ReplayConfig(top_n=top_n)
     if config is not None and top_n != config.top_n:
-        settings = ReplayConfig(top_n=top_n, universe=config.universe, score=config.score)
+        settings = ReplayConfig(
+            top_n=top_n,
+            universe=config.universe,
+            score=config.score,
+            crowding=config.crowding,
+        )
     result = run_replay(data_dir, as_of_date=as_of_date, config=settings)
     return ScanSnapshot(result)
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from typing import Any
 
 import pandas as pd
@@ -133,9 +133,22 @@ class ScoreResult:
     rejected: bool
     rejected_reasons: tuple[str, ...]
     comparable_period_contract_version: str = COMPARABLE_PERIOD_CONTRACT_VERSION
+    expectation_crowding_contract_version: str | None = None
+    benchmark_metadata: dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        payload = asdict(self)
+        payload.update(
+            {
+                "benchmark_id": self.benchmark_metadata.get("benchmark_id"),
+                "benchmark_name": self.benchmark_metadata.get("benchmark_name"),
+                "benchmark_contract_version": self.benchmark_metadata.get(
+                    "benchmark_contract_version", self.benchmark_metadata.get("version")
+                ),
+                "benchmark_source_dataset": self.benchmark_metadata.get("source_dataset"),
+            }
+        )
+        return payload
 
 
 def _bounded(value: float | int | None, scale: float = 1.0) -> float | None:
@@ -248,6 +261,10 @@ def score_feature_vector(
         rejected=bool(rejected_reasons),
         rejected_reasons=rejected_reasons,
         comparable_period_contract_version=vector.comparable_period_contract_version,
+        expectation_crowding_contract_version=vector.feature_contract_versions.get(
+            "expectation_crowding"
+        ),
+        benchmark_metadata=dict(vector.benchmark_metadata),
     )
 
 
@@ -263,6 +280,12 @@ def rank_scores(
             "as_of_date": result.as_of_date,
             "score_version": result.score_version,
             "comparable_period_contract_version": result.comparable_period_contract_version,
+            "expectation_crowding_contract_version": result.expectation_crowding_contract_version,
+            "benchmark_id": result.benchmark_metadata.get("benchmark_id"),
+            "benchmark_contract_version": result.benchmark_metadata.get(
+                "benchmark_contract_version", result.benchmark_metadata.get("version")
+            ),
+            "benchmark_source_dataset": result.benchmark_metadata.get("source_dataset"),
             "enabled_groups": "|".join(result.enabled_groups),
             "turnaround_score": result.turnaround_score,
             "risk_flags": "|".join(result.risk_flags),
