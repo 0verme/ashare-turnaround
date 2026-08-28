@@ -36,6 +36,8 @@ from ashare_turnaround.features.low_attention import (
     low_attention_sample_report_markdown,
 )
 from ashare_turnaround.scanner.contracts import FeatureVector
+from ashare_turnaround.scanner.replay import ReplayConfig, run_replay_frames
+from ashare_turnaround.scanner.report import candidate_report
 from ashare_turnaround.scanner.score import score_feature_vector
 from ashare_turnaround.scanner.universe import UniverseConfig, build_investable_universe
 
@@ -541,6 +543,8 @@ def test_extreme_inactivity_never_produces_a_low_attention_opportunity() -> None
     # classification contract must keep it out of the opportunity bucket.
     assert garbage.values["low_attention_v2_score"] is not None
     assert garbage.values["low_attention_v2_score"] > 0.0
+    assert garbage.values["low_attention_v2_opportunity"] is False
+    assert garbage.metadata["low_attention_v2"]["gated_opportunity"] is False
 
 
 def test_investable_universe_liquidity_floor_excludes_the_illiquid_name() -> None:
@@ -591,6 +595,14 @@ def test_v2_is_namespaced_and_never_shadows_v1_attention_score() -> None:
     scored = score_feature_vector(v2)
     assert scored.components["attention_score"] is None
     # v1 vector still carries attention_score into the production score
+    assert score_feature_vector(v1).components["attention_score"] is not None
+
+    # Generic FeatureVector.merge also preserves the legacy colliding field;
+    # v2 abnormal volume is explicitly namespaced.
+    legacy_abnormal = v1.values["abnormal_volume"]
+    v1.merge(v2)
+    assert v1.values["abnormal_volume"] == legacy_abnormal
+    assert "low_attention_v2_abnormal_volume" in v1.values
     assert score_feature_vector(v1).components["attention_score"] is not None
 
 
@@ -669,3 +681,218 @@ def test_sample_report_buckets_a_b_c_and_no_trade_recommendation() -> None:
     assert "## Buckets" in markdown
     assert "not investment advice" in markdown.lower() or "not trading" in markdown.lower()
     assert "buy" not in markdown.lower()
+
+
+def test_shuffled_and_duplicated_market_rows_have_deterministic_output() -> None:
+    frame = _market_frame(n_symbols=4)
+    duplicate = frame.loc[
+        frame["ts_code"].eq(_code(0)) & frame["trade_date"].eq(AS_OF)
+    ]
+    with_duplicate = pd.concat([frame, duplicate], ignore_index=True)
+    config = _default_config(
+        self_window=SelfWindowConfig(window=20, min_valid=2, min_listing_days=0),
+        abnormal_volume=AbnormalVolumeConfig(
+            baseline_window=10, min_observations=2, max_abnormal_cap=10.0, max_staleness_days=10
+        ),
+    )
+    original = compute_low_attention_v2(with_duplicate, _code(0), AS_OF, config=config)
+    shuffled = compute_low_attention_v2(
+        with_duplicate.sample(frac=1.0, random_state=29).reset_index(drop=True),
+        _code(0),
+        AS_OF,
+        config=config,
+    )
+    assert original.as_dict() == shuffled.as_dict()
+
+
+def test_future_published_market_row_cannot_define_effective_session() -> None:
+    rows = []
+    for code, multiplier in ((_code(0), 1.0), (_code(1), 2.0)):
+        for trade_date in ("20250626", "20250627"):
+            rows.append((code, trade_date, 100.0 * multiplier, 1.0 * multiplier, 1000.0))
+        rows.append((code, "20250630", 100.0 * multiplier, 1.0 * multiplier, 1000.0))
+    frame = pd.DataFrame(
+        rows,
+        columns=["ts_code", "trade_date", "vol", "turnover_rate", "amount"],
+    )
+    frame["actual_available_date"] = [
+        "20250626",
+        "20250627",
+        "20250702",
+        "20250626",
+        "20250627",
+        "20250702",
+    ]
+    config = _default_config(
+        self_window=SelfWindowConfig(window=10, min_valid=2, min_listing_days=0),
+        abnormal_volume=AbnormalVolumeConfig(
+            baseline_window=10, min_observations=2, max_abnormal_cap=10.0, max_staleness_days=10
+        ),
+    )
+    vector = compute_low_attention_v2(frame, _code(0), "20250630", config=config)
+    assert vector.values["session_status"] == "traded"
+    assert vector.evidence["session_status"].metadata["effective_session"] == "20250627"
+    assert vector.evidence["cross_section_turnover_percentile"].metadata[
+        "population_session"
+    ] == "20250627"
+
+
+def test_stale_observation_cannot_produce_self_attention_evidence() -> None:
+    frame = _market_frame()
+    code = _code(5)
+    rows = frame.loc[frame["ts_code"].eq(code)].sort_values("trade_date").iloc[:-60]
+    frame = pd.concat([frame.loc[~frame["ts_code"].eq(code)], rows], ignore_index=True)
+    vector = compute_low_attention_v2(frame, code, AS_OF, config=_default_config())
+    assert vector.values["session_status"] == "stale"
+    for name in (
+        "self_turnover_percentile",
+        "self_amount_percentile",
+        "self_volume_percentile",
+        "abnormal_volume",
+        "attention_baseline_change",
+        "attention_surge",
+        "low_attention_v2_score",
+    ):
+        assert vector.values[name] is None
+        assert vector.evidence[name].metadata["warnings"] in {
+            "stale_data",
+            "insufficient_attention_evidence",
+        }
+
+
+def test_missing_daily_basic_is_unknown_not_a_low_attention_signal() -> None:
+    daily = _market_frame(n_symbols=3)[["ts_code", "trade_date", "vol"]]
+    config = _default_config(
+        self_window=SelfWindowConfig(window=20, min_valid=2, min_listing_days=0),
+        abnormal_volume=AbnormalVolumeConfig(
+            baseline_window=10, min_observations=2, max_abnormal_cap=10.0, max_staleness_days=10
+        ),
+    )
+    vector = compute_low_attention_v2(daily, _code(0), AS_OF, config=config)
+    assert vector.values["session_status"] == "traded"
+    assert vector.values["self_volume_percentile"] is not None
+    assert vector.values["self_turnover_percentile"] is None
+    assert vector.values["cross_section_volume_percentile"] is not None
+    assert vector.values["cross_section_turnover_percentile"] is None
+    assert classify_low_attention_case(vector, config=config)[0] == SAMPLE_CLASS_C
+
+
+def test_volume_surge_is_higher_attention_not_low_attention() -> None:
+    dates = pd.date_range("20250620", periods=5, freq="B")
+    rows: list[tuple[str, str, float, float, float]] = []
+    for code, volume, turnover, amount in (
+        (_code(0), [100.0, 100.0, 100.0, 100.0, 1000.0], 1.0, 1000.0),
+        (_code(1), [200.0] * 5, 2.0, 2000.0),
+    ):
+        rows.extend(
+            (code, ts.strftime("%Y%m%d"), volume[index], turnover, amount)
+            for index, ts in enumerate(dates)
+        )
+    frame = pd.DataFrame(
+        rows, columns=["ts_code", "trade_date", "vol", "turnover_rate", "amount"]
+    )
+    config = _default_config(
+        self_window=SelfWindowConfig(window=10, min_valid=2, min_listing_days=0),
+        abnormal_volume=AbnormalVolumeConfig(
+            baseline_window=4, min_observations=2, max_abnormal_cap=10.0, max_staleness_days=10
+        ),
+        low_attention_cross_percentile=0.5,
+    )
+    vector = compute_low_attention_v2(frame, _code(0), dates[-1].strftime("%Y%m%d"), config=config)
+    assert vector.values["abnormal_volume"] == pytest.approx(10.0)
+    assert vector.values["attention_surge"] is True
+    assert classify_low_attention_case(vector, config=config) == (
+        SAMPLE_CLASS_NA,
+        ("higher_attention_observed",),
+    )
+
+
+def test_v2_metadata_uses_explicit_evidence_vocabulary() -> None:
+    vector = compute_low_attention_v2(_market_frame(), _code(0), AS_OF, config=_default_config())
+    required = {
+        "name",
+        "value",
+        "status",
+        "reason",
+        "raw_value",
+        "observation_date",
+        "reference_type",
+        "reference_window",
+        "reference_population",
+        "population_count",
+        "history_count",
+        "source_dataset",
+        "source_fields",
+        "as_of_date",
+        "attention_contract_version",
+    }
+    for name in (
+        "self_turnover_percentile",
+        "cross_section_turnover_percentile",
+        "abnormal_volume",
+        "attention_baseline_change",
+    ):
+        metadata = vector.evidence[name].metadata
+        assert required <= metadata.keys()
+        assert metadata["name"] == name
+        assert metadata["attention_contract_version"] == SEMANTIC
+        assert metadata["value"] == vector.values[name]
+    assert vector.metadata["low_attention_v2"]["attention_contract_version"] == SEMANTIC
+    score = score_feature_vector(vector)
+    assert score.input_metadata["attention_contract_version"] == SEMANTIC
+    assert score.input_metadata["production_score_uses_low_attention_v2"] is False
+
+
+def test_replay_and_candidate_report_carry_low_attention_contract_metadata() -> None:
+    dates = pd.date_range("20250620", periods=3, freq="B")
+    code = _code(0)
+    daily = pd.DataFrame(
+        {
+            "ts_code": [code] * len(dates),
+            "trade_date": dates.strftime("%Y%m%d"),
+            "close": [10.0, 10.1, 10.2],
+            "vol": [100.0, 110.0, 120.0],
+        }
+    )
+    daily_basic = pd.DataFrame(
+        {
+            "ts_code": [code] * len(dates),
+            "trade_date": dates.strftime("%Y%m%d"),
+            "turnover_rate": [1.0, 1.1, 1.2],
+            "amount": [1000.0, 1100.0, 1200.0],
+        }
+    )
+    frames = {
+        "stock_basic": pd.DataFrame(
+            {
+                "ts_code": [code],
+                "name": ["Synthetic"],
+                "list_date": ["20100101"],
+                "list_status": ["L"],
+            }
+        ),
+        "daily": daily,
+        "daily_basic": daily_basic,
+        "income": pd.DataFrame(),
+        "balancesheet": pd.DataFrame(),
+        "cashflow": pd.DataFrame(),
+        "fina_indicator": pd.DataFrame(),
+    }
+    result = run_replay_frames(
+        frames,
+        as_of_date=dates[-1].strftime("%Y%m%d"),
+        config=ReplayConfig(
+            top_n=1,
+            universe=UniverseConfig(min_financial_periods=0),
+        ),
+    )
+    assert result.metadata()["attention_contract_version"] == SEMANTIC
+    assert result.metadata()["attention_v2_research_only"] is True
+    assert result.ranked.iloc[0]["attention_contract_version"] == SEMANTIC
+    vector = result.vectors[0]
+    assert vector.values["abnormal_volume"] is not None  # v1 field is preserved
+    assert "low_attention_v2_abnormal_volume" in vector.values
+    report = candidate_report(result, code)
+    assert report["report_metadata"]["attention_contract_version"] == SEMANTIC
+    assert report["score_input_metadata"]["attention_contract_version"] == SEMANTIC
+    assert report["attention_v2_evidence"]
