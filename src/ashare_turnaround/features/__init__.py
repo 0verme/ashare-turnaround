@@ -19,7 +19,11 @@ from .low_attention import (
 )
 from .market import compute_attention_features, compute_crowding_features
 from .quality import compute_quality_features
-from .trend import compute_trend_features
+from .trend import (
+    TREND_CONTRACT_VERSION,
+    calculate_trend,
+    compute_trend_features,
+)
 
 __all__ = [
     "compute_attention_features",
@@ -27,6 +31,8 @@ __all__ = [
     "compute_fundamental_features",
     "compute_quality_features",
     "compute_trend_features",
+    "TREND_CONTRACT_VERSION",
+    "calculate_trend",
     "compute_low_attention_v2",
     "assess_liquidity_eligibility",
     "build_cross_section_population",

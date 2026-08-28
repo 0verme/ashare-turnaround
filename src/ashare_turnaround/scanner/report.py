@@ -18,6 +18,8 @@ def candidate_report(result: ReplayResult, ts_code: str) -> dict[str, Any]:
         raise KeyError(f"candidate not found in replay: {ts_code}")
     return {
         "metadata": result.metadata(),
+        "comparable_period_contract_version": result.comparable_period_contract_version,
+        "trend_contract_version": result.trend_contract_version,
         "report_metadata": {
             "attention_contract_version": result.attention_contract_version,
             "low_attention_version": result.attention_contract_version,
@@ -40,6 +42,7 @@ def candidate_report(result: ReplayResult, ts_code: str) -> dict[str, Any]:
 def candidate_report_markdown(report: dict[str, Any]) -> str:
     score = report["score"]
     contract_version = report["metadata"].get("comparable_period_contract_version", "unknown")
+    trend_contract_version = report["metadata"].get("trend_contract_version", "unknown")
     lines = [
         f"# Turnaround candidate report: {report['ts_code']}",
         "",
@@ -49,6 +52,7 @@ def candidate_report_markdown(report: dict[str, Any]) -> str:
         f"- Score version: `{score['score_version']}`",
         f"- Low-attention contract: `{report['report_metadata']['attention_contract_version']}`",
         f"- Comparable-period contract: `{contract_version}`",
+        f"- Trend contract: `{trend_contract_version}`",
         f"- Risk flags: `{', '.join(report['risk_flags']) or 'none'}`",
         f"- Rejected reasons: `{', '.join(report['rejected_reasons']) or 'none'}`",
         "",

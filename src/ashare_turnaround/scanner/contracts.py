@@ -7,6 +7,12 @@ from typing import Any
 
 from ..pit.comparable import COMPARABLE_PERIOD_CONTRACT_VERSION
 
+# Trend semantics are versioned independently from the period semantics that
+# supply their observations.  Keeping the constant at this low-level contract
+# avoids an import cycle between ``features.trend`` and ``FeatureVector``.
+TURNAROUND_TREND_CONTRACT_VERSION = "turnaround-trend-v2"
+TREND_CONTRACT_VERSION = TURNAROUND_TREND_CONTRACT_VERSION
+
 
 @dataclass(frozen=True, slots=True)
 class FeatureEvidence:
@@ -29,6 +35,7 @@ class FeatureEvidence:
     period_semantics: str | None = None
     source_versions: tuple[str, ...] = ()
     contract_version: str = COMPARABLE_PERIOD_CONTRACT_VERSION
+    trend_contract_version: str | None = None
     provenance: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -49,6 +56,7 @@ class FeatureVector:
     rejected_reasons: list[str] = field(default_factory=list)
     unknown_features: list[str] = field(default_factory=list)
     comparable_period_contract_version: str = COMPARABLE_PERIOD_CONTRACT_VERSION
+    trend_contract_version: str = TURNAROUND_TREND_CONTRACT_VERSION
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def add(
@@ -71,12 +79,18 @@ class FeatureVector:
         period_semantics: str | None = None,
         source_versions: tuple[str, ...] = (),
         contract_version: str | None = None,
+        trend_contract_version: str | None = None,
         provenance: dict[str, Any] | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> None:
         resolved_contract_version = contract_version or self.comparable_period_contract_version
         if resolved_contract_version != self.comparable_period_contract_version:
             raise ValueError("feature evidence uses a different comparable-period contract version")
+        if (
+            trend_contract_version is not None
+            and trend_contract_version != self.trend_contract_version
+        ):
+            raise ValueError("feature evidence uses a different trend contract version")
         self.values[name] = value
         self.evidence[name] = FeatureEvidence(
             feature=name,
@@ -96,11 +110,19 @@ class FeatureVector:
             period_semantics=period_semantics,
             source_versions=source_versions,
             contract_version=resolved_contract_version,
+            trend_contract_version=trend_contract_version,
             provenance=provenance or {},
             metadata=metadata or {},
         )
         if (
-            status in {"unknown", "insufficient_data", "unsupported"}
+            status
+            in {
+                "unknown",
+                "insufficient_data",
+                "insufficient_history",
+                "discontinuous",
+                "unsupported",
+            }
             and name not in self.unknown_features
         ):
             self.unknown_features.append(name)
@@ -110,6 +132,8 @@ class FeatureVector:
             raise ValueError("feature vectors must share ts_code and as_of_date")
         if self.comparable_period_contract_version != other.comparable_period_contract_version:
             raise ValueError("feature vectors must share comparable-period contract version")
+        if self.trend_contract_version != other.trend_contract_version:
+            raise ValueError("feature vectors must share trend contract version")
         namespace = other.metadata.get("namespace")
         name_map: dict[str, str] = {}
         for name, value in other.values.items():
@@ -156,6 +180,7 @@ class FeatureVector:
             "as_of_date": self.as_of_date,
             "version": self.version,
             "comparable_period_contract_version": self.comparable_period_contract_version,
+            "trend_contract_version": self.trend_contract_version,
             "values": dict(self.values),
             "evidence": {key: value.as_dict() for key, value in self.evidence.items()},
             "risk_flags": list(self.risk_flags),
@@ -177,6 +202,7 @@ def flatten_feature_vectors(vectors: list[FeatureVector] | tuple[FeatureVector, 
             "as_of_date": vector.as_of_date,
             "feature_version": vector.version,
             "comparable_period_contract_version": vector.comparable_period_contract_version,
+            "trend_contract_version": vector.trend_contract_version,
             "risk_flags": "|".join(vector.risk_flags),
             "rejected_reasons": "|".join(vector.rejected_reasons),
             "unknown_features": "|".join(vector.unknown_features),

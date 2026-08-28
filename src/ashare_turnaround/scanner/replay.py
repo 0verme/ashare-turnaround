@@ -26,7 +26,7 @@ from ..features import (
 from ..pit.comparable import COMPARABLE_PERIOD_CONTRACT_VERSION
 from ..storage.inventory import build_coverage_report
 from ..storage.parquet import RawParquetStore
-from .contracts import FeatureVector
+from .contracts import TURNAROUND_TREND_CONTRACT_VERSION, FeatureVector
 from .score import (
     ScoreConfig,
     ScoreResult,
@@ -52,6 +52,7 @@ class ReplayConfig:
         return {
             "top_n": self.top_n,
             "comparable_period_contract_version": COMPARABLE_PERIOD_CONTRACT_VERSION,
+            "trend_contract_version": TURNAROUND_TREND_CONTRACT_VERSION,
             "attention_contract_version": self.low_attention.version,
             "low_attention_version": self.low_attention.version,
             "universe": asdict(self.universe),
@@ -82,6 +83,7 @@ class ReplayResult:
     scores: tuple[ScoreResult, ...]
     warnings: tuple[str, ...] = ()
     comparable_period_contract_version: str = COMPARABLE_PERIOD_CONTRACT_VERSION
+    trend_contract_version: str = TURNAROUND_TREND_CONTRACT_VERSION
     attention_contract_version: str = LOW_ATTENTION_V2_VERSION
     attention_feature_fields: tuple[str, ...] = LOW_ATTENTION_V2_FIELDS
 
@@ -99,6 +101,7 @@ class ReplayResult:
             "status": self.status,
             "warnings": list(self.warnings),
             "comparable_period_contract_version": self.comparable_period_contract_version,
+            "trend_contract_version": self.trend_contract_version,
             "attention_contract_version": self.attention_contract_version,
             "low_attention_version": self.attention_contract_version,
             "attention_feature_fields": list(self.attention_feature_fields),
@@ -300,6 +303,7 @@ def run_replay_frames(
     ranked["universe_version"] = universe.version
     ranked["feature_version"] = "features-v1"
     ranked["comparable_period_contract_version"] = COMPARABLE_PERIOD_CONTRACT_VERSION
+    ranked["trend_contract_version"] = TURNAROUND_TREND_CONTRACT_VERSION
     ranked["attention_contract_version"] = settings.low_attention.version
     ranked["low_attention_version"] = settings.low_attention.version
     ranked["attention_v2_research_only"] = True
@@ -320,6 +324,7 @@ def run_replay_frames(
         scores=tuple(scores),
         warnings=tuple(dict.fromkeys(warnings)),
         comparable_period_contract_version=COMPARABLE_PERIOD_CONTRACT_VERSION,
+        trend_contract_version=TURNAROUND_TREND_CONTRACT_VERSION,
         attention_contract_version=settings.low_attention.version,
         attention_feature_fields=LOW_ATTENTION_V2_FIELDS,
     )

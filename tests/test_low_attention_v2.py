@@ -603,6 +603,9 @@ def test_v2_is_namespaced_and_never_shadows_v1_attention_score() -> None:
     v1.merge(v2)
     assert v1.values["abnormal_volume"] == legacy_abnormal
     assert "low_attention_v2_abnormal_volume" in v1.values
+    assert v1.comparable_period_contract_version == "comparable-period-v1"
+    assert v1.trend_contract_version == "turnaround-trend-v2"
+    assert v1.feature_metadata["low_attention_v2"]["attention_contract_version"] == SEMANTIC
     assert score_feature_vector(v1).components["attention_score"] is not None
 
 
@@ -888,11 +891,15 @@ def test_replay_and_candidate_report_carry_low_attention_contract_metadata() -> 
     )
     assert result.metadata()["attention_contract_version"] == SEMANTIC
     assert result.metadata()["attention_v2_research_only"] is True
+    assert result.metadata()["trend_contract_version"] == "turnaround-trend-v2"
     assert result.ranked.iloc[0]["attention_contract_version"] == SEMANTIC
+    assert result.ranked.iloc[0]["trend_contract_version"] == "turnaround-trend-v2"
     vector = result.vectors[0]
     assert vector.values["abnormal_volume"] is not None  # v1 field is preserved
     assert "low_attention_v2_abnormal_volume" in vector.values
     report = candidate_report(result, code)
     assert report["report_metadata"]["attention_contract_version"] == SEMANTIC
     assert report["score_input_metadata"]["attention_contract_version"] == SEMANTIC
+    assert report["score"]["trend_contract_version"] == "turnaround-trend-v2"
+    assert report["trend_contract_version"] == "turnaround-trend-v2"
     assert report["attention_v2_evidence"]
