@@ -3,7 +3,10 @@
 **Semantic version:** `low-attention-v2.0.0`
 **Status:** research calibration of issue #13. Does **not** alter the
 production Turnaround Score v1 (the v1 `attention_score` remains the only
-attention component consumed by `score.py`).
+attention component consumed by `score.py`). The v2 contract is nevertheless
+carried as additive feature, score-input, replay, and report metadata so an
+audit can prove which attention semantics were present without changing score
+weights or production ranking behavior.
 
 Core principle:
 
@@ -58,9 +61,11 @@ data source):
 | `cross_section_volume_percentile` | cross | same on `vol` |
 | `abnormal_volume` | prior baseline | `current_vol / median(prior 60-session vol)`, capped at 10× with a flag |
 | `attention_baseline_change` | prior baseline | `current_turnover / median(prior 60-session turnover)` — "attention fading" ratio |
+| `attention_surge` | prior baseline | `True` when abnormal volume or turnover is at least the configured surge ratio; this is higher-attention evidence |
 | `session_status` | session | `traded` / `suspended_session` / `stale` / `no_data` (+ `staleness_days`) |
 | `liquidity_eligible` | eligibility | independent research gate (see §7) |
 | `low_attention_v2_score` | research aggregate | mean of `(1 - p)` over the four core percentiles; **research-only**, never feeds the production score, and must be gated by liquidity eligibility before any opportunity reading |
+| `low_attention_v2_opportunity` | explicit gate | `True` only when the aggregate is known, the session is traded, the liquidity gate passes, and no attention surge is present |
 
 ### Self-history
 
@@ -78,6 +83,10 @@ data source):
   a baseline;
 - no current observation: `unknown` with reason `missing_current_field`;
 - no rows at all: `unknown` with reason `insufficient_self_history`;
+- the evidence keeps both `history_count` (all observed prior sessions) and
+  `valid_observation_count` (field values actually used), so a new symbol with
+  23 observed sessions is not misreported as having a zero-length history;
+- a stale or suspended latest observation does not produce a self percentile;
 - future data is impossible by construction: rows are filtered to
   `trade_date <= as_of` (and `actual_available_date <= as_of` when present).
 
@@ -103,7 +112,14 @@ data source):
 - the symbol must have an observation at `t`; otherwise `unknown` with reason
   `no_observation_at_session` (suspension);
 - population count and scope are stored in the evidence of every cross-section
-  proxy.
+  proxy;
+- ST status is not silently read from current `stock_basic`: the population
+  contract is explicitly `not_consulted; retained_if_row_exists`;
+- a symbol with no row at the effective session is excluded as suspended for
+  that session; a row missing `daily_basic` remains available for `daily`
+  fields, while the missing `daily_basic` metric is excluded from its own
+  valid population; a zero-activity row remains observable but must fail the
+  independent liquidity floor before it can be called an opportunity.
 
 ### Trading-session semantics
 
@@ -123,7 +139,10 @@ data source):
   (current excluded), `min_observations = 20`;
 - zero baseline → `unknown` (reason `zero_baseline`);
 - extreme outliers are capped at `max_abnormal_cap = 10.0` and flagged
-  (`risk_flags += abnormal_volume_capped`);
+  (`risk_flags += abnormal_volume_capped`); the uncapped ratio remains in
+  evidence;
+- a configured volume/turnover surge is explicitly `higher_attention` and
+  cannot satisfy the low-attention sample classification;
 - missing current value → `unknown`; missing/stale → `unknown` with the
   session reason.
 
@@ -144,9 +163,10 @@ Missing is a first-class state, never a low value:
 
 The **composite never converts inactivity into an opportunity**:
 
-1. `liquidity_eligible` is computed by an independent gate
-   (`assess_liquidity_eligibility`, `liquidity-gate-v2`): trailing 20-session
-   average `amount` ≥ research floor `1.0`, current-session trading, listing
+1. `liquidity_eligible` is computed by an independent, configurable gate
+   (`assess_liquidity_eligibility`, `liquidity-gate-v2`): trailing
+   `LiquidityConfig.average_lookback` average `amount` ≥ the declared research
+   floor (default `1.0`), current-session trading, listing
    age ≥ `min_listing_days`, and explicit reasons for every failure.
 2. Sample classification (`classify_low_attention_case`) is ordered:
    policy/session exclusion (new listing, suspension, staleness) **first** →
@@ -188,19 +208,28 @@ precise data is worse than an explicit exclusion.
 
 ## 5. Evidence schema
 
-Every proxy carries a `FeatureEvidence` entry whose `metadata` includes:
+Every proxy carries a `FeatureEvidence` entry whose `metadata` includes the
+stable names below (the older `kind`, `window`, `source`, and
+`semantic_version` aliases remain for compatibility):
 
 ```text
-kind                       self | cross_sectional | prior_baseline
-as_of_date                 decision date (YYYYMMDD)
+name                       feature name
+value                      computed value (including ratios/flags)
+status                     known | unknown
+reason                     explicit missingness/policy reason
+raw_value                  raw observed value at the session
 observation_date           session of the raw observation (YYYYMMDD)
-raw_current_value          raw observed value at the session
+reference_type             SELF_HISTORY | CROSS_SECTION | PRIOR_BASELINE
+reference_window           declared baseline window
+reference_population       same symbol or declared as-of population
+population_count           valid population size at the session (cross-section)
+history_count              observed prior-session count
+source_dataset             stable dataset identity (daily / daily_basic)
+source_fields              exact fields used
+as_of_date                 decision date (YYYYMMDD)
+attention_contract_version low-attention-v2.0.0
 percentile                 computed percentile (None for ratios)
 valid_observation_count    valid baseline observations used
-population_count           population size at the session (cross-section)
-window                     baseline window used
-source                     dataset provenance
-semantic_version           low-attention-v2.0.0
 warnings                   missing / stale / suspension / cap reason
 population_scope           tradable_market | investable_universe   (cross)
 tie_convention             inclusive                              (cross)
@@ -210,8 +239,14 @@ capped                     outlier cap applied                     (abnormal)
 
 The output is a `FeatureVector` with `version = "low-attention-v2.0.0"`; v2
 field names are namespaced (`self_*`, `cross_section_*`, ...) and never
-overwrite v1 fields. `score_feature_vector` continues to see
-`attention_score = None` for v2 vectors — the v1/v2 boundary is explicit.
+overwrite v1 fields. `FeatureVector.metadata["low_attention_v2"]` carries the
+contract/config declaration. `score_feature_vector` records the v2 contract in
+`ScoreResult.input_metadata` but continues to consume only the legacy
+`attention_score`; a direct v2 vector therefore has `attention_score = None`.
+Replay keeps the legacy `abnormal_volume` key intact and exposes a colliding v2
+field as `low_attention_v2_abnormal_volume`, while its full evidence is kept in
+replay metadata. Candidate reports repeat the contract and score-input
+metadata.
 
 ---
 
@@ -256,18 +291,23 @@ research-only nature explicitly.
 | --- | --- |
 | `src/ashare_turnaround/features/low_attention.py` | v2 contract: configs, self/cross/baseline proxies, eligibility, classification, sample report |
 | `src/ashare_turnaround/features/__init__.py` | exports (`compute_low_attention_v2`, sample report helpers) |
-| `src/ashare_turnaround/scanner/contracts.py` | `FeatureEvidence.metadata` (additive, backward compatible) |
+| `src/ashare_turnaround/scanner/contracts.py` | `FeatureEvidence.metadata` and additive `FeatureVector.metadata` (backward compatible) |
 | `src/ashare_turnaround/features/common.py` | `add_known(..., metadata=...)` passthrough (additive) |
-| `tests/test_low_attention_v2.py` | 23 contract tests (see §8) |
+| `src/ashare_turnaround/scanner/score.py` | score-input metadata; v2 remains research-only and weights are unchanged |
+| `src/ashare_turnaround/scanner/replay.py` | additive v2 contract/config metadata and collision-safe evidence attachment |
+| `src/ashare_turnaround/scanner/report.py` | report-level contract and score-input metadata |
+| `tests/test_low_attention_v2.py` | contract and integration-boundary tests (see §8) |
 | `docs/low-attention-v2.md` | this document |
 
 ## 8. Test coverage
 
 rolling percentile boundary; current-session exclusion; insufficient history;
-new listing; suspended stock; stale data; missing observations; cross-sectional
-ties; deterministic tie handling; historical (as-of) universe state; PIT
-cutoff (future rows ignored); abnormal-volume prior baseline; extreme outlier
-cap+flag; zero baseline; extremely illiquid false opportunity (A/B/C);
-v1/v2 version boundary; evidence completeness; deterministic output; no-trade-
-recommendation report. Full suite: 118 passed (95 pre-existing + 23 new),
-ruff clean.
+new listing; suspended stock; stale data; missing observations; missing
+`daily_basic`; cross-sectional ties; deterministic tie handling; historical
+(as-of) universe state; PIT
+cutoff (future rows ignored, including future publication dates);
+abnormal-volume prior baseline; extreme outlier cap+flag; zero baseline;
+volume surge; extremely illiquid false opportunity (A/B/C);
+v1/v2 version boundary; evidence completeness; deterministic output;
+replay/score/report metadata; no-trade-recommendation report. The exact suite
+count is recorded by the validation command rather than hard-coded here.
