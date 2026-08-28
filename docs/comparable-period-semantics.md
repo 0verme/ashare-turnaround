@@ -195,10 +195,11 @@ Every derived feature evidence record includes the metric, status, reason,
 current/comparison period, raw values, period semantics, datasets and fields,
 availability dates, source versions, source chain, and
 `contract_version`.  `FeatureVector` and replay metadata expose the same
-contract version.
+comparable-period contract version.  The downstream trend layer is separately
+versioned as `turnaround-trend-v2`; the two versions are never substituted for
+one another.  See [Trend Semantics](trend-semantics.md) for the level/change/
+acceleration/persistence contract.
 
-This issue only supplies validated comparable-period and financial primitives.
-The existing trend acceleration / persistence redesign remains out of scope
-for #28; invalid acceleration consumers are held as explicit `UNKNOWN` rather
-than fed adjacent cumulative rows.  No score weights are changed by this
-contract.
+The comparable-period contract remains the only source of period semantics.
+Trend consumers must fail closed when its validated primitives are absent or
+invalid.  No score weights are changed by either contract.

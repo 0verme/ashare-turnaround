@@ -138,7 +138,8 @@ def test_universe_records_policy_exclusions_and_feature_groups_are_pit_safe() ->
     assert fundamental.values["revenue_yoy"] is None
     assert fundamental.evidence["revenue_yoy"].reason == "missing_comparable_period"
     assert trend.values["consecutive_improvement"] is None
-    assert trend.evidence["consecutive_improvement"].reason == "trend_redesign_out_of_scope"
+    assert trend.evidence["consecutive_improvement"].status == "insufficient_history"
+    assert trend.evidence["consecutive_improvement"].reason == "insufficient_history"
     assert quality.values["quality_gate_status"] == "pass"
     assert attention.values["attention_score"] is not None
     assert fundamental.evidence["revenue_yoy"].periods == ("20241231",)
@@ -195,7 +196,12 @@ def test_replay_score_and_candidate_report_are_deterministic() -> None:
     assert result.ranked["historical_universe_member"].tolist() == [True]
     assert result.metadata()["config_fingerprint"] == result.config_fingerprint
     assert result.metadata()["comparable_period_contract_version"] == ("comparable-period-v1")
+    assert result.metadata()["trend_contract_version"] == "turnaround-trend-v2"
     assert result.ranked.iloc[0]["comparable_period_contract_version"] == ("comparable-period-v1")
+    assert result.ranked.iloc[0]["trend_contract_version"] == "turnaround-trend-v2"
+    assert result.scores[0].trend_contract_version == "turnaround-trend-v2"
+    assert report["trend_contract_version"] == "turnaround-trend-v2"
+    assert "Trend contract" in markdown
 
 
 def test_ablation_score_configs_share_data_snapshot_but_have_distinct_run_ids() -> None:

@@ -42,6 +42,7 @@ replay / daily snapshot / evaluation / report
 | #20 | Explainable candidate report | `scanner.report.write_candidate_reports` |
 | #34 | Market / Reference historical corpus | `datasets.market_bootstrap` / `datasets.market_validation` |
 | #27 | Comparable financial period semantics | `pit.comparable` / `features.fundamental` |
+| #28 | Turnaround trend and acceleration semantics | `features.trend` / `docs/trend-semantics.md` |
 
 Issue #7 is deliberately not duplicated in this branch: the repository already
 has the proposed adversarial PIT test/documentation in [PR #24](https://github.com/0verme/ashare-turnaround/pull/24).
@@ -55,12 +56,14 @@ Each candidate is represented by `scanner.contracts.FeatureVector`:
 - `ts_code` and normalized `as_of_date` identify the decision;
 - `version` is currently `features-v1`;
 - `comparable_period_contract_version` is `comparable-period-v1`;
+- `trend_contract_version` is `turnaround-trend-v2`; this is independent of
+  the comparable-period version;
 - `values` contains numeric features or explicit `None`;
 - `evidence` maps every value to datasets, source fields, report periods, raw
   values, period semantics, source versions, and actual availability dates;
 - `risk_flags` are soft penalties while `rejected_reasons` are hard gates;
-- `unknown_features` is populated for `unknown`, `insufficient_data`, and
-  `unsupported` values.
+- `unknown_features` is populated for `unknown`, `insufficient_data`,
+  `insufficient_history`, `discontinuous`, and `unsupported` values.
 
 Feature groups only add namespaced values to this object. They do not change the
 universe, score weights, CLI parser, or another feature group's data. This keeps
@@ -94,9 +97,20 @@ quarters.  Ambiguous or unsupported semantics are `UNKNOWN`.  See
 [docs/comparable-period-semantics.md](comparable-period-semantics.md) for the
 full contract and denominator policy.
 
+### Turnaround trend
+
+`features.trend` consumes only the validated primitives above under
+`turnaround-trend-v2`.  It keeps level, first change, acceleration, sign
+transition, persistence, and turnaround state as separate fields.  YoY uses
+validated comparable periods, QoQ uses validated single quarters, margins use
+period margins, and TTM uses validated four-quarter endpoints.  A gap or
+unknown observation interrupts persistence; no status is filled with zero.
+See [docs/trend-semantics.md](trend-semantics.md) for the full contract and
+adversarial examples.
+
 ### Score
 
-`ScoreConfig` is `score-v1` with these weights:
+`ScoreConfig` is `score-v2` with these unchanged weights:
 
 | Component | Weight |
 | --- | ---: |
