@@ -316,6 +316,7 @@ schema-compatible aliases and now carry the new evidence chain.  Because the
 meaning of those score inputs changed, the score input configuration is
 versioned as `score-v2`; its weights were not changed.
 
-This contract does not implement the #31 overall evidence/confidence gate,
-ranking eligibility, or critical-group policy.  It only makes each individual
-trend evidence honest.
+The overall evidence/confidence gate, ranking eligibility, and critical-group
+policy are implemented separately by `evidence-confidence-v1`; this contract
+continues to make each individual trend evidence honest. See
+[evidence-confidence-v1.md](evidence-confidence-v1.md).

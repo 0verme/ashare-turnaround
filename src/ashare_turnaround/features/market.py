@@ -174,13 +174,15 @@ def compute_attention_features(
         fields=("vol", "amount"),
         history=history,
     )
-    known = [value for value in (turnover, amount, abnormal) if value is not None]
+    # A production component is only published when all of its declared v1
+    # primitives are known.  Missing data is not an average/neutral attention
+    # view; the score layer can disclose the omitted component explicitly.
     score = None
-    if known:
+    if turnover is not None and amount is not None and abnormal is not None:
         score = 100.0 * (
-            (1.0 - (turnover or 0.5)) * 0.4
-            + (1.0 - (amount or 0.5)) * 0.4
-            + (1.0 - min(abnormal or 1.0, 3.0) / 3.0) * 0.2
+            (1.0 - turnover) * 0.4
+            + (1.0 - amount) * 0.4
+            + (1.0 - min(abnormal, 3.0) / 3.0) * 0.2
         )
     add_known(
         vector,

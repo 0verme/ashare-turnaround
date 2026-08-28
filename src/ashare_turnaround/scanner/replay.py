@@ -29,6 +29,11 @@ from ..pit.comparable import COMPARABLE_PERIOD_CONTRACT_VERSION
 from ..storage.inventory import build_coverage_report
 from ..storage.parquet import RawParquetStore
 from .contracts import TURNAROUND_TREND_CONTRACT_VERSION, FeatureVector
+from .evidence import (
+    EVIDENCE_CONFIDENCE_CONTRACT_VERSION,
+    FEATURE_GROUP_REGISTRY_VERSION,
+    EvidenceConfidenceConfig,
+)
 from .score import (
     ScoreConfig,
     ScoreResult,
@@ -46,6 +51,9 @@ class ReplayConfig:
     score: ScoreConfig = field(default_factory=ScoreConfig)
     crowding: CrowdingConfig = field(default_factory=CrowdingConfig)
     low_attention: LowAttentionConfig = field(default_factory=LowAttentionConfig)
+    evidence_confidence: EvidenceConfidenceConfig = field(
+        default_factory=EvidenceConfidenceConfig
+    )
 
     def __post_init__(self) -> None:
         if self.top_n <= 0:
@@ -64,6 +72,9 @@ class ReplayConfig:
             "universe": asdict(self.universe),
             "score": self.score.declared(),
             "low_attention": self.low_attention.declared(),
+            "evidence_confidence_contract_version": self.evidence_confidence.version,
+            "feature_group_registry_version": self.evidence_confidence.registry_version,
+            "evidence_confidence": self.evidence_confidence.declared(),
         }
 
     @property
@@ -94,6 +105,17 @@ class ReplayResult:
     attention_feature_fields: tuple[str, ...] = LOW_ATTENTION_V2_FIELDS
     expectation_crowding_contract_version: str = EXPECTATION_CROWDING_CONTRACT_VERSION
     benchmark_metadata: dict[str, Any] = field(default_factory=dict)
+    # Full diagnostic ordering is retained separately from the formal Top-N
+    # ``ranked`` frame, whose rows are eligibility-gated.
+    diagnostic_ranked: pd.DataFrame | None = None
+    evidence_confidence_contract_version: str = EVIDENCE_CONFIDENCE_CONTRACT_VERSION
+    feature_group_registry_version: str = FEATURE_GROUP_REGISTRY_VERSION
+
+    @property
+    def full_ranked(self) -> pd.DataFrame:
+        """Return all candidates retained for diagnostics/audit."""
+
+        return self.diagnostic_ranked if self.diagnostic_ranked is not None else self.ranked
 
     def metadata(self) -> dict[str, Any]:
         return {
@@ -125,11 +147,26 @@ class ReplayResult:
                 "benchmark_contract_version", self.benchmark_metadata.get("version")
             ),
             "benchmark_source_dataset": self.benchmark_metadata.get("source_dataset"),
+            "evidence_confidence_contract_version": self.evidence_confidence_contract_version,
+            "feature_group_registry_version": self.feature_group_registry_version,
+            "evidence_confidence": self.configuration.get("evidence_confidence", {}),
+            "critical_groups": self.configuration.get("evidence_confidence", {}).get(
+                "critical_groups", []
+            ),
+            "ranking_eligible_count": int(
+                self.full_ranked["ranking_eligible"].sum()
+                if "ranking_eligible" in self.full_ranked.columns
+                else len(self.ranked)
+            ),
+            "formal_ranked_count": int(self.ranked.shape[0]),
+            "diagnostic_candidate_count": int(self.full_ranked.shape[0]),
             "feature_contracts": {
                 "comparable_period": self.comparable_period_contract_version,
                 "trend": self.trend_contract_version,
                 "low_attention": self.attention_contract_version,
                 "expectation_crowding": self.expectation_crowding_contract_version,
+                "evidence_confidence": self.evidence_confidence_contract_version,
+                "feature_group_registry": self.feature_group_registry_version,
                 "benchmark": self.benchmark_metadata.get(
                     "benchmark_contract_version", self.benchmark_metadata.get("version")
                 ),
@@ -140,6 +177,11 @@ class ReplayResult:
         return {
             "metadata": self.metadata(),
             "ranked": self.ranked.to_dict(orient="records"),
+            "diagnostic_ranked": (
+                self.diagnostic_ranked.to_dict(orient="records")
+                if self.diagnostic_ranked is not None
+                else self.ranked.to_dict(orient="records")
+            ),
             "vectors": [vector.as_dict() for vector in self.vectors],
             "scores": [score.as_dict() for score in self.scores],
         }
@@ -259,9 +301,17 @@ def _attach_low_attention_evidence(
         attached_evidence[target] = vector.evidence[target].as_dict()
         if evidence.status in {
             "unknown",
+            "missing",
             "insufficient_data",
             "insufficient_history",
             "discontinuous",
+            "stale",
+            "invalid",
+            "future_unsafe",
+            "future-unsafe",
+            "pit_warning",
+            "unsupported_pit",
+            "pit_unsupported",
             "unsupported",
         } and target not in vector.unknown_features:
             vector.unknown_features.append(target)
@@ -344,41 +394,65 @@ def run_replay_frames(
         )
         _attach_low_attention_evidence(vector, low_attention)
         vectors.append(vector)
-        scores.append(score_feature_vector(vector, config=settings.score))
+        scores.append(
+            score_feature_vector(
+                vector,
+                config=settings.score,
+                evidence_config=settings.evidence_confidence,
+            )
+        )
+    diagnostic_ranked = rank_scores(scores, top_n=None)
     ranked = rank_scores(scores, top_n=settings.top_n)
-    if not ranked.empty and not universe.included.empty:
+    if not universe.included.empty:
         names = (
             universe.included[["ts_code", "name"]].drop_duplicates("ts_code")
             if "name" in universe.included.columns
             else pd.DataFrame(columns=["ts_code", "name"])
         )
-        ranked = ranked.merge(names, on="ts_code", how="left")
-        ranked = ranked.sort_values("rank", kind="stable").reset_index(drop=True)
+        for frame_name, frame in (("ranked", ranked), ("diagnostic", diagnostic_ranked)):
+            if frame.empty:
+                continue
+            named = frame.merge(names, on="ts_code", how="left")
+            named = named.sort_values("rank", kind="stable").reset_index(drop=True)
+            if frame_name == "ranked":
+                ranked = named
+            else:
+                diagnostic_ranked = named
     required = {"stock_basic", "income", "daily_basic"}
     missing = sorted(dataset for dataset in required if frames.get(dataset, pd.DataFrame()).empty)
     if missing:
         warnings.append(f"missing_required_datasets={','.join(missing)}")
     if frames.get("index_daily", pd.DataFrame()).empty:
         warnings.append("missing_benchmark_dataset=index_daily")
-    status = "PASS" if ranked.shape[0] > 0 and not missing else "PARTIAL" if vectors else "EMPTY"
+    status = (
+        "PASS"
+        if diagnostic_ranked.shape[0] > 0 and not missing
+        else "PARTIAL"
+        if vectors
+        else "EMPTY"
+    )
     snapshot_id = _snapshot_id(frames, as_of_text)
     config_fingerprint = settings.fingerprint
     run_id = hashlib.sha256(f"{snapshot_id}:{config_fingerprint}".encode("ascii")).hexdigest()[:16]
-    ranked["historical_universe_member"] = True
-    ranked["snapshot_id"] = snapshot_id
-    ranked["run_id"] = run_id
-    ranked["universe_version"] = universe.version
-    ranked["feature_version"] = "features-v1"
-    ranked["expectation_crowding_contract_version"] = settings.crowding.version
-    ranked["benchmark_id"] = settings.crowding.benchmark.benchmark_id
-    ranked["benchmark_contract_version"] = settings.crowding.benchmark.version
-    ranked["benchmark_source_dataset"] = settings.crowding.benchmark.source_dataset
-    ranked["comparable_period_contract_version"] = COMPARABLE_PERIOD_CONTRACT_VERSION
-    ranked["trend_contract_version"] = TURNAROUND_TREND_CONTRACT_VERSION
-    ranked["attention_contract_version"] = settings.low_attention.version
-    ranked["low_attention_version"] = settings.low_attention.version
-    ranked["attention_v2_research_only"] = True
-    ranked["score_config_fingerprint"] = settings.score.fingerprint
+    for frame in (ranked, diagnostic_ranked):
+        frame["historical_universe_member"] = True
+        frame["snapshot_id"] = snapshot_id
+        frame["run_id"] = run_id
+        frame["universe_version"] = universe.version
+        frame["feature_version"] = "features-v1"
+        frame["expectation_crowding_contract_version"] = settings.crowding.version
+        frame["benchmark_id"] = settings.crowding.benchmark.benchmark_id
+        frame["benchmark_contract_version"] = settings.crowding.benchmark.version
+        frame["benchmark_source_dataset"] = settings.crowding.benchmark.source_dataset
+        frame["comparable_period_contract_version"] = COMPARABLE_PERIOD_CONTRACT_VERSION
+        frame["trend_contract_version"] = TURNAROUND_TREND_CONTRACT_VERSION
+        frame["attention_contract_version"] = settings.low_attention.version
+        frame["low_attention_version"] = settings.low_attention.version
+        frame["attention_v2_research_only"] = True
+        frame["evidence_confidence_contract_version"] = settings.evidence_confidence.version
+        frame["feature_group_registry_version"] = settings.evidence_confidence.registry_version
+        frame["critical_groups"] = "|".join(settings.evidence_confidence.critical_groups)
+        frame["score_config_fingerprint"] = settings.score.fingerprint
     return ReplayResult(
         as_of_date=as_of_text,
         snapshot_id=snapshot_id,
@@ -400,6 +474,9 @@ def run_replay_frames(
         attention_feature_fields=LOW_ATTENTION_V2_FIELDS,
         expectation_crowding_contract_version=settings.crowding.version,
         benchmark_metadata=settings.crowding.benchmark.declared(),
+        diagnostic_ranked=diagnostic_ranked,
+        evidence_confidence_contract_version=settings.evidence_confidence.version,
+        feature_group_registry_version=settings.evidence_confidence.registry_version,
     )
 
 

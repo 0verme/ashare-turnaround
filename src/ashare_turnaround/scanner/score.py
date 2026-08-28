@@ -12,6 +12,13 @@ import pandas as pd
 
 from ..pit.comparable import COMPARABLE_PERIOD_CONTRACT_VERSION
 from .contracts import TURNAROUND_TREND_CONTRACT_VERSION, FeatureVector
+from .evidence import (
+    EVIDENCE_CONFIDENCE_CONTRACT_VERSION,
+    FEATURE_GROUP_REGISTRY_VERSION,
+    EvidenceConfidenceConfig,
+    assess_evidence_coverage,
+    canonical_group_name,
+)
 
 FEATURE_GROUP_COMPONENTS: dict[str, str] = {
     "fundamental": "fundamental_score",
@@ -20,6 +27,7 @@ FEATURE_GROUP_COMPONENTS: dict[str, str] = {
     "attention": "attention_score",
     "expectation": "expectation_score",
 }
+_SCORE_GROUP_ALIASES = {"expectation_crowding": "expectation"}
 DEFAULT_FEATURE_GROUPS = tuple(FEATURE_GROUP_COMPONENTS)
 ABLATION_VARIANT_GROUPS: dict[str, tuple[str, ...]] = {
     "fundamental_only": ("fundamental", "trend"),
@@ -56,6 +64,11 @@ class ScoreConfig:
     enabled_groups: tuple[str, ...] = DEFAULT_FEATURE_GROUPS
 
     def __post_init__(self) -> None:
+        normalized_groups = tuple(
+            _SCORE_GROUP_ALIASES.get(group, group) for group in self.enabled_groups
+        )
+        if normalized_groups != self.enabled_groups:
+            object.__setattr__(self, "enabled_groups", normalized_groups)
         unknown = set(self.enabled_groups) - set(FEATURE_GROUP_COMPONENTS)
         if unknown:
             raise ValueError(f"unknown feature groups: {','.join(sorted(unknown))}")
@@ -142,12 +155,37 @@ class ScoreResult:
     expectation_crowding_contract_version: str | None = None
     benchmark_metadata: dict[str, Any] = field(default_factory=dict)
     input_metadata: dict[str, Any] = field(default_factory=dict)
+    evidence_confidence_contract_version: str = EVIDENCE_CONFIDENCE_CONTRACT_VERSION
+    feature_group_registry_version: str = FEATURE_GROUP_REGISTRY_VERSION
+    evidence_coverage: float = 0.0
+    group_coverage: dict[str, float] = field(default_factory=dict)
+    group_status: dict[str, str] = field(default_factory=dict)
+    coverage: dict[str, dict[str, Any]] = field(default_factory=dict)
+    confidence: str = "INSUFFICIENT"
+    unknown_groups: tuple[str, ...] = ()
+    incomplete_groups: tuple[str, ...] = ()
+    missing_fields: tuple[str, ...] = ()
+    invalid_fields: tuple[str, ...] = ()
+    unsupported_fields: tuple[str, ...] = ()
+    ranking_eligible: bool = False
+    eligibility_reason: str = "not_evaluated"
+    score_is_partial: bool = True
+    configured_weight_total: float = 0.0
+    observed_weight: float = 0.0
+    missing_weight: float = 0.0
+    evidence_confidence_policy: dict[str, Any] = field(default_factory=dict)
 
     @property
     def score_input_metadata(self) -> dict[str, Any]:
         """Compatibility alias for the provenance of score inputs."""
 
         return self.input_metadata
+
+    @property
+    def diagnostic_partial_score(self) -> float | None:
+        """Expose the unchanged score as a clearly labelled diagnostic value."""
+
+        return self.turnaround_score if self.score_is_partial else None
 
     def as_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -164,8 +202,30 @@ class ScoreResult:
                 ),
                 "benchmark_source_dataset": self.benchmark_metadata.get("source_dataset"),
                 "input_metadata": dict(self.input_metadata),
+                "unknown_groups": list(self.unknown_groups),
+                "incomplete_groups": list(self.incomplete_groups),
+                "missing_fields": list(self.missing_fields),
+                "invalid_fields": list(self.invalid_fields),
+                "unsupported_fields": list(self.unsupported_fields),
             }
         )
+        payload["diagnostic_partial_score"] = (
+            self.turnaround_score if self.score_is_partial else None
+        )
+        payload["group_coverage"] = dict(self.group_coverage)
+        for group_name, coverage in self.group_coverage.items():
+            payload[f"{group_name}_coverage"] = coverage
+        payload["group_status"] = dict(self.group_status)
+        payload["coverage"] = self.coverage
+        payload["evidence_confidence_policy"] = dict(self.evidence_confidence_policy)
+        payload["configured_weight_total"] = self.configured_weight_total
+        payload["observed_weight"] = self.observed_weight
+        payload["missing_weight"] = self.missing_weight
+        payload["score_is_partial"] = self.score_is_partial
+        payload["evidence_confidence_contract_version"] = (
+            self.evidence_confidence_contract_version
+        )
+        payload["feature_group_registry_version"] = self.feature_group_registry_version
         return payload
 
 
@@ -225,10 +285,12 @@ def score_feature_vector(
     vector: FeatureVector,
     *,
     config: ScoreConfig | None = None,
+    evidence_config: EvidenceConfidenceConfig | None = None,
 ) -> ScoreResult:
     """Score one vector with explicit component weights and missingness."""
 
     settings = config or ScoreConfig()
+    evidence_settings = evidence_config or EvidenceConfidenceConfig()
     if settings.trend_contract_version != vector.trend_contract_version:
         raise ValueError("score and feature vectors use different trend contract versions")
     values = vector.values
@@ -273,6 +335,9 @@ def score_feature_vector(
         "low_attention_v2": attention_metadata,
         "expectation_crowding_v2": expectation_metadata,
         "benchmark": benchmark_metadata,
+        "evidence_confidence_contract_version": evidence_settings.version,
+        "feature_group_registry_version": evidence_settings.registry_version,
+        "evidence_confidence_policy": evidence_settings.declared(),
     }
     components: dict[str, float | None] = {
         "fundamental_score": _fundamental_score(values),
@@ -305,6 +370,12 @@ def score_feature_vector(
         if value is not None
     ]
     total_weight = sum(weight for _, _, weight in usable)
+    configured_weight_total = sum(
+        settings.weights[FEATURE_GROUP_COMPONENTS[group]]
+        for group in settings.enabled_groups
+    )
+    observed_weight = total_weight
+    missing_weight = max(0.0, configured_weight_total - observed_weight)
     raw_score = (
         sum(float(value) * weight for _, value, weight in usable) / total_weight
         if total_weight
@@ -316,6 +387,44 @@ def score_feature_vector(
         reason
         for reason in vector.rejected_reasons
         if _risk_flag_group(reason) is None or _risk_flag_group(reason) in enabled
+    )
+    assessment = assess_evidence_coverage(
+        vector,
+        config=evidence_settings,
+        turnaround_score=score,
+        rejected=bool(rejected_reasons),
+        rejected_reasons=rejected_reasons,
+    )
+    enabled_registry_groups = {
+        canonical_group_name(group) for group in settings.enabled_groups
+    }
+    score_is_partial = bool(
+        score is None
+        or observed_weight + 1e-12 < configured_weight_total
+        or any(
+            assessment.group_coverage.get(group, 0.0) < 1.0
+            for group in enabled_registry_groups
+        )
+    )
+    input_metadata.update(
+        {
+            "evidence_coverage": assessment.evidence_coverage,
+            "group_coverage": dict(assessment.group_coverage),
+            "group_status": dict(assessment.group_status),
+            "confidence": assessment.confidence,
+            "unknown_groups": list(assessment.unknown_groups),
+            "incomplete_groups": list(assessment.incomplete_groups),
+            "missing_fields": list(assessment.missing_fields),
+            "invalid_fields": list(assessment.invalid_fields),
+            "unsupported_fields": list(assessment.unsupported_fields),
+            "ranking_eligible": assessment.ranking_eligible,
+            "eligibility_reason": assessment.eligibility_reason,
+            "score_is_partial": score_is_partial,
+            "configured_weight_total": configured_weight_total,
+            "observed_weight": observed_weight,
+            "missing_weight": missing_weight,
+            "coverage": assessment.coverage,
+        }
     )
     return ScoreResult(
         ts_code=vector.ts_code,
@@ -335,13 +444,39 @@ def score_feature_vector(
         expectation_crowding_contract_version=expectation_version,
         benchmark_metadata=benchmark_metadata,
         input_metadata=input_metadata,
+        evidence_confidence_contract_version=(
+            assessment.evidence_confidence_contract_version
+        ),
+        feature_group_registry_version=assessment.feature_group_registry_version,
+        evidence_coverage=assessment.evidence_coverage,
+        group_coverage=dict(assessment.group_coverage),
+        group_status=dict(assessment.group_status),
+        coverage=assessment.coverage,
+        confidence=assessment.confidence,
+        unknown_groups=assessment.unknown_groups,
+        incomplete_groups=assessment.incomplete_groups,
+        missing_fields=assessment.missing_fields,
+        invalid_fields=assessment.invalid_fields,
+        unsupported_fields=assessment.unsupported_fields,
+        ranking_eligible=assessment.ranking_eligible,
+        eligibility_reason=assessment.eligibility_reason,
+        score_is_partial=score_is_partial,
+        configured_weight_total=configured_weight_total,
+        observed_weight=observed_weight,
+        missing_weight=missing_weight,
+        evidence_confidence_policy=assessment.policy,
     )
 
 
 def rank_scores(
     scores: list[ScoreResult] | tuple[ScoreResult, ...], top_n: int | None = None
 ) -> pd.DataFrame:
-    """Rank deterministically, placing unknown/rejected candidates after scored rows."""
+    """Rank deterministically and gate formal Top-N membership.
+
+    ``top_n=None`` is the full diagnostic ranking and retains every candidate.
+    A finite ``top_n`` is the formal ranking and includes only candidates whose
+    score and evidence policy say ``ranking_eligible``.
+    """
 
     rows: list[dict[str, Any]] = []
     for result in scores:
@@ -349,6 +484,10 @@ def rank_scores(
             "ts_code": result.ts_code,
             "as_of_date": result.as_of_date,
             "score_version": result.score_version,
+            "evidence_confidence_contract_version": (
+                result.evidence_confidence_contract_version
+            ),
+            "feature_group_registry_version": result.feature_group_registry_version,
             "comparable_period_contract_version": result.comparable_period_contract_version,
             "trend_contract_version": result.trend_contract_version,
             "attention_contract_version": result.input_metadata.get("attention_contract_version"),
@@ -360,11 +499,36 @@ def rank_scores(
             "benchmark_source_dataset": result.benchmark_metadata.get("source_dataset"),
             "enabled_groups": "|".join(result.enabled_groups),
             "turnaround_score": result.turnaround_score,
+            "diagnostic_partial_score": (
+                result.turnaround_score if result.score_is_partial else None
+            ),
+            "evidence_coverage": result.evidence_coverage,
+            "confidence": result.confidence,
+            "unknown_groups": "|".join(result.unknown_groups),
+            "incomplete_groups": "|".join(result.incomplete_groups),
+            "group_coverage": json.dumps(
+                result.group_coverage, sort_keys=True, separators=(",", ":")
+            ),
+            "group_status": json.dumps(result.group_status, sort_keys=True, separators=(",", ":")),
+            "missing_fields": "|".join(result.missing_fields),
+            "invalid_fields": "|".join(result.invalid_fields),
+            "unsupported_fields": "|".join(result.unsupported_fields),
+            "coverage": json.dumps(
+                result.coverage, sort_keys=True, separators=(",", ":"), default=str
+            ),
+            "ranking_eligible": result.ranking_eligible,
+            "eligibility_reason": result.eligibility_reason,
+            "score_is_partial": result.score_is_partial,
+            "configured_weight_total": result.configured_weight_total,
+            "observed_weight": result.observed_weight,
+            "missing_weight": result.missing_weight,
             "risk_flags": "|".join(result.risk_flags),
             "unknown_flags": "|".join(result.unknown_flags),
             "rejected": result.rejected,
             "rejected_reasons": "|".join(result.rejected_reasons),
         }
+        for group_name, coverage in result.group_coverage.items():
+            row[f"{group_name}_coverage"] = coverage
         row.update(result.components)
         row["score_penalties"] = sum(result.penalties.values())
         rows.append(row)
@@ -374,15 +538,26 @@ def rank_scores(
     frame["_score_sort"] = pd.to_numeric(frame["turnaround_score"], errors="coerce").fillna(
         -float("inf")
     )
+    # Eligible rows form the formal front of the diagnostic ordering.  The
+    # rejected flag remains a separate fact and is never used as a proxy for
+    # eligibility.
+    frame["_eligible_sort"] = ~frame["ranking_eligible"]
+    frame["_rejected_sort"] = frame["rejected"]
     frame = frame.sort_values(
-        ["rejected", "_score_sort", "ts_code"], ascending=[True, False, True], kind="stable"
+        ["_eligible_sort", "_rejected_sort", "_score_sort", "ts_code"],
+        ascending=[True, True, False, True],
+        kind="stable",
     )
     frame["rank"] = range(1, len(frame) + 1)
-    frame = frame.drop(columns="_score_sort").reset_index(drop=True)
+    frame = frame.drop(columns=["_score_sort", "_eligible_sort", "_rejected_sort"]).reset_index(
+        drop=True
+    )
     if top_n is not None:
         if top_n <= 0:
             raise ValueError("top_n must be positive")
         scored = pd.to_numeric(frame["turnaround_score"], errors="coerce").notna()
-        frame = frame.loc[~frame["rejected"] & scored].head(top_n).reset_index(drop=True)
+        frame = frame.loc[
+            frame["ranking_eligible"] & ~frame["rejected"] & scored
+        ].head(top_n).reset_index(drop=True)
         frame["rank"] = range(1, len(frame) + 1)
     return frame

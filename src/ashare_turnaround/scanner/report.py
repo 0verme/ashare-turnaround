@@ -99,10 +99,40 @@ def candidate_report(result: ReplayResult, ts_code: str) -> dict[str, Any]:
             "benchmark_contract_version": result.benchmark_metadata.get(
                 "benchmark_contract_version", result.benchmark_metadata.get("version")
             ),
+            "evidence_confidence_contract_version": (
+                score.evidence_confidence_contract_version
+            ),
+            "feature_group_registry_version": score.feature_group_registry_version,
+            "critical_groups": list(
+                score.evidence_confidence_policy.get("critical_groups", ())
+            ),
             "research_only": True,
         },
         "ts_code": ts_code,
-        "selected": not score.rejected and score.turnaround_score is not None,
+        "evidence_confidence_contract_version": (
+            score.evidence_confidence_contract_version
+        ),
+        "feature_group_registry_version": score.feature_group_registry_version,
+        "selected": score.ranking_eligible,
+        "turnaround_score": score.turnaround_score,
+        "evidence_coverage": score.evidence_coverage,
+        "group_coverage": dict(score.group_coverage),
+        **{
+            f"{group_name}_coverage": coverage
+            for group_name, coverage in score.group_coverage.items()
+        },
+        "group_status": dict(score.group_status),
+        "confidence": score.confidence,
+        "unknown_groups": list(score.unknown_groups),
+        "incomplete_groups": list(score.incomplete_groups),
+        "missing_fields": list(score.missing_fields),
+        "invalid_fields": list(score.invalid_fields),
+        "unsupported_fields": list(score.unsupported_fields),
+        "ranking_eligible": score.ranking_eligible,
+        "eligibility_reason": score.eligibility_reason,
+        "score_is_partial": score.score_is_partial,
+        "observed_weight": score.observed_weight,
+        "missing_weight": score.missing_weight,
         "score": score.as_dict(),
         "score_input_metadata": dict(score.input_metadata),
         "features": dict(vector.values),
@@ -131,13 +161,29 @@ def candidate_report_markdown(report: dict[str, Any]) -> str:
         "expectation_crowding_contract_version", "unknown"
     )
     benchmark_id = report["metadata"].get("benchmark_id", "unknown")
+    unknown_groups = ", ".join(report.get("unknown_groups", ())) or "none"
+    missing_fields = ", ".join(report.get("missing_fields", ())) or "none"
+    invalid_fields = ", ".join(report.get("invalid_fields", ())) or "none"
+    unsupported_fields = ", ".join(report.get("unsupported_fields", ())) or "none"
     lines = [
         f"# Turnaround candidate report: {report['ts_code']}",
         "",
         f"- As of: `{report['metadata']['as_of_date']}`",
         f"- Selected: `{report['selected']}`",
-        f"- Turnaround score: `{score['turnaround_score']}`",
+        f"- Turnaround Score: `{report['turnaround_score']}`",
+        f"- Evidence Coverage: `{report['evidence_coverage']:.2%}`",
+        f"- Confidence: `{report['confidence']}`",
+        f"- Ranking Eligible: `{'YES' if report['ranking_eligible'] else 'NO'}`",
+        f"- Eligibility Reason: `{report['eligibility_reason']}`",
+        f"- Unknown Groups: `{unknown_groups}`",
+        f"- Missing Required Fields: `{missing_fields}`",
+        f"- Invalid Required Fields: `{invalid_fields}`",
+        f"- Unsupported Required Fields: `{unsupported_fields}`",
+        f"- Score Is Partial: `{report['score_is_partial']}`",
+        f"- Observed Weight: `{report['observed_weight']}`; "
+        f"Missing Weight: `{report['missing_weight']}`",
         f"- Score version: `{score['score_version']}`",
+        f"- Evidence-confidence contract: `{score['evidence_confidence_contract_version']}`",
         f"- Low-attention contract: `{report['report_metadata']['attention_contract_version']}`",
         f"- Comparable-period contract: `{contract_version}`",
         f"- Trend contract: `{trend_contract_version}`",
@@ -145,6 +191,24 @@ def candidate_report_markdown(report: dict[str, Any]) -> str:
         f"- Primary benchmark: `{benchmark_id}`",
         f"- Risk flags: `{', '.join(report['risk_flags']) or 'none'}`",
         f"- Rejected reasons: `{', '.join(report['rejected_reasons']) or 'none'}`",
+        "",
+        "## Evidence coverage by group",
+        "",
+        "| Group | Coverage | Status | Critical |",
+        "| --- | ---: | --- | --- |",
+        *[
+            "| {group} | {coverage:.2%} | {status} | {critical} |".format(
+                group=group,
+                coverage=report["group_coverage"].get(group, 0.0),
+                status=report["group_status"].get(group, "UNKNOWN"),
+                critical=(
+                    "yes"
+                    if report["score"]["coverage"].get(group, {}).get("critical", False)
+                    else "no"
+                ),
+            )
+            for group in report["group_coverage"]
+        ],
         "",
         "## Score breakdown",
         "",

@@ -77,8 +77,9 @@ Score v2 decision`.
   benchmark-relative (CSI 300 / `000300.SH` from `index_basic` + `index_daily`);
   see
   `docs/expectation-crowding-v2.md` for the frozen contract.
-- `src/ashare_turnaround/scanner/` — universe, score, replay, daily snapshot,
-  evaluation, ablation, and explainable report workflows.
+- `src/ashare_turnaround/scanner/` — universe, score, evidence-confidence gate,
+  replay, daily snapshot, evaluation, ablation, and explainable report workflows.
+  The additive gate is documented in `docs/evidence-confidence-v1.md`.
 - `data/` — local runtime data; raw/derived/state/reports are ignored by Git.
 
 ## Development
