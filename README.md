@@ -36,7 +36,8 @@ Phase 0/1 and the first complete scanner path are implemented:
 - in-process DuckDB queries and a PE percentile smoke example;
 - financial PIT canonical columns, bounded real revision checks, and synthetic version-chain checks;
 - bounded VIP period probes with schema/PIT-risk evaluation;
-- a cumulative income/cash-flow single-quarter prototype.
+- a versioned comparable-period contract for PIT-safe single-quarter,
+  cumulative, YoY, QoQ, TTM, and margin primitives (unknown on ambiguity).
 - raw coverage/integrity inventory with missing-partition, duplicate, schema, and
   checkpoint findings;
 - Phase 1.6 Market / Reference historical corpus bootstrap: exchange-range
@@ -48,7 +49,7 @@ Phase 0/1 and the first complete scanner path are implemented:
   historical replay, provenance-complete forward evaluation, precommitted feature
   stability analysis, and provenance-first candidate reports.
 
-The live source validation report is at [docs/data-source-validation.md](docs/data-source-validation.md), the VIP assessment is at [docs/vip-api-evaluation.md](docs/vip-api-evaluation.md), and the PIT evidence is at [docs/pit-field-mapping.md](docs/pit-field-mapping.md) and [docs/pit-validation.md](docs/pit-validation.md). The scanner contracts and issue-to-module mapping are documented in [docs/scanner-contracts.md](docs/scanner-contracts.md). Evaluation assumptions are frozen in [docs/scanner-evaluation.md](docs/scanner-evaluation.md), and the ablation decision rule is in [docs/feature-ablation.md](docs/feature-ablation.md). Phase 1.6 decisions and final gates are documented in [docs/market-reference-history.md](docs/market-reference-history.md) and [docs/market-reference-coverage.md](docs/market-reference-coverage.md). Full-market historical bootstrap is an explicit, resumable operation; tests use synthetic fixtures and local Parquet only.
+The live source validation report is at [docs/data-source-validation.md](docs/data-source-validation.md), the VIP assessment is at [docs/vip-api-evaluation.md](docs/vip-api-evaluation.md), and the PIT evidence is at [docs/pit-field-mapping.md](docs/pit-field-mapping.md) and [docs/pit-validation.md](docs/pit-validation.md). The comparable-period contract is documented in [docs/comparable-period-semantics.md](docs/comparable-period-semantics.md). The scanner contracts and issue-to-module mapping are documented in [docs/scanner-contracts.md](docs/scanner-contracts.md). Evaluation assumptions are frozen in [docs/scanner-evaluation.md](docs/scanner-evaluation.md), and the ablation decision rule is in [docs/feature-ablation.md](docs/feature-ablation.md). Phase 1.6 decisions and final gates are documented in [docs/market-reference-history.md](docs/market-reference-history.md) and [docs/market-reference-coverage.md](docs/market-reference-coverage.md). Full-market historical bootstrap is an explicit, resumable operation; tests use synthetic fixtures and local Parquet only.
 
 ## Phase 2.5 hand-off
 

@@ -1,4 +1,4 @@
-# PIT prototype check
+# PIT and comparable-period contract check
 
 Synthetic version-chain checks are intentionally separate from live-data checks.
 
@@ -21,7 +21,7 @@ Synthetic version-chain checks are intentionally separate from live-data checks.
 
 ## Financial period semantics
 
-The audit is limited to at most three local companies and two complete years per dataset. It calculates Q1, H1-Q1, Q3-H1, and FY-Q3; it does not create factors.
+Contract `comparable-period-v1`: the audit is limited to at most three local companies and two complete years per dataset. It calculates Q1, H1-Q1, Q3-H1, and FY-Q3; ambiguity is UNKNOWN and it does not create factors.
 
 | Dataset | Status | Semantic status | Complete company-years | Field bridge checks |
 | --- | --- | --- | ---: | --- |

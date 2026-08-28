@@ -48,8 +48,8 @@ even if both are otherwise valid.
 
 ## Cumulative quarterization
 
-`derive_single_quarter` bridges cumulative `income`/`cashflow` values for the
-standard quarter ends:
+`derive_single_quarter` delegates to the versioned comparable-period contract
+and bridges cumulative `income`/`cashflow` values for the standard quarter ends:
 
 - Q1 = Q1
 - H1 − Q1
@@ -57,9 +57,15 @@ standard quarter ends:
 - FY − Q3
 
 A missing prior cumulative observation stays missing rather than being
-guessed (for example, a missing Q3 leaves FY's single-quarter value unknown).
-Duplicate cumulative rows for the same `ts_code`/year/period raise instead of
-silently deduplicating.
+guessed (for example, a missing H1 leaves Q3's single-quarter value unknown).
+Duplicate or otherwise ambiguous chains return `UNKNOWN` with
+`ambiguous_period_chain` instead of silently deduplicating.  FY-Q3 can remain
+valid when the Q3 cumulative predecessor exists, even if Q3's own H1 bridge is
+unknown.
+
+The complete comparable-period semantics, including YoY/QoQ/TTM/margins and
+zero/negative denominator policy, is documented in
+[docs/comparable-period-semantics.md](comparable-period-semantics.md).
 
 ## Reproducibility
 

@@ -19,6 +19,7 @@ from ..features import (
     compute_quality_features,
     compute_trend_features,
 )
+from ..pit.comparable import COMPARABLE_PERIOD_CONTRACT_VERSION
 from ..storage.inventory import build_coverage_report
 from ..storage.parquet import RawParquetStore
 from .contracts import FeatureVector
@@ -45,6 +46,7 @@ class ReplayConfig:
     def declared(self) -> dict[str, Any]:
         return {
             "top_n": self.top_n,
+            "comparable_period_contract_version": COMPARABLE_PERIOD_CONTRACT_VERSION,
             "universe": asdict(self.universe),
             "score": self.score.declared(),
         }
@@ -71,6 +73,7 @@ class ReplayResult:
     vectors: tuple[FeatureVector, ...]
     scores: tuple[ScoreResult, ...]
     warnings: tuple[str, ...] = ()
+    comparable_period_contract_version: str = COMPARABLE_PERIOD_CONTRACT_VERSION
 
     def metadata(self) -> dict[str, Any]:
         return {
@@ -85,6 +88,7 @@ class ReplayResult:
             "input_rows": self.input_rows,
             "status": self.status,
             "warnings": list(self.warnings),
+            "comparable_period_contract_version": self.comparable_period_contract_version,
         }
 
     def artifact_dict(self) -> dict[str, Any]:
@@ -108,9 +112,7 @@ _SNAPSHOT_DATE_FIELDS: dict[str, tuple[str, ...]] = {
 }
 
 
-def _visible_snapshot_frame(
-    dataset: str, frame: pd.DataFrame, as_of: pd.Timestamp
-) -> pd.DataFrame:
+def _visible_snapshot_frame(dataset: str, frame: pd.DataFrame, as_of: pd.Timestamp) -> pd.DataFrame:
     candidates = _SNAPSHOT_DATE_FIELDS.get(dataset, ())
     available = pd.Series(pd.NaT, index=frame.index, dtype="datetime64[ns]")
     found = False
@@ -235,14 +237,13 @@ def run_replay_frames(
     status = "PASS" if ranked.shape[0] > 0 and not missing else "PARTIAL" if vectors else "EMPTY"
     snapshot_id = _snapshot_id(frames, as_of_text)
     config_fingerprint = settings.fingerprint
-    run_id = hashlib.sha256(
-        f"{snapshot_id}:{config_fingerprint}".encode("ascii")
-    ).hexdigest()[:16]
+    run_id = hashlib.sha256(f"{snapshot_id}:{config_fingerprint}".encode("ascii")).hexdigest()[:16]
     ranked["historical_universe_member"] = True
     ranked["snapshot_id"] = snapshot_id
     ranked["run_id"] = run_id
     ranked["universe_version"] = universe.version
     ranked["feature_version"] = "features-v1"
+    ranked["comparable_period_contract_version"] = COMPARABLE_PERIOD_CONTRACT_VERSION
     ranked["score_config_fingerprint"] = settings.score.fingerprint
     return ReplayResult(
         as_of_date=as_of_text,
@@ -259,6 +260,7 @@ def run_replay_frames(
         vectors=tuple(vectors),
         scores=tuple(scores),
         warnings=tuple(dict.fromkeys(warnings)),
+        comparable_period_contract_version=COMPARABLE_PERIOD_CONTRACT_VERSION,
     )
 
 

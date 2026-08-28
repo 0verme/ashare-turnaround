@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from ..pit.comparable import COMPARABLE_PERIOD_CONTRACT_VERSION
+
 
 @dataclass(frozen=True, slots=True)
 class FeatureEvidence:
@@ -18,6 +20,16 @@ class FeatureEvidence:
     periods: tuple[str, ...] = ()
     availability_dates: tuple[str, ...] = ()
     reason: str | None = None
+    current_period: str | None = None
+    comparison_period: str | None = None
+    current_availability_date: str | None = None
+    comparison_availability_date: str | None = None
+    current_raw_value: Any = None
+    comparison_raw_value: Any = None
+    period_semantics: str | None = None
+    source_versions: tuple[str, ...] = ()
+    contract_version: str = COMPARABLE_PERIOD_CONTRACT_VERSION
+    provenance: dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -35,6 +47,7 @@ class FeatureVector:
     risk_flags: list[str] = field(default_factory=list)
     rejected_reasons: list[str] = field(default_factory=list)
     unknown_features: list[str] = field(default_factory=list)
+    comparable_period_contract_version: str = COMPARABLE_PERIOD_CONTRACT_VERSION
 
     def add(
         self,
@@ -47,7 +60,20 @@ class FeatureVector:
         periods: tuple[str, ...] = (),
         availability_dates: tuple[str, ...] = (),
         reason: str | None = None,
+        current_period: str | None = None,
+        comparison_period: str | None = None,
+        current_availability_date: str | None = None,
+        comparison_availability_date: str | None = None,
+        current_raw_value: Any = None,
+        comparison_raw_value: Any = None,
+        period_semantics: str | None = None,
+        source_versions: tuple[str, ...] = (),
+        contract_version: str | None = None,
+        provenance: dict[str, Any] | None = None,
     ) -> None:
+        resolved_contract_version = contract_version or self.comparable_period_contract_version
+        if resolved_contract_version != self.comparable_period_contract_version:
+            raise ValueError("feature evidence uses a different comparable-period contract version")
         self.values[name] = value
         self.evidence[name] = FeatureEvidence(
             feature=name,
@@ -58,6 +84,16 @@ class FeatureVector:
             periods=periods,
             availability_dates=availability_dates,
             reason=reason,
+            current_period=current_period,
+            comparison_period=comparison_period,
+            current_availability_date=current_availability_date,
+            comparison_availability_date=comparison_availability_date,
+            current_raw_value=current_raw_value,
+            comparison_raw_value=comparison_raw_value,
+            period_semantics=period_semantics,
+            source_versions=source_versions,
+            contract_version=resolved_contract_version,
+            provenance=provenance or {},
         )
         if (
             status in {"unknown", "insufficient_data", "unsupported"}
@@ -68,6 +104,8 @@ class FeatureVector:
     def merge(self, other: FeatureVector) -> FeatureVector:
         if self.ts_code != other.ts_code or self.as_of_date != other.as_of_date:
             raise ValueError("feature vectors must share ts_code and as_of_date")
+        if self.comparable_period_contract_version != other.comparable_period_contract_version:
+            raise ValueError("feature vectors must share comparable-period contract version")
         self.values.update(other.values)
         self.evidence.update(other.evidence)
         for value in (*other.risk_flags,):
@@ -90,6 +128,7 @@ class FeatureVector:
             "ts_code": self.ts_code,
             "as_of_date": self.as_of_date,
             "version": self.version,
+            "comparable_period_contract_version": self.comparable_period_contract_version,
             "values": dict(self.values),
             "evidence": {key: value.as_dict() for key, value in self.evidence.items()},
             "risk_flags": list(self.risk_flags),
@@ -109,6 +148,7 @@ def flatten_feature_vectors(vectors: list[FeatureVector] | tuple[FeatureVector, 
             "ts_code": vector.ts_code,
             "as_of_date": vector.as_of_date,
             "feature_version": vector.version,
+            "comparable_period_contract_version": vector.comparable_period_contract_version,
             "risk_flags": "|".join(vector.risk_flags),
             "rejected_reasons": "|".join(vector.rejected_reasons),
             "unknown_features": "|".join(vector.unknown_features),

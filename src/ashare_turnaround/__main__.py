@@ -44,6 +44,7 @@ from .datasets.production import (
 from .datasets.specs import get_dataset_spec
 from .datasets.sync import sample_request_plan, sync_daily, sync_sample
 from .dates import normalize_date_series
+from .pit.comparable import COMPARABLE_PERIOD_CONTRACT_VERSION
 from .pit.financial import (
     canonicalize_financial_frame,
     derive_single_quarter,
@@ -1209,7 +1210,7 @@ def _render_pit_check(
     disclosure_evidence: str,
 ) -> str:
     lines = [
-        "# PIT prototype check",
+        "# PIT and comparable-period contract check",
         "",
         "Synthetic version-chain checks are intentionally separate from live-data checks.",
         "",
@@ -1264,9 +1265,10 @@ def _render_pit_check(
             "",
             "## Financial period semantics",
             "",
-            "The audit is limited to at most three local companies and two complete years "
-            "per dataset. It calculates Q1, H1-Q1, Q3-H1, and FY-Q3; it does not create "
-            "factors.",
+            f"Contract `{COMPARABLE_PERIOD_CONTRACT_VERSION}`: the audit is limited to "
+            "at most three local companies and two complete years per dataset. It "
+            "calculates Q1, H1-Q1, Q3-H1, and FY-Q3; ambiguity remains UNKNOWN and it "
+            "does not create factors.",
             "",
             "| Dataset | Status | Semantic status | Complete company-years | Field bridge checks |",
             "| --- | --- | --- | ---: | --- |",
@@ -1371,6 +1373,7 @@ def _pit_check(_: argparse.Namespace) -> int:
         }
     )
     quarterized = derive_single_quarter(quarter_frame, "net_value")
+    print(f"comparable_period_contract_version={COMPARABLE_PERIOD_CONTRACT_VERSION}")
     print(f"canonical_columns={','.join(canonical.columns)}")
     print(f"pit_synthetic={checks}")
     print(f"single_quarter={quarterized['single_quarter'].tolist()}")

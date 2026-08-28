@@ -8,6 +8,8 @@ RAW Parquet + checkpoints
         ↓
 coverage / incremental sync
         ↓
+canonical PIT financial rows + comparable-period contract
+        ↓
 PIT investable universe
         ↓
 fundamental | trend | quality | attention | crowding
@@ -39,6 +41,7 @@ replay / daily snapshot / evaluation / report
 | #19 | Daily snapshot and comparison | `scanner.daily.scan_data` / `compare_scan_snapshots` |
 | #20 | Explainable candidate report | `scanner.report.write_candidate_reports` |
 | #34 | Market / Reference historical corpus | `datasets.market_bootstrap` / `datasets.market_validation` |
+| #27 | Comparable financial period semantics | `pit.comparable` / `features.fundamental` |
 
 Issue #7 is deliberately not duplicated in this branch: the repository already
 has the proposed adversarial PIT test/documentation in [PR #24](https://github.com/0verme/ashare-turnaround/pull/24).
@@ -51,9 +54,10 @@ Each candidate is represented by `scanner.contracts.FeatureVector`:
 
 - `ts_code` and normalized `as_of_date` identify the decision;
 - `version` is currently `features-v1`;
+- `comparable_period_contract_version` is `comparable-period-v1`;
 - `values` contains numeric features or explicit `None`;
-- `evidence` maps every value to datasets, source fields, report periods, and
-  actual availability dates;
+- `evidence` maps every value to datasets, source fields, report periods, raw
+  values, period semantics, source versions, and actual availability dates;
 - `risk_flags` are soft penalties while `rejected_reasons` are hard gates;
 - `unknown_features` is populated for `unknown`, `insufficient_data`, and
   `unsupported` values.
@@ -78,6 +82,17 @@ The universe records every exclusion reason, including ST status, delisting,
 future listing, BSE policy, new listing, suspension, low liquidity, insufficient
 financial history, and unavailable reference data. The default policy uses at
 least four available financial periods and excludes BSE unless configured.
+
+### Comparable financial periods
+
+`pit.comparable` assigns each canonical row a fiscal year/period, quarter,
+report family, statement type, duration semantics, scope, unit, accounting
+semantics, source version identity, and availability date.  YoY and QoQ use
+explicit period matching; cumulative income/cash-flow values are quarterized
+only through a validated Q1/H1/Q3/FY chain.  TTM requires four validated single
+quarters.  Ambiguous or unsupported semantics are `UNKNOWN`.  See
+[docs/comparable-period-semantics.md](comparable-period-semantics.md) for the
+full contract and denominator policy.
 
 ### Score
 

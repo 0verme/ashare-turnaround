@@ -1,4 +1,4 @@
-"""Financial point-in-time normalization and a small quarterization prototype."""
+"""Financial point-in-time normalization and comparable-period primitives."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import pandas as pd
 
 from ..dates import normalize_date_series
 from ..storage.parquet import RawParquetStore
+from .comparable import annotate_period_identity, validated_single_quarter_series
 
 
 @dataclass(frozen=True, slots=True)
@@ -215,7 +216,7 @@ def canonicalize_financial_frame(
         for column in _CANONICAL_COLUMNS:
             if column not in output.columns:
                 output[column] = pd.Series(dtype="object")
-        return output
+        return annotate_period_identity(dataset, output)
 
     report_values, _ = _first_available(output, mapping.report_period_candidates)
     output["report_period"] = _normalize_date_series(report_values)
@@ -243,7 +244,7 @@ def canonicalize_financial_frame(
         output["retrieved_at"] = retrieved_at
     if "source" not in output.columns:
         output["source"] = source
-    return output
+    return annotate_period_identity(dataset, output)
 
 
 def _version_columns(frame: pd.DataFrame) -> list[str]:
@@ -252,12 +253,18 @@ def _version_columns(frame: pd.DataFrame) -> list[str]:
     # attribute and is deliberately not a grouping key: as-of selects its
     # latest available version instead of hiding earlier versions.
     for candidate in (
+        "report_family",
+        "statement_type",
+        "duration_semantics",
+        "scope",
+        "unit",
+        "accounting_semantics",
+        # Keep raw identity fields as a fallback and to preserve record
+        # identity for datasets such as ``fina_mainbz``.
         "report_type",
         "type",
         "comp_type",
         "end_type",
-        # ``fina_mainbz`` contains one row per business-line identity.  These
-        # are record keys, not versions, and must not be collapsed by PIT.
         "bz_item",
         "curr_type",
     ):
@@ -280,8 +287,7 @@ def select_financial_as_of(
     missing = required.difference(frame.columns)
     if missing:
         raise ValueError(
-            "frame must be canonicalized before PIT selection; "
-            f"missing columns: {sorted(missing)}"
+            f"frame must be canonicalized before PIT selection; missing columns: {sorted(missing)}"
         )
 
     as_of_values = _normalize_date_series(pd.Series([as_of_date]))
@@ -341,56 +347,26 @@ def derive_single_quarter(
     value_column: str,
     *,
     dataset_kind: str = "income",
+    as_of_date: str | date | datetime | pd.Timestamp | None = None,
 ) -> pd.DataFrame:
-    """Prototype quarterly bridge for cumulative income/cash-flow values.
+    """Return a fail-closed validated single-quarter series.
 
-    It intentionally handles only the standard Q1/H1/Q3/FY period ends.  The
-    source frame is not mutated and missing prior cumulative observations stay
-    missing rather than being guessed.
+    This compatibility name now delegates to the versioned comparable-period
+    contract.  Missing or incompatible chains are represented by ``UNKNOWN``
+    status and a reason; no adjacent row is used as an implicit denominator.
     """
 
-    if dataset_kind not in {"income", "cashflow"}:
-        raise ValueError("single-quarter prototype is limited to income and cashflow")
-    required = {"ts_code", "end_date", value_column}
+    required = {"ts_code", value_column}
     missing = required.difference(frame.columns)
     if missing:
         raise ValueError(f"missing columns: {sorted(missing)}")
-
-    output = frame.copy()
-    output["report_period"] = _normalize_date_series(output["end_date"])
-    output["_year"] = output["report_period"].dt.year
-    output["_month_day"] = output["report_period"].dt.strftime("%m-%d")
-    standard_periods = output["_month_day"].isin({"03-31", "06-30", "09-30", "12-31"})
-    duplicate_periods = output.loc[standard_periods].duplicated(
-        ["ts_code", "_year", "_month_day"], keep=False
+    return validated_single_quarter_series(
+        frame,
+        value_column,
+        dataset_kind=dataset_kind,
+        as_of_date=as_of_date,
+        strict=False,
     )
-    if duplicate_periods.any():
-        raise ValueError(
-            "duplicate cumulative rows for the same ts_code/year/report period; "
-            "canonicalize revisions before quarterization"
-        )
-    output["single_quarter"] = pd.to_numeric(output[value_column], errors="coerce")
-
-    sort_columns = ["ts_code", "_year", "report_period"]
-    output = output.sort_values(sort_columns, kind="stable")
-    for code, year in output[["ts_code", "_year"]].drop_duplicates().itertuples(index=False):
-        mask = output["ts_code"].eq(code) & output["_year"].eq(year)
-        year_rows = output.loc[mask]
-        values = year_rows.set_index("_month_day")[value_column]
-        q1 = pd.to_numeric(values.get("03-31"), errors="coerce")
-        h1 = pd.to_numeric(values.get("06-30"), errors="coerce")
-        q3 = pd.to_numeric(values.get("09-30"), errors="coerce")
-        fy = pd.to_numeric(values.get("12-31"), errors="coerce")
-        derived = {
-            "03-31": q1,
-            "06-30": h1 - q1 if pd.notna(h1) and pd.notna(q1) else pd.NA,
-            "09-30": q3 - h1 if pd.notna(q3) and pd.notna(h1) else pd.NA,
-            "12-31": fy - q3 if pd.notna(fy) and pd.notna(q3) else pd.NA,
-        }
-        for month_day, value in derived.items():
-            row_mask = mask & output["_month_day"].eq(month_day)
-            output.loc[row_mask, "single_quarter"] = value
-    return output.drop(columns=["_year", "_month_day"])
 
 
 @dataclass(frozen=True, slots=True)
@@ -452,19 +428,13 @@ def find_financial_revision_candidates(
 
     if max_candidates <= 0:
         raise ValueError("max_candidates must be positive")
-    canonical = (
-        frame.copy()
-        if {"report_period", "actual_available_date"}.issubset(frame.columns)
-        else canonicalize_financial_frame(dataset, frame)
-    )
+    canonical = canonicalize_financial_frame(dataset, frame)
     required = {"ts_code", "report_period", "actual_available_date"}
     if not required.issubset(canonical.columns) or canonical.empty:
         return ()
     canonical = canonical.copy()
     canonical["report_period"] = _normalize_date_series(canonical["report_period"])
-    canonical["actual_available_date"] = _normalize_date_series(
-        canonical["actual_available_date"]
-    )
+    canonical["actual_available_date"] = _normalize_date_series(canonical["actual_available_date"])
     if "announcement_date" in canonical.columns:
         canonical["announcement_date"] = _normalize_date_series(canonical["announcement_date"])
     canonical = canonical.loc[
@@ -492,15 +462,28 @@ def find_financial_revision_candidates(
         "update_flag",
         "retrieved_at",
         "source",
+        "fiscal_year",
+        "fiscal_period",
+        "quarter",
+        "report_family",
+        "statement_type",
+        "duration_semantics",
+        "scope",
+        "unit",
+        "accounting_semantics",
+        "period_key",
+        "period_semantics_status",
+        "period_semantics_reason",
+        "source_dataset",
+        "source_version_identity",
+        "source_version",
+        "comparable_period_contract_version",
     }
     value_columns = [column for column in canonical.columns if column not in metadata]
     candidates: list[RevisionCandidate] = []
     for _, group in canonical.groupby(identity_columns, dropna=False, sort=False):
         available_dates = sorted(
-            {
-                pd.Timestamp(value).normalize()
-                for value in group["actual_available_date"].dropna()
-            }
+            {pd.Timestamp(value).normalize() for value in group["actual_available_date"].dropna()}
         )
         if len(group) < 2 or len(available_dates) < 2:
             continue
