@@ -678,6 +678,7 @@ def _restore_legacy_tuple_shapes(value: Any, path: str = "") -> Any:
                 "lookbacks",
                 "enabled_groups",
                 "mandatory_components",
+                "included_optional_components",
                 "lookback_sessions",
                 "lookback",
             }
