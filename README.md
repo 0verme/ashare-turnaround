@@ -62,7 +62,9 @@ redownload is implied by this hand-off.
 
 The #32 validation path is read-only and must remain separate from Evaluation
 and Ablation. The planned post-calibration sequence is `#32 → calibrated
-Evaluation (#17) → Ablation / Stability (#18) → Score v2 decision`.
+Evaluation (#17) → Ablation / Stability (#18) → Score v2 decision`. The
+post-#41 normalized artifact audit and its continued BLOCKED decision are in
+[docs/pit-replay-artifact-normalization.md](docs/pit-replay-artifact-normalization.md).
 
 ## Architecture
 
@@ -109,6 +111,8 @@ The minimal CLI is:
 .venv/bin/python -m ashare_turnaround replay --as-of 20250630 --top 20
 .venv/bin/python -m ashare_turnaround replay-variants --as-of 20250630 --top 20
 .venv/bin/python -m ashare_turnaround replay-validate --stage smoke --start 2017-01 --end 2026-12
+.venv/bin/python -m ashare_turnaround replay-profile --as-of 20250616 --candidate-cap 100
+.venv/bin/python -m ashare_turnaround artifact-audit --input data/reports/replay-validation/snapshots/<snapshot>.json
 .venv/bin/python -m ashare_turnaround scan --top 20
 .venv/bin/python -m ashare_turnaround evaluate --scans data/derived/scans/scan-20250630.parquet --benchmark-code 000300.SH --fundamentals data/derived/research/fundamental-history.parquet
 .venv/bin/python -m ashare_turnaround ablate fundamental_only=data/reports/evaluation-fundamental_only.json quality_added=data/reports/evaluation-quality_added.json attention_added=data/reports/evaluation-attention_added.json expectation_added=data/reports/evaluation-expectation_added.json
@@ -128,8 +132,10 @@ pre-listing statuses for dated-universe reconstruction. The Phase 1.6
 `bootstrap-market` command uses month/range units rather than a ten-year
 `sync-daily` loop; `verify-market` performs coverage and integrity checks only.
 `replay` and `scan`
-accept an explicit `--as-of` for historical reproduction; omitting it from
-`scan` selects the latest open date in the local trade calendar. Evaluation
+accept an explicit `--as-of` for historical reproduction; `artifact-audit`
+reads an existing JSON artifact without touching RAW and reports recursive
+size attribution plus legacy/normalized size; omitting `--as-of` from `scan` selects
+the latest open date in the local trade calendar. Evaluation
 aligns candidates and benchmarks to the same future market dates and preserves
 failed, delisted, exposure, and PIT-fundamental evidence in its report.
 

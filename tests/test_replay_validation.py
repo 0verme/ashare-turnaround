@@ -5,6 +5,10 @@ import json
 import pandas as pd
 import pytest
 
+from ashare_turnaround.scanner.artifacts import (
+    canonical_json_bytes,
+    expand_normalized_snapshot,
+)
 from ashare_turnaround.scanner.replay import ReplayDiagnostics
 from ashare_turnaround.scanner.replay_validation import (
     HISTORICAL_UNIVERSE_CONTRACT_VERSION,
@@ -18,6 +22,7 @@ from ashare_turnaround.scanner.replay_validation import (
     run_replay_validation,
     run_replay_validation_frames,
     select_monthly_snapshot_dates,
+    validate_normalized_snapshot_pit,
     validate_replay_pit,
     write_replay_validation_artifacts,
 )
@@ -277,6 +282,65 @@ def test_validation_uses_production_replay_and_writes_complete_audit_artifacts(t
     assert snapshot_payload["replay"]["vectors"]
     assert snapshot_payload["replay"]["universe"]["decisions"]
     assert "feature_group_registry_version" in snapshot_payload["replay"]["scores"][0]
+
+
+def test_controlled_replay_normalized_snapshot_is_fully_equivalent() -> None:
+    result = run_replay_validation_frames(
+        _validation_frames(),
+        start="2025-06",
+        end="2025-06",
+        today="2025-12-31",
+        top_n=3,
+        stage="monthly",
+        determinism_sample=0,
+    )
+    snapshot = result.snapshots[0]
+    assert snapshot.result is not None
+    legacy = snapshot.as_dict()
+    normalized = snapshot.normalized_dict()
+
+    assert canonical_json_bytes(expand_normalized_snapshot(normalized)) == (
+        canonical_json_bytes(legacy)
+    )
+    assert validate_normalized_snapshot_pit(normalized, as_of_date="20250616") == ()
+    assert normalized["replay"]["vectors"][0]["evidence"]
+
+
+def test_controlled_two_candidate_replay_roundtrips_normalized_snapshot() -> None:
+    frames = _validation_frames()
+    second_code = "600001.SH"
+    for dataset in (
+        "stock_basic",
+        "daily",
+        "daily_basic",
+        "income",
+        "balancesheet",
+        "cashflow",
+        "fina_indicator",
+    ):
+        frame = frames[dataset]
+        duplicate = frame.loc[frame["ts_code"].astype(str).eq(CODE)].copy()
+        duplicate["ts_code"] = second_code
+        frames[dataset] = pd.concat([frame, duplicate], ignore_index=True)
+
+    result = run_replay_validation_frames(
+        frames,
+        start="2025-06",
+        end="2025-06",
+        today="2025-12-31",
+        top_n=3,
+        stage="monthly",
+        determinism_sample=0,
+    )
+    snapshot = result.snapshots[0]
+    assert snapshot.result is not None
+    assert len(snapshot.result.vectors) == 2
+    normalized = snapshot.normalized_dict()
+
+    assert canonical_json_bytes(expand_normalized_snapshot(normalized)) == (
+        canonical_json_bytes(snapshot.as_dict())
+    )
+    assert validate_normalized_snapshot_pit(normalized, as_of_date="20250616") == ()
 
 
 def test_bounded_diagnostics_are_not_a_validation_pass() -> None:

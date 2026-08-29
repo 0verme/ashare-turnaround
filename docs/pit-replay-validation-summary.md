@@ -49,13 +49,17 @@ RSS was about 1.7 GiB. No real smoke/yearly/monthly result is claimed here.
 
 The bounded diagnostic/repair pass was intentionally not promoted to a smoke
 PASS. On the same local corpus it measured 5,102 candidates; a 100-candidate
-bounded diagnostic completed in about 367 seconds with peak RSS about 1.95
-GiB. A separate 10-candidate serialization probe measured 45--69 MiB per
-vector (mean about 48 MiB), projecting roughly 228 GiB for the complete
-semantic JSON payload while the filesystem had about 21 GiB free. The full
-single-snapshot
-run was therefore not started: its completion and artifact-storage probability
-were not reasonable, and no determinism second pass was run.
+pre-normalization diagnostic completed in about 367 seconds with peak RSS about
+1.95 GiB. The post-normalization cap=100 diagnostic completed in 1,054.401
+seconds, with 1.872 GiB peak RSS, and remained `INCOMPLETE` by design. Its
+normalized JSON was 220,476,606 B (about 210 MiB); the 10-candidate normalized
+file was 25,923,829 B. Recursive attribution confirmed that the original
+45--69 MiB/vector payload is 98.5886% provenance and 98.5437% trend provenance.
+The 100-candidate normalized projection is still about 10.76 GiB and the
+measured full-replay ETA is about 13.28 hours. The full single-snapshot run was
+therefore not started. Detailed tables, hashes, phase timings, and the
+lossless decoder contract are in
+[docs/pit-replay-artifact-normalization.md](pit-replay-artifact-normalization.md).
 
 ## Correctness-only findings
 

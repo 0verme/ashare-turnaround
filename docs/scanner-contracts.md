@@ -48,6 +48,7 @@ replay / daily snapshot / evaluation / report
 | #28 | Turnaround trend and acceleration semantics | `features.trend` / `docs/trend-semantics.md` |
 | #31 | Evidence coverage and confidence gate | `scanner.evidence` / `scanner.score` / `docs/evidence-confidence-v1.md` |
 | #32 | Historical PIT replay validation sample | `scanner.replay_validation` / `docs/pit-replay-validation.md` |
+| #41 | Lossless normalized replay artifact layout / bounded audit | `scanner.artifacts` / `docs/pit-replay-artifact-normalization.md` |
 
 Issue #7 is deliberately not duplicated in this branch: the repository already
 has the proposed adversarial PIT test/documentation in [PR #24](https://github.com/0verme/ashare-turnaround/pull/24).
@@ -229,6 +230,7 @@ temporary local Parquet directories; no test performs a full-market Tushare
 request.
 
 The #32 validation artifact keeps `pit-replay-validation-v1` separate from the
+physical `pit-replay-artifact-normalized-v1` layout and from the
 frozen `comparable-period-v1`, `turnaround-trend-v2`, `low-attention-v2`,
 `expectation-crowding-v2`, and `evidence-confidence-v1` contracts. It is a
 correctness boundary, not an Evaluation, Ablation, or Score v2 decision.

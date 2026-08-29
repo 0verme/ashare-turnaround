@@ -31,8 +31,28 @@ import pyarrow.parquet as pq
 from ..dates import normalize_date_series
 from ..pit.financial import query_financial_as_of
 from ..storage.parquet import RawParquetStore
+from .artifacts import (
+    ARTIFACT_LAYOUT_VERSION,
+    PIT_REPLAY_ARTIFACT_LAYOUT_VERSION,
+    ContentAddressedStore,
+    deterministic_replay_digests,
+    expand_normalized_snapshot,
+    expand_normalized_vector,
+    feature_vector_from_payload,
+    normalize_feature_vector,
+    normalize_snapshot_payload,
+    semantic_digest,
+    validate_normalized_integrity,
+    write_normalized_snapshot_with_streamed_vectors,
+)
 from .contracts import FeatureEvidence, FeatureVector
-from .replay import ReplayConfig, ReplayDiagnostics, ReplayResult, run_replay_frames
+from .replay import (
+    ReplayConfig,
+    ReplayDiagnostics,
+    ReplayResult,
+    replay_performance_profile,
+    run_replay_frames,
+)
 from .score import rank_scores, score_feature_vector
 from .universe import UniverseConfig, build_investable_universe
 
@@ -1269,8 +1289,88 @@ def _validate_replay_vector_pit(
     return tuple(dict.fromkeys(violations))
 
 
+def validate_normalized_vector_pit(
+    normalized_vector: Mapping[str, Any],
+    *,
+    provenance_store: Mapping[str, Any] | None = None,
+    as_of_date: str | date | datetime | pd.Timestamp,
+    benchmark_id: str = DEFAULT_BENCHMARK_ID,
+) -> tuple[str, ...]:
+    """Run the ordinary PIT validator against one normalized vector."""
+
+    store = provenance_store
+    if store is None and isinstance(normalized_vector, Mapping):
+        store = normalized_vector.get("provenance_store")
+    integrity_payload = {
+        "vectors": [normalized_vector],
+        "provenance_store": store if store is not None else {},
+    }
+    integrity = validate_normalized_integrity(integrity_payload)
+    if integrity:
+        return tuple(f"normalized:{value}" for value in integrity)
+    try:
+        expanded = expand_normalized_vector(normalized_vector, store)
+        vector = feature_vector_from_payload(expanded)
+        as_of = _normalise_timestamp(as_of_date, name="as_of_date")
+        return _validate_replay_vector_pit(
+            vector,
+            as_of=as_of,
+            benchmark_id=benchmark_id,
+            observable_key_cache={},
+            date_cache={},
+            safe_container_cache={},
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        return (f"normalized:decode_error:{type(exc).__name__}:{exc}",)
+
+
+def validate_normalized_snapshot_pit(
+    snapshot: Mapping[str, Any],
+    *,
+    as_of_date: str | date | datetime | pd.Timestamp | None = None,
+    benchmark_id: str = DEFAULT_BENCHMARK_ID,
+) -> tuple[str, ...]:
+    """Expand and PIT-check every evidence-bearing vector in a snapshot."""
+
+    if not isinstance(snapshot, Mapping):
+        return ("normalized:snapshot_not_mapping",)
+    integrity = validate_normalized_integrity(snapshot)
+    if integrity:
+        return tuple(f"normalized:{value}" for value in integrity)
+    try:
+        expanded = expand_normalized_snapshot(snapshot)
+    except (KeyError, TypeError, ValueError) as exc:
+        return (f"normalized:decode_error:{type(exc).__name__}:{exc}",)
+    replay = expanded.get("replay") if isinstance(expanded, Mapping) else None
+    if not isinstance(replay, Mapping):
+        return ()
+    resolved_as_of = as_of_date or replay.get("metadata", {}).get("as_of_date")
+    if resolved_as_of is None:
+        return ("normalized:missing_as_of_date",)
+    violations: list[str] = []
+    for vector_payload in replay.get("vectors", ()):
+        if not isinstance(vector_payload, Mapping):
+            violations.append("normalized:vector_not_mapping")
+            continue
+        try:
+            vector = feature_vector_from_payload(vector_payload)
+            violations.extend(
+                _validate_replay_vector_pit(
+                    vector,
+                    as_of=_normalise_timestamp(resolved_as_of, name="as_of_date"),
+                    benchmark_id=benchmark_id,
+                    observable_key_cache={},
+                    date_cache={},
+                    safe_container_cache={},
+                )
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            violations.append(f"normalized:decode_error:{type(exc).__name__}:{exc}")
+    return tuple(dict.fromkeys(violations))
+
+
 def validate_replay_pit(
-    result: ReplayResult,
+    result: ReplayResult | Mapping[str, Any],
     *,
     as_of_date: str | date | datetime | pd.Timestamp | None = None,
     benchmark_id: str = DEFAULT_BENCHMARK_ID,
@@ -1279,6 +1379,12 @@ def validate_replay_pit(
 ) -> tuple[str, ...]:
     """Return hard PIT violations found in one production replay result."""
 
+    if isinstance(result, Mapping):
+        return validate_normalized_snapshot_pit(
+            result,
+            as_of_date=as_of_date,
+            benchmark_id=benchmark_id,
+        )
     as_of = _normalise_timestamp(as_of_date or result.as_of_date, name="as_of_date")
     violations: list[str] = []
     observable_key_cache: dict[str, bool] = {}
@@ -1478,6 +1584,7 @@ def _write_stream_checkpoint(
 
     payload: dict[str, Any] = {
         "artifact_schema_version": "pit-replay-validation-artifact-v1",
+        "artifact_layout_version": ARTIFACT_LAYOUT_VERSION,
         "status": status,
         "contract_version": contract_version,
         "stage": stage,
@@ -1496,7 +1603,15 @@ def _result_payload_fingerprint(result: ReplayResult) -> str:
     return _hash_payload(result.artifact_dict(), length=None)
 
 
-def _determinism_compare(first: ReplayResult, second: ReplayResult) -> dict[str, Any]:
+def _determinism_compare(
+    first: ReplayResult,
+    second: ReplayResult,
+    *,
+    first_candidate_vector_digests: Mapping[str, str] | None = None,
+    second_candidate_vector_digests: Mapping[str, str] | None = None,
+    first_provenance_store: Mapping[str, Any] | None = None,
+    second_provenance_store: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     first_formal = (
         first.ranked[["ts_code", "rank"]].to_dict(orient="records")
         if not first.ranked.empty
@@ -1517,16 +1632,34 @@ def _determinism_compare(first: ReplayResult, second: ReplayResult) -> dict[str,
         if not second.full_ranked.empty
         else []
     )
+    first_digests = deterministic_replay_digests(
+        first,
+        candidate_vector_digests=first_candidate_vector_digests,
+        provenance_store=first_provenance_store,
+    )
+    second_digests = deterministic_replay_digests(
+        second,
+        candidate_vector_digests=second_candidate_vector_digests,
+        provenance_store=second_provenance_store,
+    )
     same = {
         "same_candidates": first_formal == second_formal,
         "same_ranks": first_diagnostic == second_diagnostic,
         "same_warnings": first.warnings == second.warnings,
         "same_snapshot_id": first.snapshot_id == second.snapshot_id,
         "same_config_fingerprint": first.config_fingerprint == second.config_fingerprint,
-        "same_artifact_payload": _result_payload_fingerprint(first)
-        == _result_payload_fingerprint(second),
+        "same_artifact_payload": (
+            first_digests == second_digests
+            if first_candidate_vector_digests is not None
+            or second_candidate_vector_digests is not None
+            else _result_payload_fingerprint(first) == _result_payload_fingerprint(second)
+        ),
+        "same_semantic_digests": first_digests == second_digests,
+        "first_digests": first_digests,
+        "second_digests": second_digests,
     }
-    return {**same, "status": "PASS" if all(same.values()) else "FAIL"}
+    comparison_values = [value for key, value in same.items() if key.startswith("same_")]
+    return {**same, "status": "PASS" if all(comparison_values) else "FAIL"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -1559,6 +1692,11 @@ class ReplayValidationSnapshot:
             "determinism": dict(self.determinism),
             "replay": self.result.artifact_dict() if self.result is not None else None,
         }
+
+    def normalized_dict(self) -> dict[str, Any]:
+        """Return this snapshot in the lossless normalized physical layout."""
+
+        return normalize_snapshot_payload(self.as_dict())
 
 
 @dataclass(frozen=True, slots=True)
@@ -1604,6 +1742,7 @@ class ReplayValidationResult:
     def as_dict(self, *, include_snapshots: bool = True) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "contract_version": self.contract_version,
+            "artifact_layout_version": ARTIFACT_LAYOUT_VERSION,
             "status": self.status,
             "gate_status": self.gate_status,
             "selection_rule": self.selection_rule,
@@ -1637,8 +1776,16 @@ def _run_manifest(
     seed: int,
     code_version: str,
     warnings: Iterable[str],
+    candidate_vector_digests: Mapping[str, str] | None = None,
+    provenance_store: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     config_hash = _hash_payload(validation_config, length=None)
+    digests = deterministic_replay_digests(
+        result,
+        input_manifest=input_manifest,
+        candidate_vector_digests=candidate_vector_digests,
+        provenance_store=provenance_store,
+    )
     run_id = _hash_payload(
         {
             "snapshot_id": result.snapshot_id,
@@ -1653,6 +1800,8 @@ def _run_manifest(
     return {
         "run_id": run_id,
         "replay_run_id": result.run_id,
+        "artifact_layout_version": ARTIFACT_LAYOUT_VERSION,
+        "deterministic_digests": digests,
         "snapshot_id": result.snapshot_id,
         "as_of_date": result.as_of_date,
         "target_month": target.target_month,
@@ -2345,6 +2494,7 @@ def _run_validation(
     ).as_dict()
     validation_configuration = {
         "contract_version": PIT_REPLAY_VALIDATION_CONTRACT_VERSION,
+        "artifact_layout_version": ARTIFACT_LAYOUT_VERSION,
         "selection_rule": selection_rule,
         "anchor_day": anchor_day,
         "calendar_exchange": calendar_exchange,
@@ -2401,6 +2551,8 @@ def _run_validation(
     completed: list[dict[str, Any]] = []
     candidate_spool_path: Path | None = None
     candidate_spool_handle = None
+    stream_store_builder: ContentAddressedStore | None = None
+    stream_candidate_digest_map: dict[str, str] = {}
     if stream_output is not None:
         stream_output.mkdir(parents=True, exist_ok=True)
         (stream_output / "snapshots").mkdir(parents=True, exist_ok=True)
@@ -2409,11 +2561,13 @@ def _run_validation(
             candidate_spool_handle = candidate_spool_path.open("w", encoding="utf-8")
 
             def stream_candidate(vector: FeatureVector, _score: Any) -> None:
-                if candidate_spool_handle is None:
-                    raise RuntimeError("candidate spool is closed")
+                if candidate_spool_handle is None or stream_store_builder is None:
+                    raise RuntimeError("candidate spool or normalized store is closed")
+                stream_candidate_digest_map[str(vector.ts_code)] = semantic_digest(vector)
+                normalized = normalize_feature_vector(vector, store=stream_store_builder)
                 candidate_spool_handle.write(
                     json.dumps(
-                        _json_safe(vector.as_dict()),
+                        _json_safe(normalized),
                         ensure_ascii=False,
                         sort_keys=True,
                         separators=(",", ":"),
@@ -2443,7 +2597,7 @@ def _run_validation(
     def record_snapshot(snapshot: ReplayValidationSnapshot) -> None:
         """Write one complete snapshot before dropping its heavy result."""
 
-        nonlocal candidate_spool_path
+        nonlocal candidate_spool_path, stream_store_builder, stream_candidate_digest_map
         if snapshot.result is not None and stream_results:
             snapshot_metrics[snapshot.target.target_month] = _snapshot_metrics(snapshot.result)
             if snapshot.regime is not None:
@@ -2453,19 +2607,24 @@ def _run_validation(
             with _diagnostic_phase(diagnostics, "artifact_serialization"):
                 payload = snapshot.as_dict()
                 if candidate_spool_path is not None and snapshot.result is not None:
-                    _write_json_with_streamed_vectors(
+                    if stream_store_builder is None:
+                        raise RuntimeError("normalized store is missing for streamed snapshot")
+                    write_normalized_snapshot_with_streamed_vectors(
                         stream_output / "snapshots" / _snapshot_filename(snapshot),
                         payload,
                         candidate_spool_path,
+                        stream_store_builder.entries_view(),
                     )
                 else:
                     _write_json(
                         stream_output / "snapshots" / _snapshot_filename(snapshot),
-                        payload,
+                        normalize_snapshot_payload(payload),
                     )
             if candidate_spool_path is not None:
                 candidate_spool_path.unlink(missing_ok=True)
                 candidate_spool_path = None
+            stream_store_builder = None
+            stream_candidate_digest_map = {}
         completed.append(
             {
                 "target_month": snapshot.target.target_month,
@@ -2548,6 +2707,9 @@ def _run_validation(
 
         as_of = target.selected_trading_date
         assert as_of is not None
+        if stream_candidates:
+            stream_store_builder = ContentAddressedStore()
+            stream_candidate_digest_map = {}
         if stream_candidates and candidate_spool_handle is None:
             assert stream_output is not None
             candidate_spool_path = stream_output / ".candidate-vectors.jsonl"
@@ -2642,6 +2804,14 @@ def _run_validation(
                 seed=seed,
                 code_version=code_version,
                 warnings=(*warnings, *replay_result.warnings, *pit_violations),
+                candidate_vector_digests=(
+                    stream_candidate_digest_map if stream_candidates else None
+                ),
+                provenance_store=(
+                    stream_store_builder.entries_view()
+                    if stream_candidates and stream_store_builder is not None
+                    else None
+                ),
             )
             determinism: dict[str, Any] = {}
             if (
@@ -2652,8 +2822,15 @@ def _run_validation(
                 saved_sink = diagnostics.candidate_sink if stream_candidates else None
                 saved_validator = diagnostics.candidate_validator if stream_candidates else None
                 saved_retain_vectors = diagnostics.retain_vectors if stream_candidates else True
+                repeated_candidate_digests: dict[str, str] = {}
+                repeated_store = ContentAddressedStore()
+
+                def repeated_sink(vector: FeatureVector, _score: Any) -> None:
+                    repeated_candidate_digests[str(vector.ts_code)] = semantic_digest(vector)
+                    normalize_feature_vector(vector, store=repeated_store)
+
                 if stream_candidates and diagnostics is not None:
-                    diagnostics.candidate_sink = None
+                    diagnostics.candidate_sink = repeated_sink
                     diagnostics.candidate_validator = None
                     diagnostics.retain_vectors = False
                 try:
@@ -2668,7 +2845,24 @@ def _run_validation(
                         diagnostics.candidate_sink = saved_sink
                         diagnostics.candidate_validator = saved_validator
                         diagnostics.retain_vectors = saved_retain_vectors
-                determinism = _determinism_compare(replay_result, repeated)
+                determinism = _determinism_compare(
+                    replay_result,
+                    repeated,
+                    first_candidate_vector_digests=(
+                        stream_candidate_digest_map if stream_candidates else None
+                    ),
+                    second_candidate_vector_digests=(
+                        repeated_candidate_digests if stream_candidates else None
+                    ),
+                    first_provenance_store=(
+                        stream_store_builder.entries_view()
+                        if stream_candidates and stream_store_builder is not None
+                        else None
+                    ),
+                    second_provenance_store=(
+                        repeated_store.entries_view() if stream_candidates else None
+                    ),
+                )
                 del repeated
                 check = {
                     "as_of_date": as_of,
@@ -2794,6 +2988,11 @@ def _run_validation(
     resource_final = _host_memory()
     baseline_swap = resource_baseline.get("swap_used_bytes")
     final_swap = resource_final.get("swap_used_bytes")
+    if diagnostics is not None:
+        summary["performance"] = replay_performance_profile(
+            diagnostics,
+            full_candidate_count=diagnostics.candidate_total,
+        )
     summary["resource"] = {
         "guard_enabled": resource_guard,
         "peak_rss_bytes": resource_final.get("peak_rss_bytes"),
@@ -3237,6 +3436,7 @@ def render_replay_validation_summary(result: ReplayValidationResult) -> str:
         "# Historical PIT replay validation sample",
         "",
         f"- Contract: `{result.contract_version}`",
+        f"- Physical artifact layout: `{ARTIFACT_LAYOUT_VERSION}`",
         f"- Overall status: `{result.status}`; gate: `{result.gate_status}`",
         f"- Selection rule: `{result.selection_rule}` (fixed anchor day; no return inputs)",
         f"- Range: `{result.start_month}`..`{result.end_month}`",
@@ -3278,6 +3478,18 @@ def render_replay_validation_summary(result: ReplayValidationResult) -> str:
         f"- Peak RSS (GiB): `{summary.get('resource', {}).get('peak_rss_gib')}`",
         f"- Synthetic adversarial fixtures: `{summary.get('synthetic_fixture_status')}`",
         f"- Financial revision boundary fixture: `{summary.get('revision_boundary_status')}`",
+        "",
+        "## Bounded performance audit",
+        "",
+        f"- Total wall seconds: `{summary.get('performance', {}).get('total_wall_seconds')}`",
+        f"- Candidate seconds/candidate: `"
+        f"{summary.get('performance', {}).get('candidate_seconds_per_candidate')}`",
+        f"- Full replay ETA seconds: `"
+        f"{summary.get('performance', {}).get('full_replay_eta_seconds')}`",
+        f"- Peak RSS (GiB): `"
+        f"{summary.get('performance', {}).get('rss_peak_gib')}`",
+        f"- Phase seconds: `"
+        f"{summary.get('performance', {}).get('phase_seconds', {})}`",
         "",
         "## Determinism",
         "",
@@ -3328,6 +3540,7 @@ def write_replay_validation_artifacts(
     snapshots_dir.mkdir(parents=True, exist_ok=True)
     manifest_payload = {
         "artifact_schema_version": "pit-replay-validation-artifact-v1",
+        "artifact_layout_version": ARTIFACT_LAYOUT_VERSION,
         "contract_version": result.contract_version,
         "status": result.status,
         "gate_status": result.gate_status,
@@ -3352,6 +3565,7 @@ def write_replay_validation_artifacts(
             destination / "summary.json",
             {
                 "artifact_schema_version": "pit-replay-validation-artifact-v1",
+                "artifact_layout_version": ARTIFACT_LAYOUT_VERSION,
                 "contract_version": result.contract_version,
                 "status": result.status,
                 "gate_status": result.gate_status,
@@ -3371,7 +3585,7 @@ def write_replay_validation_artifacts(
         # intentionally retain no ReplayResult in RAM.  Do not replace those
         # files with a null ``replay`` placeholder during finalization.
         if snapshot.result is not None or not snapshot_path.exists():
-            _write_json(snapshot_path, snapshot.as_dict())
+            _write_json(snapshot_path, snapshot.normalized_dict())
     paths["snapshots"] = snapshots_dir
     completed = [
         {
@@ -3385,6 +3599,7 @@ def write_replay_validation_artifacts(
         destination / "checkpoint.json",
         {
             "artifact_schema_version": "pit-replay-validation-artifact-v1",
+            "artifact_layout_version": ARTIFACT_LAYOUT_VERSION,
             "status": "COMPLETE",
             "contract_version": result.contract_version,
             "stage": result.stage,
@@ -3409,6 +3624,8 @@ __all__ = [
     "MONTHLY_SELECTION_RULE_VERSION",
     "MARKET_REGIME_CONTRACT_VERSION",
     "HISTORICAL_UNIVERSE_CONTRACT_VERSION",
+    "ARTIFACT_LAYOUT_VERSION",
+    "PIT_REPLAY_ARTIFACT_LAYOUT_VERSION",
     "ReplayValidationConfig",
     "ReplayDiagnostics",
     "PITViolation",
@@ -3423,6 +3640,8 @@ __all__ = [
     "classify_market_regime",
     "market_regime",
     "validate_replay_pit",
+    "validate_normalized_vector_pit",
+    "validate_normalized_snapshot_pit",
     "assert_replay_pit_safe",
     "ReplayValidationSnapshot",
     "ReplayValidationResult",

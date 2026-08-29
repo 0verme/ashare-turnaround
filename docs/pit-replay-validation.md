@@ -172,6 +172,10 @@ The staged commands are:
 ashare-turnaround replay-validate --stage smoke --start 2017-01 --end 2026-12 \
   --data-dir data --output data/reports/replay-validation
 
+# one explicit bounded target; this is diagnostic and cannot be a validation PASS
+ashare-turnaround replay-profile --as-of 20250616 --candidate-cap 100 \
+  --data-dir data --output data/reports/replay-profile
+
 # one deterministic available month per year
 ashare-turnaround replay-validate --stage yearly --start 2017-01 --end 2026-12
 
@@ -186,3 +190,18 @@ missing inputs, warnings, evidence coverage/confidence, unknown groups,
 ranking eligibility, PIT violations, and deterministic repeat checks.  It
 makes no claim about strategy performance and must be kept separate from the
 later Evaluation and Ablation work.
+
+## Physical artifact layout (post-#41 diagnostic)
+
+The logical contracts above are unchanged. New JSON snapshots use the separate
+physical layout `pit-replay-artifact-normalized-v1`: immutable provenance,
+components, config, metadata, and repeated evidence arrays are referenced by
+canonical SHA-256 content refs in a snapshot-local store. The decoder
+(`expand_normalized_vector`, `expand_normalized_snapshot`) reconstructs the
+legacy payload recursively. The representation is lossless; physical
+deduplication never removes evidence and never changes Top-N, score,
+eligibility, or PIT semantics.
+
+The bounded attribution and performance measurements are recorded in
+[pit-replay-artifact-normalization.md](pit-replay-artifact-normalization.md).
+The final decision remains `BLOCKED`; no full 2025-06 smoke is implied.

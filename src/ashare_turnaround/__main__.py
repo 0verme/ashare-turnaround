@@ -53,6 +53,16 @@ from .pit.financial import (
     validate_revision_candidate,
 )
 from .providers.tushare import TushareProvider
+from .scanner.artifacts import (
+    ARTIFACT_LAYOUT_VERSION,
+    audit_feature_vectors,
+    expand_normalized_replay_artifact,
+    expand_normalized_snapshot,
+    normalize_replay_artifact,
+    normalize_snapshot_payload,
+    serialized_json_bytes,
+    size_comparison,
+)
 from .scanner.daily import (
     compare_scan_snapshots,
     read_scan_snapshot,
@@ -62,6 +72,7 @@ from .scanner.daily import (
 from .scanner.evaluation import EvaluationConfig, evaluate_scans
 from .scanner.replay import (
     ReplayConfig,
+    ReplayDiagnostics,
     run_replay,
     run_replay_variants,
     write_replay_artifacts,
@@ -306,6 +317,25 @@ def _parser() -> argparse.ArgumentParser:
             "(identity remains row/schema based)"
         ),
     )
+
+    artifact_audit = subparsers.add_parser(
+        "artifact-audit",
+        help="attribute JSON subtrees and compare legacy/normalized artifact size",
+    )
+    artifact_audit.add_argument("--input", required=True)
+    artifact_audit.add_argument("--output", default=None)
+    artifact_audit.add_argument("--top", type=int, default=20)
+    artifact_audit.add_argument("--projected-candidates", type=int, default=5102)
+
+    replay_profile = subparsers.add_parser(
+        "replay-profile",
+        help="run one as-of target with an explicit diagnostic candidate cap",
+    )
+    replay_profile.add_argument("--data-dir", default="data")
+    replay_profile.add_argument("--as-of", required=True)
+    replay_profile.add_argument("--top-n", type=int, default=20)
+    replay_profile.add_argument("--candidate-cap", type=int, default=100)
+    replay_profile.add_argument("--output", default="data/reports/replay-profile")
 
     scan = subparsers.add_parser("scan", help="run and persist the daily Top-N scanner")
     scan.add_argument("--data-dir", default="data")
@@ -896,6 +926,125 @@ def _replay_variants(args: argparse.Namespace) -> int:
             f"candidates={len(result.ranked)} data={data_path} metadata={metadata_path}"
         )
     return 0 if all(result.status == "PASS" for result in results.values()) else 2
+
+
+def _artifact_audit(args: argparse.Namespace) -> int:
+    if args.top <= 0 or args.projected_candidates <= 0:
+        print("artifact-audit --top and --projected-candidates must be positive", file=sys.stderr)
+        return 2
+    source = Path(args.input)
+    try:
+        payload = json.loads(source.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("artifact JSON must contain an object")
+        if payload.get("artifact_layout_version") == ARTIFACT_LAYOUT_VERSION:
+            legacy = (
+                expand_normalized_snapshot(payload)
+                if "replay" in payload
+                else expand_normalized_replay_artifact(payload)
+            )
+            normalized = payload
+        elif "replay" in payload:
+            legacy = payload
+            normalized = normalize_snapshot_payload(payload)
+        else:
+            legacy = payload
+            normalized = normalize_replay_artifact(payload)
+        replay = legacy.get("replay") if "replay" in legacy else legacy
+        if not isinstance(replay, dict):
+            raise ValueError("artifact does not contain a replay object")
+        vectors = replay.get("vectors", [])
+        attribution = audit_feature_vectors(vectors, top_n=args.top)
+        legacy_bytes = len(serialized_json_bytes(legacy))
+        normalized_bytes = len(serialized_json_bytes(normalized))
+        normalized_replay = (
+            normalized.get("replay") if "replay" in normalized else normalized
+        )
+        size = size_comparison(
+            replay,
+            normalized_replay,
+            projected_candidate_count=args.projected_candidates,
+        )
+        report = {
+            "artifact_layout_version": ARTIFACT_LAYOUT_VERSION,
+            "input": str(source),
+            "candidate_count": len(vectors),
+            "legacy_expanded_bytes": legacy_bytes,
+            "normalized_actual_bytes": normalized_bytes,
+            "compression_ratio": legacy_bytes / normalized_bytes if normalized_bytes else None,
+            "projected_candidate_count": args.projected_candidates,
+            "size_comparison": size,
+            "attribution": attribution,
+        }
+        if args.output:
+            destination = Path(args.output)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(
+                json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            print(f"artifact_audit_report={destination}")
+        else:
+            print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+        print(f"artifact-audit failed: {exc}", file=sys.stderr)
+        return 2
+    return 0
+
+
+def _replay_profile(args: argparse.Namespace) -> int:
+    if args.top_n <= 0 or args.candidate_cap <= 0:
+        print("replay-profile --top-n and --candidate-cap must be positive", file=sys.stderr)
+        return 2
+    try:
+        as_of = pd.Timestamp(args.as_of).normalize()
+        month = as_of.strftime("%Y-%m")
+        diagnostics = ReplayDiagnostics(candidate_limit=args.candidate_cap, checkpoint_every=100)
+        result = run_replay_validation(
+            args.data_dir,
+            start=month,
+            end=month,
+            today=as_of,
+            top_n=args.top_n,
+            config=ReplayConfig(top_n=args.top_n),
+            stage="smoke",
+            determinism_sample=0,
+            content_hash=False,
+            artifact_output=args.output,
+            retain_snapshot_results=False,
+            diagnostics=diagnostics,
+        )
+        performance = result.summary.get("performance", diagnostics.summary())
+        destination = Path(args.output) / "performance.json"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(
+            json.dumps(
+                {
+                    "profile_version": "pit-replay-performance-audit-v1",
+                    "as_of_date": as_of.strftime("%Y%m%d"),
+                    "candidate_cap": args.candidate_cap,
+                    "validation_status": result.status,
+                    "summary": result.summary,
+                    "performance": performance,
+                },
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    except (OSError, ValueError, KeyError, RuntimeError, TypeError) as exc:
+        print(f"replay-profile failed: {exc}", file=sys.stderr)
+        return 2
+    print(f"replay_profile_status={result.status} output={args.output}")
+    print(f"replay_profile_performance={destination}")
+    print(f"candidate_seconds_per_candidate={performance.get('candidate_seconds_per_candidate')}")
+    print(f"full_replay_eta_seconds={performance.get('full_replay_eta_seconds')}")
+    print(f"peak_rss_bytes={performance.get('rss_peak_bytes')}")
+    # A bounded diagnostic is intentionally not a validation PASS.  The
+    # command succeeds when the bounded run itself has no hard failure.
+    return 0 if result.summary.get("failed_count", 0) == 0 else 2
 
 
 def _replay_validate(args: argparse.Namespace) -> int:
@@ -1520,6 +1669,8 @@ def main(argv: list[str] | None = None) -> int:
         "replay": _replay,
         "replay-variants": _replay_variants,
         "replay-validate": _replay_validate,
+        "replay-profile": _replay_profile,
+        "artifact-audit": _artifact_audit,
         "scan": _scan,
         "scan-compare": _scan_compare,
         "evaluate": _evaluate,

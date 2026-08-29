@@ -7,7 +7,7 @@ import json
 import os
 import re
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from contextlib import nullcontext
 from dataclasses import asdict, dataclass, field, replace
 from datetime import date, datetime
@@ -34,6 +34,12 @@ from ..pit.comparable import COMPARABLE_PERIOD_CONTRACT_VERSION
 from ..replay_cache import ReplaySnapshotCache, current_replay_cache, replay_cache_scope
 from ..storage.inventory import build_coverage_report
 from ..storage.parquet import RawParquetStore
+from .artifacts import (
+    deterministic_replay_digests,
+    normalize_replay_artifact,
+    serialized_json_bytes,
+    write_json_artifact,
+)
 from .contracts import TURNAROUND_TREND_CONTRACT_VERSION, FeatureVector
 from .evidence import (
     EVIDENCE_CONFIDENCE_CONTRACT_VERSION,
@@ -110,6 +116,7 @@ class ReplayDiagnostics:
     candidate_total: int = 0
     candidate_processed: int = 0
     candidate_started_at: float | None = None
+    candidate_finished_at: float | None = None
     peak_rss_bytes: int | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
@@ -143,7 +150,12 @@ class ReplayDiagnostics:
         self.candidate_total = int(total)
         self.candidate_processed = 0
         self.candidate_started_at = time.perf_counter()
+        self.candidate_finished_at = None
         self.record_candidate(0, force=True)
+
+    def finish_candidates(self) -> None:
+        if self.candidate_started_at is not None and self.candidate_finished_at is None:
+            self.candidate_finished_at = time.perf_counter()
 
     def record_candidate(self, processed: int, *, force: bool = False) -> None:
         self.candidate_processed = int(processed)
@@ -175,9 +187,20 @@ class ReplayDiagnostics:
             self._emit(checkpoint)
 
     def summary(self) -> dict[str, Any]:
+        self.finish_candidates()
         current_rss = self.current_rss_bytes()
         if current_rss is not None:
             self.peak_rss_bytes = max(self.peak_rss_bytes or 0, current_rss)
+        now = time.perf_counter()
+        wall_seconds = max(0.0, now - self.started_at)
+        candidate_seconds = (
+            max(
+                0.0,
+                (self.candidate_finished_at or now) - self.candidate_started_at,
+            )
+            if self.candidate_started_at is not None
+            else 0.0
+        )
         return {
             "candidate_limit": self.candidate_limit,
             "candidate_total": self.candidate_total,
@@ -186,6 +209,13 @@ class ReplayDiagnostics:
                 self.candidate_validation_violations
             ),
             "candidate_checkpoints": list(self.checkpoints),
+            "candidate_seconds": candidate_seconds,
+            "candidate_seconds_per_candidate": (
+                candidate_seconds / self.candidate_processed
+                if self.candidate_processed
+                else None
+            ),
+            "wall_seconds": wall_seconds,
             "peak_rss_bytes": self.peak_rss_bytes,
             "phases": {
                 name: phase.as_dict() for name, phase in sorted(self.phases.items())
@@ -196,6 +226,74 @@ class ReplayDiagnostics:
         payload = {"event": "replay_diagnostics_summary", **self.summary()}
         self._emit(payload)
         return payload
+
+
+def replay_performance_profile(
+    diagnostics: ReplayDiagnostics,
+    *,
+    full_candidate_count: int | None = None,
+) -> dict[str, Any]:
+    """Return the bounded single-thread performance audit for one replay."""
+
+    summary = diagnostics.summary()
+    phases = summary["phases"]
+    names = (
+        "fundamental",
+        "trend",
+        "quality",
+        "attention",
+        "crowding",
+        "low_attention",
+        "scoring",
+    )
+    phase_seconds = {
+        name: float(phases.get(f"candidate.{name}", {}).get("total_seconds", 0.0))
+        for name in names
+    }
+    phase_seconds["PIT validation"] = float(
+        phases.get("pit_validation", {}).get("total_seconds", 0.0)
+        + phases.get("candidate.pit_validation", {}).get("total_seconds", 0.0)
+    )
+    phase_seconds["artifact serialization"] = float(
+        phases.get("artifact_serialization", {}).get("total_seconds", 0.0)
+    )
+    processed = int(summary.get("candidate_processed", 0))
+    candidate_seconds = float(summary.get("candidate_seconds", 0.0))
+    per_candidate = candidate_seconds / processed if processed else None
+    population = int(full_candidate_count or summary.get("candidate_total", 0))
+    feature_seconds = sum(phase_seconds[name] for name in names)
+    pit_seconds = phase_seconds["PIT validation"]
+    artifact_seconds = phase_seconds["artifact serialization"]
+    fixed_seconds = max(0.0, float(summary.get("wall_seconds", 0.0)) - candidate_seconds)
+    eta = fixed_seconds + per_candidate * population if per_candidate is not None else None
+    return {
+        "profile_version": "pit-replay-performance-audit-v1",
+        "single_threaded": True,
+        "candidate_total": int(summary.get("candidate_total", 0)),
+        "candidate_processed": processed,
+        "total_wall_seconds": float(summary.get("wall_seconds", 0.0)),
+        "candidate_loop_seconds": candidate_seconds,
+        "candidate_seconds_per_candidate": per_candidate,
+        "candidate_seconds/candidate": per_candidate,
+        "feature_seconds": feature_seconds,
+        "feature_seconds_per_candidate": feature_seconds / processed if processed else None,
+        "pit_validation_seconds_per_candidate": pit_seconds / processed if processed else None,
+        "artifact_serialization_seconds_per_candidate": (
+            artifact_seconds / processed if processed else None
+        ),
+        "full_candidate_count_for_eta": population,
+        "fixed_overhead_seconds": fixed_seconds,
+        "full_replay_eta_seconds": eta,
+        "full_replay_eta_hours": eta / 3600.0 if eta is not None else None,
+        "phase_seconds": phase_seconds,
+        "rss_peak_bytes": summary.get("peak_rss_bytes"),
+        "rss_peak_gib": (
+            summary["peak_rss_bytes"] / 1024**3
+            if summary.get("peak_rss_bytes") is not None
+            else None
+        ),
+        "raw_diagnostics": summary,
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -379,6 +477,22 @@ class ReplayResult:
                 "limitations": list(self.universe_limitations),
             },
         }
+
+    def normalized_artifact_dict(self) -> dict[str, Any]:
+        """Return the lossless physical artifact layout for this replay."""
+
+        payload = normalize_replay_artifact(self.artifact_dict())
+        payload["deterministic_digests"] = self.deterministic_digests()
+        return payload
+
+    def deterministic_digests(
+        self,
+        *,
+        input_manifest: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Return semantic digests without diagnostic timing or object identity."""
+
+        return deterministic_replay_digests(self, input_manifest=input_manifest)
 
 
 _SNAPSHOT_DATE_FIELDS: dict[str, tuple[str, ...]] = {
@@ -683,6 +797,7 @@ def _run_replay_frames_with_cache(
             cache.clear_candidate_state()
     if diagnostics is not None:
         diagnostics.record_candidate(len(scores), force=True)
+        diagnostics.finish_candidates()
     with _diagnostic_phase(diagnostics, "ranking"):
         diagnostic_ranked = rank_scores(scores, top_n=None)
         ranked = rank_scores(scores, top_n=settings.top_n)
@@ -834,29 +949,40 @@ def write_replay_artifacts(
     directory: str | Path,
     *,
     label: str | None = None,
+    normalized: bool = True,
 ) -> tuple[Path, Path]:
+    """Write the ranking Parquet and a lossless normalized JSON artifact.
+
+    ``normalized=False`` remains available for legacy consumers and tests; it
+    is not the default physical layout for new artifacts.
+    """
+
     destination = Path(directory)
     destination.mkdir(parents=True, exist_ok=True)
     suffix = ""
     if label is not None:
-        normalized = re.sub(r"[^A-Za-z0-9_.-]+", "-", label).strip("-.")
-        if not normalized:
+        normalized_label = re.sub(r"[^A-Za-z0-9_.-]+", "-", label).strip("-.")
+        if not normalized_label:
             raise ValueError("artifact label must contain a filename-safe character")
-        suffix = f"-{normalized}"
+        suffix = f"-{normalized_label}"
     data_path = destination / f"replay-{result.as_of_date}{suffix}.parquet"
     metadata_path = destination / f"replay-{result.as_of_date}{suffix}.json"
     result.ranked.to_parquet(data_path, index=False)
-    metadata_path.write_text(
-        json.dumps(result.artifact_dict(), ensure_ascii=False, indent=2, default=str) + "\n",
-        encoding="utf-8",
-    )
+    payload = result.normalized_artifact_dict() if normalized else result.artifact_dict()
+    if normalized:
+        write_json_artifact(metadata_path, payload)
+    else:
+        metadata_path.write_bytes(serialized_json_bytes(payload))
     return data_path, metadata_path
 
 
 def write_replay_variant_artifacts(
-    results: dict[str, ReplayResult], directory: str | Path
+    results: dict[str, ReplayResult],
+    directory: str | Path,
+    *,
+    normalized: bool = True,
 ) -> dict[str, tuple[Path, Path]]:
     return {
-        name: write_replay_artifacts(result, directory, label=name)
+        name: write_replay_artifacts(result, directory, label=name, normalized=normalized)
         for name, result in results.items()
     }
