@@ -18,7 +18,9 @@ from __future__ import annotations
 
 import base64
 import copy
+import gzip
 import hashlib
+import io
 import json
 import math
 import os
@@ -36,7 +38,7 @@ from .contracts import FeatureEvidence, FeatureVector
 NORMALIZED_ARTIFACT_LAYOUT_VERSION = "pit-replay-artifact-normalized-v1"
 ARTIFACT_LAYOUT_VERSION = NORMALIZED_ARTIFACT_LAYOUT_VERSION
 PIT_REPLAY_ARTIFACT_LAYOUT_VERSION = NORMALIZED_ARTIFACT_LAYOUT_VERSION
-DIGEST_CONTRACT_VERSION = "pit-replay-digests-v1"
+DIGEST_CONTRACT_VERSION = "pit-replay-digests-v2"
 
 _REF_KEY = "$ref"
 _REF_PREFIX = "sha256:"
@@ -55,6 +57,12 @@ _EVIDENCE_REFERENCE_FIELDS = (
     "source_versions",
 )
 _VECTOR_PAYLOAD_FIELDS = ("benchmark_metadata", "metadata", "feature_metadata")
+# Measured high-reuse financial audit structures.  Other mapping children stay
+# inline in their parent node: recursively interning every tiny status/config
+# wrapper created thousands of single-use entries per candidate.
+_ARTIFACT_AWARE_CAS_KEYS = frozenset(
+    {"observations", "source_chain", "provenance", "periods", "source_versions"}
+)
 
 # These are runtime/measurement fields, not information available to a
 # historical candidate.  Date-bearing audit fields such as ``as_of_date``,
@@ -234,14 +242,16 @@ def _is_container(value: Any) -> bool:
 
 
 def _store_bytes(value: Any) -> bytes:
-    """Encode a store node, compressing large repetitive JSON deterministically."""
+    """Encode one node without defeating cross-node stream compression.
 
-    raw = _canonical_safe_bytes(value)
-    if len(raw) < 256:
-        return raw
-    compressed = zlib.compress(raw, level=9)
-    encoded = _COMPRESSED_PREFIX + base64.b64encode(compressed)
-    return encoded if len(encoded) < len(raw) else raw
+    Earlier artifacts compressed every node independently at zlib level 9 and
+    then base64 encoded it.  Besides being CPU intensive, that hid repetition
+    between neighbouring nodes from the final compressor.  The decoder still
+    accepts that legacy representation, but newly built stores retain canonical
+    plain JSON bytes and are compressed once by the snapshot writer.
+    """
+
+    return _canonical_safe_bytes(value)
 
 
 def _is_compressed_bytes(value: Any) -> bool:
@@ -309,6 +319,10 @@ class ContentAddressedStore:
         # retaining source objects across streamed candidates would defeat the
         # memory benefit of the physical store.
         self._identity_cache: dict[int, tuple[Any, str]] = {}
+        # Share JSON-safe conversions across aliased nested provenance within
+        # one candidate.  TrendSummary deliberately reuses observations and
+        # source chains across component evidence records.
+        self._safe_cache: dict[int, Any] = {}
         if entries is not None:
             for key, value in entries.items():
                 ref = str(key)
@@ -352,6 +366,7 @@ class ContentAddressedStore:
 
     def clear_identity_cache(self) -> None:
         self._identity_cache.clear()
+        self._safe_cache.clear()
 
     def _encode_child(self, value: Any) -> Any:
         if _is_container(value):
@@ -361,55 +376,63 @@ class ContentAddressedStore:
     def _encode_node(self, value: Any) -> Any:
         if isinstance(value, Mapping):
             return {
-                str(key): self._encode_child(child)
+                str(key): (
+                    self._encode_child(child)
+                    if str(key) in _ARTIFACT_AWARE_CAS_KEYS
+                    else child
+                )
                 for key, child in value.items()
             }
         if isinstance(value, (list, tuple)):
             return [self._encode_child(child) for child in value]
         return value
 
-    def _encode_original_node(self, original: Any, safe: Any) -> Any:
-        if isinstance(original, Mapping) and isinstance(safe, Mapping):
+    def _encode_original_node(self, original: Any) -> Any:
+        """Convert and Merkle-encode in one traversal."""
+
+        if isinstance(original, Mapping):
             return {
                 str(key): (
-                    {_REF_KEY: self._intern_original(child, safe.get(str(key)))}
-                    if _is_container(child)
-                    else safe.get(str(key))
+                    {_REF_KEY: self._intern_original(child)}
+                    if _is_container(child) and str(key) in _ARTIFACT_AWARE_CAS_KEYS
+                    else _json_safe(child, self._safe_cache)
                 )
                 for key, child in original.items()
             }
-        if isinstance(original, (list, tuple)) and isinstance(safe, list):
+        if isinstance(original, (list, tuple)):
             return [
                 (
-                    {_REF_KEY: self._intern_original(child, safe[index])}
+                    {_REF_KEY: self._intern_original(child)}
                     if _is_container(child)
-                    else safe[index]
+                    else _json_safe(child, self._safe_cache)
                 )
-                for index, child in enumerate(original)
+                for child in original
             ]
-        return safe
+        return _json_safe(original, self._safe_cache)
 
-    def _intern_original(self, original: Any, safe: Any | None = None) -> str:
+    def _intern_original(self, original: Any) -> str:
         if _is_container(original):
             cached = self._identity_cache.get(id(original))
             if cached is not None and cached[0] is original:
                 return cached[1]
-        safe_value = _json_safe(original) if safe is None else safe
-        canonical = _canonical_safe_bytes(safe_value)
+        encoded = self._encode_original_node(original)
+        # Hash the lossless Merkle node, not the repeatedly expanded logical
+        # subtree.  Child refs already commit to their complete contents, so
+        # this remains content-addressed while avoiding O(depth * bytes).
+        canonical = _canonical_safe_bytes(encoded)
         ref = _REF_PREFIX + hashlib.sha256(canonical).hexdigest()
         if ref not in self._entries:
-            self._entries[ref] = _store_bytes(
-                self._encode_original_node(original, safe_value)
-            )
+            self._entries[ref] = _store_bytes(encoded)
         if _is_container(original):
             self._identity_cache[id(original)] = (original, ref)
         return ref
 
     def _intern_safe(self, safe: Any) -> str:
-        canonical = _canonical_safe_bytes(safe)
+        encoded = self._encode_node(safe)
+        canonical = _canonical_safe_bytes(encoded)
         ref = _REF_PREFIX + hashlib.sha256(canonical).hexdigest()
         if ref not in self._entries:
-            self._entries[ref] = _store_bytes(self._encode_node(safe))
+            self._entries[ref] = _store_bytes(encoded)
         return ref
 
     def intern(self, value: Any) -> str:
@@ -439,9 +462,45 @@ def _store_argument(
     return ContentAddressedStore(store), target, False
 
 
+def _feature_vector_payload(vector: FeatureVector) -> dict[str, Any]:
+    """Build the legacy logical shape without deep-copying nested evidence."""
+
+    benchmark = vector.benchmark_metadata
+    return {
+        "ts_code": vector.ts_code,
+        "as_of_date": vector.as_of_date,
+        "version": vector.version,
+        "comparable_period_contract_version": vector.comparable_period_contract_version,
+        "trend_contract_version": vector.trend_contract_version,
+        "values": dict(vector.values),
+        "evidence": {
+            name: evidence.as_dict(deep_copy=False)
+            for name, evidence in vector.evidence.items()
+        },
+        "risk_flags": list(vector.risk_flags),
+        "rejected_reasons": list(vector.rejected_reasons),
+        "unknown_features": list(vector.unknown_features),
+        "feature_contract_versions": dict(vector.feature_contract_versions),
+        "expectation_crowding_contract_version": (
+            vector.expectation_crowding_contract_version
+        ),
+        "benchmark_metadata": dict(benchmark),
+        "benchmark_id": benchmark.get("benchmark_id"),
+        "benchmark_name": benchmark.get("benchmark_name"),
+        "benchmark_contract_version": benchmark.get(
+            "benchmark_contract_version", benchmark.get("version")
+        ),
+        "benchmark_source_dataset": benchmark.get("source_dataset"),
+        "metadata": dict(vector.metadata),
+        "feature_metadata": dict(vector.metadata),
+    }
+
+
 def _payload(value: Any, *, method: str) -> dict[str, Any]:
     if isinstance(value, FeatureVector):
-        return copy.deepcopy(value.as_dict())
+        # Read nested provenance directly.  Normalization only replaces fields
+        # on these new top-level dictionaries and never mutates the vector.
+        return _feature_vector_payload(value)
     candidate = getattr(value, method, None)
     if callable(candidate):
         result = candidate()
@@ -901,46 +960,51 @@ def deterministic_replay_digests(
 ) -> dict[str, Any]:
     """Build stable replay digests independent of timing or object identity."""
 
-    artifact = result.artifact_dict() if hasattr(result, "artifact_dict") else dict(result)
+    # Determinism is intentionally assembled from bounded components.  Do not
+    # call ReplayResult.artifact_dict(): a real replay may stream vectors and
+    # its expanded logical artifact can be hundreds of GiB transiently.
+    result_mapping = result if isinstance(result, Mapping) else {}
+
+    def component(name: str, default: Any) -> Any:
+        return getattr(result, name, result_mapping.get(name, default))
+
     manifest = input_manifest or {}
-    vectors = getattr(result, "vectors", ())
+    vectors = component("vectors", ())
     if candidate_vector_digests is None:
-        candidate_vector_digests = {
-            str(vector.ts_code): semantic_digest(vector) for vector in vectors
-        }
+        digest_store = ContentAddressedStore()
+        candidate_vector_digests = {}
+        for vector in vectors:
+            normalized_vector = normalize_feature_vector(vector, store=digest_store)
+            candidate_vector_digests[str(vector.ts_code)] = content_digest(normalized_vector)
+        if provenance_store is None:
+            provenance_store = digest_store.entries_view()
     else:
         candidate_vector_digests = {
             str(code): str(digest) for code, digest in candidate_vector_digests.items()
         }
-    scores = getattr(result, "scores", ())
+    scores = component("scores", ())
     score_payload = [score.as_dict() if hasattr(score, "as_dict") else score for score in scores]
-    formal = _frame_records(getattr(result, "ranked", artifact.get("ranked", [])))
-    diagnostic = _frame_records(
-        getattr(result, "diagnostic_ranked", artifact.get("diagnostic_ranked", []))
-    )
+    formal = _frame_records(component("ranked", []))
+    diagnostic = _frame_records(component("diagnostic_ranked", []))
     if provenance_store is None:
-        if vectors:
-            normalized = normalize_feature_vectors(vectors)
-            provenance_store = normalized["provenance_store"]
-        else:
-            provenance_store = {}
+        provenance_store = {}
     return {
         "digest_contract_version": DIGEST_CONTRACT_VERSION,
         "input_manifest_digest": str(manifest.get("manifest_id") or content_digest(manifest)),
-        "config_digest": semantic_digest(getattr(result, "configuration", {})),
+        "config_digest": semantic_digest(component("configuration", {})),
         "universe_decision_digest": semantic_digest(
             [
                 item.as_dict() if hasattr(item, "as_dict") else item
-                for item in getattr(result, "universe_decisions", ())
+                for item in component("universe_decisions", ())
             ]
         ),
-        "per_candidate_vector_semantic_digest": dict(
+        "per_candidate_normalized_vector_digest": dict(
             sorted(candidate_vector_digests.items())
         ),
         "score_digest": semantic_digest(score_payload),
         "formal_ranking_digest": semantic_digest(formal),
         "diagnostic_ranking_digest": semantic_digest(diagnostic),
-        "warnings_digest": semantic_digest(list(getattr(result, "warnings", ()))),
+        "warnings_digest": semantic_digest(list(component("warnings", ()))),
         "provenance_store_digest": (
             _mapping_content_digest(provenance_store)
             if isinstance(provenance_store, Mapping)
@@ -1394,8 +1458,18 @@ def write_normalized_snapshot_with_streamed_vectors(
     snapshot: Mapping[str, Any],
     spool_path: str | Path,
     provenance_store: Mapping[str, Any],
+    *,
+    canonical_spool: bool = False,
+    gzip_level: int | None = None,
 ) -> Path:
-    """Write a normalized snapshot while reading normalized vectors line-by-line."""
+    """Write a normalized snapshot while reading vectors line-by-line.
+
+    ``canonical_spool`` is reserved for the private spool produced from a
+    successful canonical ``json.dumps`` call.  Such records are copied
+    verbatim; externally supplied spools retain the fail-closed parse and
+    canonicalization path.  ``gzip_level`` enables deterministic whole-stream
+    compression (mtime=0 and no original filename).
+    """
 
     payload = copy.deepcopy(dict(snapshot))
     replay = payload.get("replay")
@@ -1439,14 +1513,25 @@ def write_normalized_snapshot_with_streamed_vectors(
     temporary_path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
+            mode="wb",
             prefix=f".{destination.name}.",
             suffix=".tmp",
             dir=destination.parent,
             delete=False,
-        ) as temporary:
-            temporary_path = Path(temporary.name)
+        ) as raw_temporary:
+            temporary_path = Path(raw_temporary.name)
+            compressed = (
+                gzip.GzipFile(
+                    filename="",
+                    mode="wb",
+                    compresslevel=gzip_level,
+                    fileobj=raw_temporary,
+                    mtime=0,
+                )
+                if gzip_level is not None
+                else raw_temporary
+            )
+            temporary = io.TextIOWrapper(compressed, encoding="utf-8", newline="")
 
             def write_store(handle: Any) -> None:
                 handle.write("{")
@@ -1493,23 +1578,25 @@ def write_normalized_snapshot_with_streamed_vectors(
                     record = line.strip()
                     if not record:
                         continue
-                    # Validate that the spool is JSON and normalize its
-                    # formatting without materializing the vector collection.
-                    decoded = json.loads(record)
-                    if not isinstance(decoded, Mapping):
-                        raise ValueError("normalized vector spool contains a non-object")
-                    if not first:
-                        temporary.write(",")
-                    temporary.write("\n")
-                    temporary.write(
-                        json.dumps(
+                    if canonical_spool:
+                        if not record.startswith("{") or not record.endswith("}"):
+                            raise ValueError("canonical normalized vector spool is invalid")
+                        encoded_record = record
+                    else:
+                        decoded = json.loads(record)
+                        if not isinstance(decoded, Mapping):
+                            raise ValueError("normalized vector spool contains a non-object")
+                        encoded_record = json.dumps(
                             _json_safe(decoded),
                             ensure_ascii=False,
                             sort_keys=True,
                             separators=(",", ":"),
                             allow_nan=False,
                         )
-                    )
+                    if not first:
+                        temporary.write(",")
+                    temporary.write("\n")
+                    temporary.write(encoded_record)
                     first = False
             temporary.write("\n]")
             if store_before_vectors:
@@ -1520,7 +1607,12 @@ def write_normalized_snapshot_with_streamed_vectors(
                 temporary.write(suffix)
             temporary.write("\n")
             temporary.flush()
-            os.fsync(temporary.fileno())
+            if gzip_level is not None:
+                temporary.detach().close()
+            else:
+                temporary.detach()
+            raw_temporary.flush()
+            os.fsync(raw_temporary.fileno())
         os.replace(temporary_path, destination)
     except BaseException:
         if temporary_path is not None:

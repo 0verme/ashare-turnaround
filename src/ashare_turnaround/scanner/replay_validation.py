@@ -35,13 +35,13 @@ from .artifacts import (
     ARTIFACT_LAYOUT_VERSION,
     PIT_REPLAY_ARTIFACT_LAYOUT_VERSION,
     ContentAddressedStore,
+    content_digest,
     deterministic_replay_digests,
     expand_normalized_snapshot,
     expand_normalized_vector,
     feature_vector_from_payload,
     normalize_feature_vector,
     normalize_snapshot_payload,
-    semantic_digest,
     validate_normalized_integrity,
     write_normalized_snapshot_with_streamed_vectors,
 )
@@ -1563,9 +1563,13 @@ def _stage_available_targets(
     )
 
 
-def _snapshot_filename(snapshot: ReplayValidationSnapshot) -> str:
+def _snapshot_filename(
+    snapshot: ReplayValidationSnapshot, *, compressed: bool = False
+) -> str:
     target = snapshot.target
-    return f"{target.selected_trading_date or target.target_month}-{snapshot.status.lower()}.json"
+    suffix = ".json.gz" if compressed else ".json"
+    stem = f"{target.selected_trading_date or target.target_month}-{snapshot.status.lower()}"
+    return f"{stem}{suffix}"
 
 
 def _write_stream_checkpoint(
@@ -1600,7 +1604,9 @@ def _write_stream_checkpoint(
 
 
 def _result_payload_fingerprint(result: ReplayResult) -> str:
-    return _hash_payload(result.artifact_dict(), length=None)
+    """Fingerprint bounded determinism components, never an expanded artifact."""
+
+    return _hash_payload(deterministic_replay_digests(result), length=None)
 
 
 def _determinism_compare(
@@ -1648,12 +1654,7 @@ def _determinism_compare(
         "same_warnings": first.warnings == second.warnings,
         "same_snapshot_id": first.snapshot_id == second.snapshot_id,
         "same_config_fingerprint": first.config_fingerprint == second.config_fingerprint,
-        "same_artifact_payload": (
-            first_digests == second_digests
-            if first_candidate_vector_digests is not None
-            or second_candidate_vector_digests is not None
-            else _result_payload_fingerprint(first) == _result_payload_fingerprint(second)
-        ),
+        "same_artifact_payload": first_digests == second_digests,
         "same_semantic_digests": first_digests == second_digests,
         "first_digests": first_digests,
         "second_digests": second_digests,
@@ -2563,17 +2564,18 @@ def _run_validation(
             def stream_candidate(vector: FeatureVector, _score: Any) -> None:
                 if candidate_spool_handle is None or stream_store_builder is None:
                     raise RuntimeError("candidate spool or normalized store is closed")
-                stream_candidate_digest_map[str(vector.ts_code)] = semantic_digest(vector)
                 normalized = normalize_feature_vector(vector, store=stream_store_builder)
-                candidate_spool_handle.write(
-                    json.dumps(
-                        _json_safe(normalized),
-                        ensure_ascii=False,
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    )
-                    + "\n"
+                # The ref-bearing normalized record is the full-scale digest
+                # boundary; do not materialize FeatureVector.as_dict() again.
+                stream_candidate_digest_map[str(vector.ts_code)] = content_digest(normalized)
+                record = json.dumps(
+                    normalized,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
                 )
+                candidate_spool_handle.write(record + "\n")
 
             if diagnostics is None:
                 diagnostics = ReplayDiagnostics(
@@ -2610,10 +2612,14 @@ def _run_validation(
                     if stream_store_builder is None:
                         raise RuntimeError("normalized store is missing for streamed snapshot")
                     write_normalized_snapshot_with_streamed_vectors(
-                        stream_output / "snapshots" / _snapshot_filename(snapshot),
+                        stream_output
+                        / "snapshots"
+                        / _snapshot_filename(snapshot, compressed=True),
                         payload,
                         candidate_spool_path,
                         stream_store_builder.entries_view(),
+                        canonical_spool=True,
+                        gzip_level=1,
                     )
                 else:
                     _write_json(
@@ -2826,8 +2832,8 @@ def _run_validation(
                 repeated_store = ContentAddressedStore()
 
                 def repeated_sink(vector: FeatureVector, _score: Any) -> None:
-                    repeated_candidate_digests[str(vector.ts_code)] = semantic_digest(vector)
-                    normalize_feature_vector(vector, store=repeated_store)
+                    normalized = normalize_feature_vector(vector, store=repeated_store)
+                    repeated_candidate_digests[str(vector.ts_code)] = content_digest(normalized)
 
                 if stream_candidates and diagnostics is not None:
                     diagnostics.candidate_sink = repeated_sink

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import json
 
 import pandas as pd
@@ -383,8 +384,8 @@ def test_streaming_validation_writes_full_snapshot_before_releasing_result(tmp_p
 
     assert result.status == "READY"
     assert result.snapshots[0].result is None
-    snapshot_path = next((output / "snapshots").glob("*.json"))
-    snapshot_payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    snapshot_path = next((output / "snapshots").glob("*.json.gz"))
+    snapshot_payload = json.loads(gzip.decompress(snapshot_path.read_bytes()))
     assert snapshot_payload["replay"]["vectors"]
     assert snapshot_payload["replay"]["diagnostic_ranked"]
     assert snapshot_payload["replay"]["scores"][0]["evidence_confidence_contract_version"]

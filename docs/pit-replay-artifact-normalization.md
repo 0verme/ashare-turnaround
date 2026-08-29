@@ -346,3 +346,198 @@ materially smaller, but the projected full artifact remains above 5 GiB and
 the bounded ETA remains above two hours.  The <=1.0-second candidate target is
 also not met.  Therefore this round must not recommend the next full
 2025-06 smoke and must not emit `READY_FOR_FULL_SMOKE`.
+
+
+---
+
+# Issue #32 serialization/compute repair round (2026-08-29)
+
+## A. Baseline
+
+The comparison baseline remains the real `as_of=20250616`, cap=100 run at
+HEAD `14906aa`: 5,102 historical candidates; 1,054.401 s wall; 934.379 s
+candidate loop; 676.621 s artifact serialization; 2.5466 s/candidate feature
+work; 220,476,606 B normalized artifact; 186,647,417 B store; 340,437 entries;
+10.76 GiB full projection. No full, yearly, or monthly replay was run.
+
+## B. Serialization micro-profile
+
+Measurement preceded the repair. A real cap=20 cProfile of the old path took
+687.346 profile-seconds (profiling amplification is material):
+
+| operation | calls | cumulative seconds | bytes/calls note |
+|---|---:|---:|---|
+| candidate stream callback | 20 | 408.994 | 20 vectors |
+| logical semantic digest | 26 | 266.023 | expanded logical trees |
+| `_json_safe` | 64,807,453 | 265.454 | recursively revisited nested values |
+| logical canonical hash | 26 | 172.248 | expanded logical bytes |
+| `normalize_feature_vector` | 20 | 143.548 | 7.177 s/profiled vector |
+| `ContentAddressedStore.intern` | 39,840 | 135.118 | public field interns |
+| recursive CAS intern | 311,019 | 134.848 | old all-container strategy |
+| `copy.deepcopy` | 6,117,864/359,295 | 9.795 | avoidable logical copy path |
+| JSON dumps | 573,740 | 34.237 | includes CAS canonicalization |
+
+The old cap=20 physical snapshot was 47,855,506 B with 70,344 entries. The
+post-repair cProfile shows direct payload construction at 0.068 s/20 vectors,
+no node zlib/base64 work, `normalize_feature_vector` 21.130 profile-seconds,
+and the final streamed writer 3.448 profile-seconds. cProfile exaggerates the
+normalizer; the unprofiled cap=100 serializer measurement is the gate value
+below. Spool bytes are canonical UTF-8 JSON produced once and copied verbatim;
+there is no final `json.loads -> _json_safe -> json.dumps` in the trusted path.
+
+## C. CAS entry economics
+
+The repaired cap=100 artifact has 232,316 entries (2,323/candidate rather than
+3,404/candidate). Reachability/reference accounting:
+
+- refs: 903,489; CAS hits beyond first reference: 671,173;
+- reused at least twice: 44,117; referenced exactly once: 188,199;
+- entry size p50/p90/p99/max: 799 / 2,825 / 3,150 / 44,406 B;
+- bytes in single-use entries: 203,877,239 B;
+- bytes in reused entries: 30,937,020 B;
+- types: 81,547 lists; 75,891 observation/source-record mappings; 13,540
+  TrendSummary mappings; 61,338 other mappings.
+
+At roughly 75 B for a store key/wrapper plus 75 B for a ref marker, the
+single-use ref/key overhead is about 28.2 MB before stream compression. Thus
+recursive all-container CAS was confirmed as over-normalization. The repaired
+artifact-aware strategy recurses only through measured high-value
+`observations`, `source_chain`, nested `provenance`, `periods`, and
+`source_versions`; tiny unique mapping wrappers stay inline. Single-use source
+records still dominate raw store bytes, so further source-record dictionary
+work would be justified only in another round.
+
+## D. Serialization fix
+
+- Physical normalization now builds the exact legacy shape directly from
+  `FeatureVector`/`FeatureEvidence` fields; it does not call
+  `FeatureVector.as_dict()` or deep-copy nested provenance.
+- Candidate-scoped identity and JSON-safe caches preserve immutable alias reuse
+  and are cleared after every candidate. Tests prove source vectors are not
+  mutated.
+- CAS hashes lossless Merkle nodes after child refs are formed, avoiding
+  repeated hashing of fully expanded descendants.
+- New nodes are plain canonical JSON. Legacy node-zlib wrappers remain
+  decodable.
+- Canonical spool records are validated at creation and copied verbatim by the
+  final writer.
+
+## E. Compression layout comparison
+
+All repaired cap=100 modes below represent the same plain normalized CAS
+payload (304,968,607 B):
+
+| mode | physical bytes | compression wall | full projection |
+|---|---:|---:|---:|
+| A per-node zlib-9 + base64 | 178,558,339 | 10.956 s (+3.634 s dump) | 8.48 GiB |
+| B plain CAS | 304,968,607 | 0 | 14.49 GiB |
+| C whole-stream gzip-1 | 69,380,858 | 2.127 s | 3.30 GiB |
+| D whole-stream gzip-6 | 55,224,055 | 4.796 s | 2.62 GiB |
+
+Plain-stream decode was 0.876 s with about 17 MiB process peak in the streaming
+copy probe. Compression-only process peak was about 80 MiB. gzip output uses
+`mtime=0` and an empty filename; repeated unit writes are byte-identical.
+Lossless expansion, byte stability, missing-ref fail-closed behavior, and PIT
+checks pass. The production bounded writer selects gzip-1 because gzip-6 adds
+about 0.027 s/candidate and the measured serializer is already near the hard
+0.5 s/candidate investigation line. gzip-6 is retained as the preferred
+recovery-headroom option once serializer CPU has more margin. No zstd
+dependency was present or added.
+
+## F. Source-record deduplication
+
+Observation/source-record mappings are repeatedly referenced (75,891 entries),
+and the artifact-aware CAS preserves complete observations/source chains while
+sharing exact source records. A separate new source-record schema was not
+introduced in this round: 188,199 entries are still single-use and a new
+schema would need a measured two-pass economics design rather than an arbitrary
+threshold. No source chain, observation, provenance, period, source version, or
+derived value was deleted.
+
+## G. Artifact size projection
+
+The final real cap=100 gzip-1 artifact is 69,380,858 B, or 693,809 B/candidate.
+A deliberately conservative linear 5,102-candidate projection is
+3,539,811,375 B (3.30 GiB), below the 5 GiB hard gate but above the preferred
+3 GiB headroom target. gzip-6 projects to 2.62 GiB. Peak replay RSS was
+2,030,407,680 B (1.89 GiB), comfortably below 6 GiB.
+
+## H. Determinism memory boundary
+
+`pit-replay-digests-v2` is assembled from manifest, config, universe,
+per-candidate normalized vector, score, formal ranking, diagnostic ranking,
+warning, and store digests. Neither `deterministic_replay_digests` nor
+`_result_payload_fingerprint` calls `ReplayResult.artifact_dict()`. A focused
+test installs a raising `artifact_dict` method and passes. Expanded semantic
+digests remain available only to bounded equivalence tests.
+
+## I. Compute-only profile
+
+The artifact profile is now separately identifiable; feature phase timers do
+not include serializer CPU. Current cap=20 cProfile function evidence:
+
+- trend: `compute_trend_features` 52.175 s; `_qoq_observations` 34.997 s;
+  `_ttm_observations` 6.668 s; `calculate_trend` 5.723 s;
+  `_yoy_observations` 4.043 s; `_choose_series` 1.910 s;
+- fundamental: `compute_fundamental_features` 32.110 s; `_history` 12.596 s;
+  `_growth_result` 11.848 s; `_margin_result` 3.273 s;
+- shared: `validated_single_quarter_series` 36.877 s/80 calls;
+  `annotate_period_identity` 9.396 s/344; `match_comparable_period` 7.853 s;
+  `ttm_from_series` 5.784 s.
+
+These are cProfile values, not wall projections. The unprofiled cap=100 feature
+measurement is 2.4061 s/candidate.
+
+## J. Trend/fundamental repair
+
+Only demonstrated hotspots were touched: canonical histories and validated
+quarter histories now remain candidate-local immutable cached frames instead
+of returning copies that destroy semantic-cache identity; `_choose_series`
+uses canonical identity columns with vectorized masks instead of row-wise
+`apply(row.to_dict())`, and selected trend series are candidate-locally cached.
+Lookbacks, formulas, period matching, unknown behavior, evidence, and ranking
+gates are unchanged. The gain is modest; quarterization/comparable matching
+remain the blocker and were not rewritten without stronger equivalence proof.
+
+## K. Bounded final re-profile
+
+Final real cap=100, single-threaded, diagnostic only:
+
+- wall 401.130 s; fixed snapshot overhead 109.235 s;
+- candidate loop 291.895 s; total 2.9189 s/candidate;
+- feature 2.4061 s/candidate;
+- serialization 0.4824 s/candidate;
+- PIT 0.0798 s/candidate;
+- fundamental 80.630 s; trend 130.099 s;
+- RSS 2,030,407,680 B; no intentional swap use;
+- artifact 693,809 B/candidate; 232,316-entry shared store;
+- projected full wall 15,001.713 s (4.17 h).
+
+A cap=250 run was not justified because the cap=100 runtime gate already fails.
+
+## L. Semantic/PIT equivalence
+
+Direct-object normalized expansion equals the existing legacy
+`FeatureVector.as_dict()` recursively. Controlled replay/snapshot expansion,
+normalized PIT validation, complete evidence integrity, byte stability, and
+missing-ref failure all pass. No feature, PIT, score, evidence-confidence, or
+ranking semantics changed.
+
+## M. Tests
+
+`pytest -q`: **249 passed, 1 skipped**. `ruff check .`,
+`python3 -m compileall -q src tests`, and `git diff --check`: **PASS**.
+
+## N. Git
+
+Branch: `research/32-pit-replay-validation-sample`; PR: #41. No RAW files were
+modified, no data was downloaded, no parallelism was added, and the PR is not
+merged.
+
+## O. Decision
+
+**BLOCKED.** Artifact size and RSS hard gates now pass, and serializer time is
+at the hard investigation boundary, but projected wall is 15,002 s versus the
+7,200 s gate and feature work is 2.406 s/candidate versus the preferred
+0.8 s/candidate. `READY_FOR_FULL_SMOKE` is therefore not reported, and no full
+2025-06 replay is authorized.

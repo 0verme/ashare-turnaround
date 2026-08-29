@@ -26,6 +26,7 @@ from ..pit.comparable import (
     period_identity,
     ttm_from_series,
 )
+from ..replay_cache import current_replay_cache
 from ..scanner.contracts import TURNAROUND_TREND_CONTRACT_VERSION, FeatureVector
 from .common import (
     canonical_history,
@@ -998,26 +999,59 @@ def _choose_series(
 ) -> tuple[pd.DataFrame, str | None]:
     """Select one unambiguous semantic series; never combine report families."""
 
-    del dataset
     if frame.empty or "report_period" not in frame.columns:
         return pd.DataFrame(), "missing_observation"
+    cache = current_replay_cache()
+    cache_key = (id(frame), dataset)
+    if cache is not None:
+        cached = cache.trend_series.get(cache_key)
+        if cached is not None:
+            return cached
     dated = frame.loc[pd.to_datetime(frame["report_period"], errors="coerce").notna()].copy()
     if dated.empty:
         return pd.DataFrame(), "unsupported_report_period"
     dated["report_period"] = pd.to_datetime(dated["report_period"], errors="coerce")
     latest = dated["report_period"].max()
     latest_rows = dated.loc[dated["report_period"].eq(latest)]
-    keys = {_semantic_key(row.to_dict()) for _, row in latest_rows.iterrows()}
-    if len(keys) != 1:
-        return pd.DataFrame(), "ambiguous_period_chain"
-    key = next(iter(keys))
-    selected = dated.loc[
-        dated.apply(lambda row: _semantic_key(row.to_dict()) == key, axis=1)
-    ].copy()
+    identity_columns = (
+        "report_family",
+        "statement_type",
+        "duration_semantics",
+        "scope",
+        "unit",
+        "accounting_semantics",
+    )
+    if all(column in dated.columns for column in identity_columns):
+        # Canonical financial histories already carry the exact identity
+        # produced by period_identity().  Compare those columns in bulk rather
+        # than rebuilding row dictionaries and period identities in apply().
+        latest_keys = latest_rows.loc[:, identity_columns].astype("string").drop_duplicates()
+        if len(latest_keys) != 1:
+            return pd.DataFrame(), "ambiguous_period_chain"
+        key_row = latest_keys.iloc[0]
+        mask = pd.Series(True, index=dated.index)
+        for column in identity_columns:
+            mask &= dated[column].astype("string").eq(key_row[column]).fillna(False)
+        selected = dated.loc[mask].copy()
+    else:
+        keys = {_semantic_key(row.to_dict()) for _, row in latest_rows.iterrows()}
+        if len(keys) != 1:
+            return pd.DataFrame(), "ambiguous_period_chain"
+        key = next(iter(keys))
+        selected = dated.loc[
+            dated.apply(lambda row: _semantic_key(row.to_dict()) == key, axis=1)
+        ].copy()
     duplicate_periods = selected["report_period"].duplicated(keep=False)
     if bool(duplicate_periods.any()):
-        return pd.DataFrame(), "ambiguous_period_chain"
-    return selected.sort_values("report_period", kind="stable").reset_index(drop=True), None
+        result = (pd.DataFrame(), "ambiguous_period_chain")
+    else:
+        result = (
+            selected.sort_values("report_period", kind="stable").reset_index(drop=True),
+            None,
+        )
+    if cache is not None:
+        cache.trend_series[cache_key] = result
+    return result
 
 
 def _reason_status(result: DerivedMetric) -> tuple[str, str | None]:

@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 import copy
+import gzip
+import json
 
 import pytest
 
 from ashare_turnaround.scanner.artifacts import (
     ARTIFACT_LAYOUT_VERSION,
+    ContentAddressedStore,
     assert_lossless_expansion,
     attribute_feature_vector_size,
     canonical_json_bytes,
     content_ref,
+    deterministic_replay_digests,
     expand_normalized_replay_artifact,
     expand_normalized_vector,
     measure_feature_vector_sizes,
@@ -19,6 +23,7 @@ from ashare_turnaround.scanner.artifacts import (
     serialized_json_bytes,
     validate_normalized_integrity,
     write_json_artifact,
+    write_normalized_snapshot_with_streamed_vectors,
 )
 from ashare_turnaround.scanner.contracts import FeatureVector
 from ashare_turnaround.scanner.replay_validation import (
@@ -200,3 +205,73 @@ def test_invalid_reference_fails_closed() -> None:
 
     with pytest.raises(KeyError):
         expand_normalized_vector(normalized)
+
+
+def test_direct_object_normalization_does_not_mutate_or_call_vector_as_dict(
+    monkeypatch,
+) -> None:
+    vector = _vector()
+    reference = vector.as_dict()
+    monkeypatch.setattr(
+        FeatureVector,
+        "as_dict",
+        lambda _self: (_ for _ in ()).throw(AssertionError("legacy materialization")),
+    )
+
+    normalized = normalize_feature_vector(vector)
+
+    assert canonical_json_bytes(expand_normalized_vector(normalized)) == canonical_json_bytes(
+        reference
+    )
+    assert vector.evidence["trend_a"].provenance["metric"] == "synthetic_trend"
+
+
+def test_canonical_spool_is_copied_verbatim_and_gzip_is_deterministic(tmp_path) -> None:
+    vector = _vector()
+    store = ContentAddressedStore()
+    normalized = normalize_feature_vector(vector, store=store)
+    record = json.dumps(
+        normalized,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+    spool = tmp_path / "vectors.jsonl"
+    spool.write_text(record + "\n", encoding="utf-8")
+    snapshot = {"replay": {"vectors": []}}
+
+    paths = []
+    for name in ("first.json.gz", "second.json.gz"):
+        paths.append(
+            write_normalized_snapshot_with_streamed_vectors(
+                tmp_path / name,
+                snapshot,
+                spool,
+                store.entries_view(),
+                canonical_spool=True,
+                gzip_level=6,
+            )
+        )
+
+    assert paths[0].read_bytes() == paths[1].read_bytes()
+    decoded = gzip.decompress(paths[0].read_bytes()).decode("utf-8")
+    assert record in decoded
+
+
+def test_determinism_digest_does_not_call_expanded_artifact(monkeypatch) -> None:
+    class Result:
+        vectors = (_vector(),)
+        scores = ()
+        ranked = []
+        diagnostic_ranked = []
+        configuration = {}
+        universe_decisions = ()
+        warnings = ()
+
+        def artifact_dict(self):
+            raise AssertionError("expanded artifact boundary crossed")
+
+    digests = deterministic_replay_digests(Result())
+
+    assert digests["per_candidate_normalized_vector_digest"]

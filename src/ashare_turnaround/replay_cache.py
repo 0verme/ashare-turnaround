@@ -113,6 +113,9 @@ class ReplaySnapshotCache:
     single_quarter_histories: dict[
         tuple[int, str, tuple[str, ...], str], tuple[pd.DataFrame, dict[str, str]]
     ] = field(default_factory=dict)
+    trend_series: dict[tuple[int, str], tuple[pd.DataFrame, str | None]] = field(
+        default_factory=dict
+    )
     semantic_period_indexes: dict[
         tuple[int, str], dict[tuple[Any, ...], tuple[int, ...]]
     ] = field(default_factory=dict)

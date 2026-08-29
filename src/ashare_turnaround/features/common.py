@@ -92,7 +92,10 @@ def canonical_history(
         key = cache.canonical_history_key(dataset, frame, code, disclosure_frame)
         cached = cache.canonical_histories.get(key)
         if cached is not None:
-            return cached.copy()
+            # Snapshot cache frames are candidate-local immutable context.
+            # Callers only derive/filter from them; copying here changed the
+            # identity key and defeated downstream quarter-history caches.
+            return cached
     # Canonicalization is row-local.  Restricting to the requested security
     # first avoids rebuilding the entire historical corpus once per candidate
     # while preserving every raw column and the source-version identity.
@@ -124,8 +127,8 @@ def canonical_history(
                 .reset_index(drop=True)
             )
     if cache is not None:
-        cache.canonical_histories[key] = selected.copy()
-    return selected.copy()
+        cache.canonical_histories[key] = selected
+    return selected
 
 
 def latest_and_previous(history: pd.DataFrame) -> tuple[pd.Series | None, pd.Series | None]:
@@ -323,8 +326,7 @@ def single_quarter_history(
         cache_key = (id(history), dataset, available, as_of_key)
         cached = cache.single_quarter_histories.get(cache_key)
         if cached is not None:
-            cached_frame, cached_columns = cached
-            return cached_frame.copy(), dict(cached_columns)
+            return cached
     result: pd.DataFrame | None = None
     field_columns: dict[str, str] = {}
     key = "source_version_identity"
@@ -373,7 +375,7 @@ def single_quarter_history(
     result["comparable_status"] = result[f"{first_value}_status"]
     result["comparable_reason"] = result[f"{first_value}_reason"]
     if cache is not None and cache_key is not None:
-        cache.single_quarter_histories[cache_key] = (result.copy(), dict(field_columns))
+        cache.single_quarter_histories[cache_key] = (result, field_columns)
     return result, field_columns
 
 
