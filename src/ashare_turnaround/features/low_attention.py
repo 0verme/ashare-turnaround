@@ -40,6 +40,7 @@ from typing import Any
 import pandas as pd
 
 from ..dates import normalize_date_series
+from ..replay_cache import current_replay_cache
 from ..scanner.contracts import FeatureVector
 from .common import add_known, new_vector, numeric
 
@@ -217,6 +218,8 @@ def _deduplicate_session_rows(frame: pd.DataFrame) -> pd.DataFrame:
 
     if frame.empty or not {"ts_code", "_date"}.issubset(frame.columns):
         return frame
+    if not frame.duplicated(["ts_code", "_date"], keep=False).any():
+        return frame
     result = frame.copy()
     result["_row_completeness"] = result.notna().sum(axis=1)
     result["_row_key"] = result.apply(_stable_row_key, axis=1)
@@ -252,8 +255,15 @@ def _session_rows(
             return pd.DataFrame()
         # Filter before copying: production replay invokes this helper once
         # per candidate, while the cross-sectional population is prepared once
-        # per snapshot below.
-        result = frame.loc[frame["ts_code"].astype("string").eq(str(code))].copy()
+        # per snapshot below.  A replay-local code index avoids scanning the
+        # complete market frame for every candidate.
+        cache = current_replay_cache()
+        indexed = cache.market_for_code(frame, code) if cache is not None else None
+        result = (
+            indexed
+            if indexed is not None
+            else frame.loc[frame["ts_code"].astype("string").eq(str(code))].copy()
+        )
     else:
         result = frame.copy()
     dates = normalize_date_series(result["trade_date"])

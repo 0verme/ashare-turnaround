@@ -15,6 +15,7 @@ from ..pit.comparable import (
     validated_single_quarter_series,
 )
 from ..pit.financial import canonicalize_financial_frame, select_financial_as_of
+from ..replay_cache import current_replay_cache
 from ..scanner.contracts import FeatureVector
 
 
@@ -36,10 +37,13 @@ def numeric(value: Any) -> float | None:
 
     if value is None:
         return None
-    parsed = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
-    if pd.isna(parsed):
-        return None
-    result = float(parsed)
+    try:
+        result = float(value)
+    except (TypeError, ValueError, OverflowError):
+        parsed = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+        if pd.isna(parsed):
+            return None
+        result = float(parsed)
     return result if math.isfinite(result) else None
 
 
@@ -82,31 +86,46 @@ def canonical_history(
 ) -> pd.DataFrame:
     if frame is None or frame.empty or "ts_code" not in frame.columns:
         return pd.DataFrame()
+    cache = current_replay_cache()
+    cached: pd.DataFrame | None = None
+    if cache is not None:
+        key = cache.canonical_history_key(dataset, frame, code, disclosure_frame)
+        cached = cache.canonical_histories.get(key)
+        if cached is not None:
+            return cached.copy()
     # Canonicalization is row-local.  Restricting to the requested security
     # first avoids rebuilding the entire historical corpus once per candidate
     # while preserving every raw column and the source-version identity.
-    scoped = frame.loc[frame["ts_code"].astype("string").eq(str(code))].copy()
-    if scoped.empty:
-        return pd.DataFrame()
-    canonical = canonicalize_financial_frame(
-        dataset,
-        scoped,
-        disclosure_frame=disclosure_frame,
+    indexed = cache.financial_for_code(dataset, frame, code) if cache is not None else None
+    scoped = (
+        indexed
+        if indexed is not None
+        else frame.loc[frame["ts_code"].astype("string").eq(str(code))].copy()
     )
-    selected = select_financial_as_of(
-        canonical,
-        ts_code=str(code),
-        as_of_date=as_of_date,
-    )
-    if selected.empty or "report_period" not in selected.columns:
-        return selected
-    selected = selected.copy()
-    selected["report_period"] = normalize_date_series(selected["report_period"])
-    return (
-        selected.loc[selected["report_period"].notna()]
-        .sort_values("report_period")
-        .reset_index(drop=True)
-    )
+    if scoped is None or scoped.empty:
+        selected = pd.DataFrame()
+    else:
+        canonical = canonicalize_financial_frame(
+            dataset,
+            scoped,
+            disclosure_frame=disclosure_frame,
+        )
+        selected = select_financial_as_of(
+            canonical,
+            ts_code=str(code),
+            as_of_date=as_of_date,
+        )
+        if not selected.empty and "report_period" in selected.columns:
+            selected = selected.copy()
+            selected["report_period"] = normalize_date_series(selected["report_period"])
+            selected = (
+                selected.loc[selected["report_period"].notna()]
+                .sort_values("report_period")
+                .reset_index(drop=True)
+            )
+    if cache is not None:
+        cache.canonical_histories[key] = selected.copy()
+    return selected.copy()
 
 
 def latest_and_previous(history: pd.DataFrame) -> tuple[pd.Series | None, pd.Series | None]:
@@ -151,7 +170,13 @@ def market_history(
     ):
         return pd.DataFrame()
     as_of = pd.Timestamp(pd.to_datetime(as_of_date, errors="raise")).normalize()
-    result = frame.loc[frame["ts_code"].astype("string").eq(str(code))].copy()
+    cache = current_replay_cache()
+    indexed = cache.market_for_code(frame, code) if cache is not None else None
+    result = (
+        indexed
+        if indexed is not None
+        else frame.loc[frame["ts_code"].astype("string").eq(str(code))].copy()
+    )
     dates = normalize_date_series(result["trade_date"])
     result = result.loc[dates.notna() & dates.le(as_of)].copy()
     if "actual_available_date" in result.columns:
@@ -287,6 +312,19 @@ def single_quarter_history(
     available = tuple(field_name for field_name in fields if field_name in history.columns)
     if history.empty or not available:
         return pd.DataFrame(), {}
+    cache = current_replay_cache()
+    cache_key = None
+    if cache is not None:
+        as_of_key = (
+            pd.Timestamp(as_of_date).normalize().strftime("%Y%m%d")
+            if as_of_date is not None
+            else ""
+        )
+        cache_key = (id(history), dataset, available, as_of_key)
+        cached = cache.single_quarter_histories.get(cache_key)
+        if cached is not None:
+            cached_frame, cached_columns = cached
+            return cached_frame.copy(), dict(cached_columns)
     result: pd.DataFrame | None = None
     field_columns: dict[str, str] = {}
     key = "source_version_identity"
@@ -334,6 +372,8 @@ def single_quarter_history(
     result["comparable_raw_value"] = result[f"{first_value}_raw"]
     result["comparable_status"] = result[f"{first_value}_status"]
     result["comparable_reason"] = result[f"{first_value}_reason"]
+    if cache is not None and cache_key is not None:
+        cache.single_quarter_histories[cache_key] = (result.copy(), dict(field_columns))
     return result, field_columns
 
 

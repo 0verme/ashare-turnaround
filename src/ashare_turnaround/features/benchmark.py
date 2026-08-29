@@ -15,6 +15,7 @@ from typing import Any
 import pandas as pd
 
 from ..dates import normalize_date_series
+from ..replay_cache import current_replay_cache
 from .common import market_history, numeric
 
 BENCHMARK_CONTRACT_VERSION = "benchmark-v1"
@@ -114,6 +115,11 @@ def _calendar_sessions(
 def _column_at(history: pd.DataFrame, session: pd.Timestamp, column: str) -> float | None:
     if history.empty or "_date" not in history.columns or column not in history.columns:
         return None
+    cache = current_replay_cache()
+    if cache is not None:
+        values = cache.column_values_for(history, column)
+        if values is not None:
+            return numeric(values.get(pd.Timestamp(session)))
     rows = history.loc[history["_date"].eq(session), column]
     if rows.empty:
         return None
@@ -190,7 +196,7 @@ def _contains_code(frame: pd.DataFrame | None, code: str) -> bool:
     )
 
 
-def resolve_benchmark(
+def _resolve_benchmark_uncached(
     market_frame: pd.DataFrame | None,
     stock_code: str,
     benchmark_id: str,
@@ -340,6 +346,57 @@ def resolve_benchmark(
         stock_close=stock_close,
         benchmark_close=benchmark_close,
     )
+
+
+def resolve_benchmark(
+    market_frame: pd.DataFrame | None,
+    stock_code: str,
+    benchmark_id: str,
+    as_of_date: str | date | datetime | pd.Timestamp,
+    *,
+    benchmark_frame: pd.DataFrame | None = None,
+    benchmark_definition_frame: pd.DataFrame | None = None,
+    suspension_frame: pd.DataFrame | None = None,
+    session_lookback: int = 400,
+    calendar_frame: pd.DataFrame | None = None,
+) -> BenchmarkContext:
+    """Resolve and memoize one benchmark context within the current snapshot."""
+
+    parsed = pd.to_datetime(as_of_date, errors="coerce")
+    if pd.isna(parsed):
+        raise ValueError(f"invalid benchmark as_of_date: {as_of_date!r}")
+    as_of = pd.Timestamp(parsed).normalize()
+    benchmark_code = str(benchmark_id).strip().upper()
+    cache = current_replay_cache()
+    cache_key = (
+        id(market_frame),
+        id(benchmark_frame),
+        id(benchmark_definition_frame),
+        id(suspension_frame),
+        id(calendar_frame),
+        str(stock_code),
+        benchmark_code,
+        as_of.strftime("%Y%m%d"),
+        int(session_lookback),
+    )
+    if cache is not None and cache.as_of == as_of:
+        cached = cache.benchmark_contexts.get(cache_key)
+        if isinstance(cached, BenchmarkContext):
+            return cached
+    context = _resolve_benchmark_uncached(
+        market_frame,
+        stock_code,
+        benchmark_id,
+        as_of,
+        benchmark_frame=benchmark_frame,
+        benchmark_definition_frame=benchmark_definition_frame,
+        suspension_frame=suspension_frame,
+        session_lookback=session_lookback,
+        calendar_frame=calendar_frame,
+    )
+    if cache is not None and cache.as_of == as_of:
+        cache.benchmark_contexts[cache_key] = context
+    return context
 
 
 @dataclass(frozen=True, slots=True)

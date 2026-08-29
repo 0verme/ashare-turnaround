@@ -5,6 +5,7 @@ import json
 import pandas as pd
 import pytest
 
+from ashare_turnaround.scanner.replay import ReplayDiagnostics
 from ashare_turnaround.scanner.replay_validation import (
     HISTORICAL_UNIVERSE_CONTRACT_VERSION,
     MARKET_REGIME_CONTRACT_VERSION,
@@ -276,6 +277,30 @@ def test_validation_uses_production_replay_and_writes_complete_audit_artifacts(t
     assert snapshot_payload["replay"]["vectors"]
     assert snapshot_payload["replay"]["universe"]["decisions"]
     assert "feature_group_registry_version" in snapshot_payload["replay"]["scores"][0]
+
+
+def test_bounded_diagnostics_are_not_a_validation_pass() -> None:
+    diagnostics = ReplayDiagnostics(candidate_limit=1, checkpoint_every=1)
+    result = run_replay_validation_frames(
+        _validation_frames(),
+        start="2025-06",
+        end="2025-06",
+        today="2025-12-31",
+        top_n=3,
+        stage="monthly",
+        determinism_sample=0,
+        diagnostics=diagnostics,
+    )
+
+    snapshot = result.snapshots[0]
+    assert result.status == "INCOMPLETE"
+    assert snapshot.status == "INCOMPLETE"
+    assert snapshot.result is not None
+    assert snapshot.result.status == "DIAGNOSTIC_PARTIAL"
+    assert diagnostics.candidate_processed == 1
+    assert diagnostics.candidate_total == 1
+    assert "candidate.fundamental" in diagnostics.summary()["phases"]
+    assert "candidate_limit" not in snapshot.result.metadata()
 
 
 def test_streaming_validation_writes_full_snapshot_before_releasing_result(tmp_path) -> None:

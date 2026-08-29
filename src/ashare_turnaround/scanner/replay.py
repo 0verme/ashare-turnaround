@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
+import time
+from collections.abc import Callable, Iterable
+from contextlib import nullcontext
 from dataclasses import asdict, dataclass, field, replace
 from datetime import date, datetime
 from pathlib import Path
@@ -27,6 +31,7 @@ from ..features import (
     compute_trend_features,
 )
 from ..pit.comparable import COMPARABLE_PERIOD_CONTRACT_VERSION
+from ..replay_cache import ReplaySnapshotCache, current_replay_cache, replay_cache_scope
 from ..storage.inventory import build_coverage_report
 from ..storage.parquet import RawParquetStore
 from .contracts import TURNAROUND_TREND_CONTRACT_VERSION, FeatureVector
@@ -49,6 +54,148 @@ from .universe import (
     _financial_period_counts,
     build_investable_universe,
 )
+
+
+@dataclass(slots=True)
+class _DiagnosticPhase:
+    calls: int = 0
+    total_seconds: float = 0.0
+    max_seconds: float = 0.0
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "calls": self.calls,
+            "total_seconds": self.total_seconds,
+            "max_seconds": self.max_seconds,
+        }
+
+
+class _DiagnosticTimer:
+    def __init__(self, diagnostics: ReplayDiagnostics, name: str) -> None:
+        self.diagnostics = diagnostics
+        self.name = name
+        self.started_at = 0.0
+
+    def __enter__(self) -> _DiagnosticTimer:
+        self.started_at = time.perf_counter()
+        return self
+
+    def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> None:
+        elapsed = time.perf_counter() - self.started_at
+        phase = self.diagnostics.phases.setdefault(self.name, _DiagnosticPhase())
+        phase.calls += 1
+        phase.total_seconds += elapsed
+        phase.max_seconds = max(phase.max_seconds, elapsed)
+
+
+@dataclass(slots=True)
+class ReplayDiagnostics:
+    """Out-of-band timings for one replay invocation.
+
+    Diagnostics are deliberately not part of :class:`ReplayConfig` or any
+    result payload.  ``candidate_limit`` is accepted only here, making a
+    bounded run explicitly diagnostic rather than a replay-validation result.
+    """
+
+    candidate_limit: int | None = None
+    checkpoint_every: int = 100
+    logger: Callable[[dict[str, Any]], None] | None = None
+    candidate_sink: Callable[[FeatureVector, ScoreResult], None] | None = None
+    candidate_validator: Callable[[FeatureVector], Iterable[str]] | None = None
+    candidate_validation_violations: list[str] = field(default_factory=list)
+    retain_vectors: bool = True
+    started_at: float = field(default_factory=time.perf_counter)
+    phases: dict[str, _DiagnosticPhase] = field(default_factory=dict)
+    checkpoints: list[dict[str, Any]] = field(default_factory=list)
+    candidate_total: int = 0
+    candidate_processed: int = 0
+    candidate_started_at: float | None = None
+    peak_rss_bytes: int | None = field(default=None, init=False)
+
+    def __post_init__(self) -> None:
+        if self.candidate_limit is not None and self.candidate_limit <= 0:
+            raise ValueError("diagnostic candidate_limit must be positive")
+        if self.checkpoint_every <= 0:
+            raise ValueError("diagnostic checkpoint_every must be positive")
+        self.peak_rss_bytes = self.current_rss_bytes()
+
+    @staticmethod
+    def current_rss_bytes() -> int | None:
+        try:
+            fields = Path("/proc/self/statm").read_text(encoding="ascii").split()
+            return int(fields[1]) * int(os.sysconf("SC_PAGE_SIZE"))
+        except (OSError, ValueError, IndexError, AttributeError):
+            return None
+
+    def phase(self, name: str) -> _DiagnosticTimer:
+        return _DiagnosticTimer(self, name)
+
+    def _emit(self, payload: dict[str, Any]) -> None:
+        if self.logger is None:
+            return
+        try:
+            self.logger(payload)
+        except Exception:
+            # Diagnostics must never change replay correctness or status.
+            return
+
+    def start_candidates(self, total: int) -> None:
+        self.candidate_total = int(total)
+        self.candidate_processed = 0
+        self.candidate_started_at = time.perf_counter()
+        self.record_candidate(0, force=True)
+
+    def record_candidate(self, processed: int, *, force: bool = False) -> None:
+        self.candidate_processed = int(processed)
+        if not force and processed != 0 and processed % self.checkpoint_every != 0:
+            return
+        now = time.perf_counter()
+        started = self.candidate_started_at or self.started_at
+        elapsed = max(0.0, now - started)
+        current_rss = self.current_rss_bytes()
+        if current_rss is not None:
+            self.peak_rss_bytes = max(self.peak_rss_bytes or 0, current_rss)
+        checkpoint = {
+            "event": "candidate_progress",
+            "processed": self.candidate_processed,
+            "total": self.candidate_total,
+            "elapsed_seconds": elapsed,
+            "run_elapsed_seconds": max(0.0, now - self.started_at),
+            "stocks_per_second": (
+                self.candidate_processed / elapsed if elapsed > 0 else None
+            ),
+            "current_rss_bytes": current_rss,
+            "peak_rss_bytes": self.peak_rss_bytes,
+            "phase_totals": {
+                name: phase.as_dict() for name, phase in sorted(self.phases.items())
+            },
+        }
+        if not self.checkpoints or self.checkpoints[-1]["processed"] != processed:
+            self.checkpoints.append(checkpoint)
+            self._emit(checkpoint)
+
+    def summary(self) -> dict[str, Any]:
+        current_rss = self.current_rss_bytes()
+        if current_rss is not None:
+            self.peak_rss_bytes = max(self.peak_rss_bytes or 0, current_rss)
+        return {
+            "candidate_limit": self.candidate_limit,
+            "candidate_total": self.candidate_total,
+            "candidate_processed": self.candidate_processed,
+            "candidate_validation_violation_count": len(
+                self.candidate_validation_violations
+            ),
+            "candidate_checkpoints": list(self.checkpoints),
+            "peak_rss_bytes": self.peak_rss_bytes,
+            "phases": {
+                name: phase.as_dict() for name, phase in sorted(self.phases.items())
+            },
+        }
+
+    def emit_summary(self) -> dict[str, Any]:
+        payload = {"event": "replay_diagnostics_summary", **self.summary()}
+        self._emit(payload)
+        return payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -301,6 +448,12 @@ def _market_frame(frames: dict[str, pd.DataFrame]) -> pd.DataFrame:
     return daily.merge(basic, on=keys, how="outer", suffixes=("", "_basic"))
 
 
+def _diagnostic_phase(
+    diagnostics: ReplayDiagnostics | None, name: str
+) -> _DiagnosticTimer | Any:
+    return diagnostics.phase(name) if diagnostics is not None else nullcontext()
+
+
 def _frames_from_store(data_dir: str | Path) -> dict[str, pd.DataFrame]:
     store = RawParquetStore(data_dir)
     datasets = (
@@ -388,6 +541,36 @@ def run_replay_frames(
     *,
     as_of_date: str | date | datetime | pd.Timestamp,
     config: ReplayConfig | None = None,
+    diagnostics: ReplayDiagnostics | None = None,
+) -> ReplayResult:
+    """Run one replay inside a snapshot-local, non-serialized index scope."""
+
+    parsed = pd.to_datetime(as_of_date, errors="coerce")
+    if pd.isna(parsed):
+        raise ValueError(f"invalid replay as_of_date: {as_of_date!r}")
+    as_of = pd.Timestamp(parsed).normalize()
+    cache_settings = config or ReplayConfig()
+    with _diagnostic_phase(diagnostics, "snapshot_local_index_build"):
+        cache = ReplaySnapshotCache.from_frames(
+            frames,
+            as_of=as_of,
+            daily_basic_lookback=cache_settings.universe.liquidity_lookback,
+        )
+    with replay_cache_scope(cache):
+        return _run_replay_frames_with_cache(
+            frames,
+            as_of_date=as_of_date,
+            config=config,
+            diagnostics=diagnostics,
+        )
+
+
+def _run_replay_frames_with_cache(
+    frames: dict[str, pd.DataFrame],
+    *,
+    as_of_date: str | date | datetime | pd.Timestamp,
+    config: ReplayConfig | None = None,
+    diagnostics: ReplayDiagnostics | None = None,
 ) -> ReplayResult:
     """Run the scanner against supplied frames, making tests independent of I/O."""
 
@@ -401,81 +584,123 @@ def run_replay_frames(
         key: frames.get(key, pd.DataFrame())
         for key in ("income", "balancesheet", "cashflow", "fina_indicator")
     }
-    financial_period_counts = _financial_period_counts(financial_frames, as_of)
-    universe = build_investable_universe(
-        frames.get("stock_basic", pd.DataFrame()),
-        as_of_date=as_of,
-        daily_basic=frames.get("daily_basic"),
-        financial_frames=financial_frames,
-        financial_period_counts=financial_period_counts,
-        suspension_frame=frames.get("suspend_d"),
-        config=settings.universe,
-    )
-    market = _market_frame(frames)
+    with _diagnostic_phase(diagnostics, "financial_period_counts"):
+        financial_period_counts = _financial_period_counts(financial_frames, as_of)
+    with _diagnostic_phase(diagnostics, "build_investable_universe"):
+        universe = build_investable_universe(
+            frames.get("stock_basic", pd.DataFrame()),
+            as_of_date=as_of,
+            daily_basic=frames.get("daily_basic"),
+            financial_frames=financial_frames,
+            financial_period_counts=financial_period_counts,
+            suspension_frame=frames.get("suspend_d"),
+            config=settings.universe,
+        )
+    with _diagnostic_phase(diagnostics, "market_frame_merge"):
+        market = _market_frame(frames)
+    cache = current_replay_cache()
+    if cache is not None:
+        with _diagnostic_phase(diagnostics, "snapshot_market_index_build"):
+            cache.set_market_frame(market)
     vectors: list[FeatureVector] = []
     scores: list[ScoreResult] = []
     warnings = list(universe.warnings)
     investable_codes = set(universe.included["ts_code"].astype(str))
-    low_attention_population = build_cross_section_population(
-        market,
-        as_of_date=as_of,
-        config=settings.low_attention.cross_section,
-        investable_codes=investable_codes,
-    )
-    for _, row in universe.included.iterrows():
+    with _diagnostic_phase(diagnostics, "low_attention_cross_section_population"):
+        low_attention_population = build_cross_section_population(
+            market,
+            as_of_date=as_of,
+            config=settings.low_attention.cross_section,
+            investable_codes=investable_codes,
+        )
+    candidate_total = len(universe.included)
+    candidate_limit = candidate_total
+    if diagnostics is not None:
+        if diagnostics.candidate_limit is not None:
+            candidate_limit = min(candidate_total, diagnostics.candidate_limit)
+        diagnostics.start_candidates(candidate_total)
+    for candidate_position, (_, row) in enumerate(universe.included.iterrows()):
+        if candidate_position >= candidate_limit:
+            break
         code = str(row["ts_code"])
-        vector = compute_fundamental_features(financial_frames, code, as_of)
-        vector.merge(compute_trend_features(financial_frames, code, as_of))
-        vector.merge(compute_quality_features(financial_frames, code, as_of))
-        vector.merge(compute_attention_features(market, code, as_of))
-        vector.merge(
-            compute_crowding_features(
+        with _diagnostic_phase(diagnostics, "candidate.fundamental"):
+            vector = compute_fundamental_features(financial_frames, code, as_of)
+        with _diagnostic_phase(diagnostics, "candidate.trend"):
+            vector.merge(compute_trend_features(financial_frames, code, as_of))
+        with _diagnostic_phase(diagnostics, "candidate.quality"):
+            vector.merge(compute_quality_features(financial_frames, code, as_of))
+        with _diagnostic_phase(diagnostics, "candidate.attention"):
+            vector.merge(compute_attention_features(market, code, as_of))
+        with _diagnostic_phase(diagnostics, "candidate.crowding"):
+            vector.merge(
+                compute_crowding_features(
+                    market,
+                    code,
+                    as_of,
+                    config=settings.crowding,
+                    calendar_frame=frames.get("trade_cal"),
+                    disclosure_frame=frames.get("disclosure_date"),
+                    benchmark_frame=frames.get("index_daily"),
+                    benchmark_definition_frame=frames.get("index_basic"),
+                    suspension_frame=frames.get("suspend_d"),
+                )
+            )
+        with _diagnostic_phase(diagnostics, "candidate.low_attention"):
+            low_attention = compute_low_attention_v2(
                 market,
                 code,
                 as_of,
-                config=settings.crowding,
-                calendar_frame=frames.get("trade_cal"),
-                disclosure_frame=frames.get("disclosure_date"),
-                benchmark_frame=frames.get("index_daily"),
-                benchmark_definition_frame=frames.get("index_basic"),
-                suspension_frame=frames.get("suspend_d"),
+                config=settings.low_attention,
+                list_date=row.get("list_date"),
+                investable_codes=investable_codes,
+                population_frame=low_attention_population,
             )
-        )
-        low_attention = compute_low_attention_v2(
-            market,
-            code,
-            as_of,
-            config=settings.low_attention,
-            list_date=row.get("list_date"),
-            investable_codes=investable_codes,
-            population_frame=low_attention_population,
-        )
-        _attach_low_attention_evidence(vector, low_attention)
-        vectors.append(vector)
-        scores.append(
-            score_feature_vector(
+            _attach_low_attention_evidence(vector, low_attention)
+        with _diagnostic_phase(diagnostics, "candidate.scoring"):
+            score = score_feature_vector(
                 vector,
                 config=settings.score,
                 evidence_config=settings.evidence_confidence,
             )
-        )
-    diagnostic_ranked = rank_scores(scores, top_n=None)
-    ranked = rank_scores(scores, top_n=settings.top_n)
-    if not universe.included.empty:
-        names = (
-            universe.included[["ts_code", "name"]].drop_duplicates("ts_code")
-            if "name" in universe.included.columns
-            else pd.DataFrame(columns=["ts_code", "name"])
-        )
-        for frame_name, frame in (("ranked", ranked), ("diagnostic", diagnostic_ranked)):
-            if frame.empty:
-                continue
-            named = frame.merge(names, on="ts_code", how="left")
-            named = named.sort_values("rank", kind="stable").reset_index(drop=True)
-            if frame_name == "ranked":
-                ranked = named
-            else:
-                diagnostic_ranked = named
+            scores.append(score)
+        if diagnostics is not None and diagnostics.candidate_sink is not None:
+            with _diagnostic_phase(diagnostics, "artifact_serialization"):
+                diagnostics.candidate_sink(vector, score)
+        if diagnostics is not None and diagnostics.candidate_validator is not None:
+            with _diagnostic_phase(diagnostics, "pit_validation"):
+                diagnostics.candidate_validation_violations.extend(
+                    str(value) for value in diagnostics.candidate_validator(vector)
+                )
+        if diagnostics is None or diagnostics.retain_vectors:
+            vectors.append(vector)
+        elif diagnostics.candidate_sink is not None and not vectors:
+            # Keep one representative for manual-review checks; the sink
+            # carries the complete vector array for streamed artifacts.
+            vectors.append(vector)
+        if diagnostics is not None:
+            diagnostics.record_candidate(len(scores))
+        if cache is not None:
+            cache.clear_candidate_state()
+    if diagnostics is not None:
+        diagnostics.record_candidate(len(scores), force=True)
+    with _diagnostic_phase(diagnostics, "ranking"):
+        diagnostic_ranked = rank_scores(scores, top_n=None)
+        ranked = rank_scores(scores, top_n=settings.top_n)
+        if not universe.included.empty:
+            names = (
+                universe.included[["ts_code", "name"]].drop_duplicates("ts_code")
+                if "name" in universe.included.columns
+                else pd.DataFrame(columns=["ts_code", "name"])
+            )
+            for frame_name, frame in (("ranked", ranked), ("diagnostic", diagnostic_ranked)):
+                if frame.empty:
+                    continue
+                named = frame.merge(names, on="ts_code", how="left")
+                named = named.sort_values("rank", kind="stable").reset_index(drop=True)
+                if frame_name == "ranked":
+                    ranked = named
+                else:
+                    diagnostic_ranked = named
     required = {"stock_basic", "income", "daily_basic"}
     missing = sorted(dataset for dataset in required if frames.get(dataset, pd.DataFrame()).empty)
     if missing:
@@ -489,7 +714,10 @@ def run_replay_frames(
         if vectors
         else "EMPTY"
     )
-    snapshot_id = _snapshot_id(frames, as_of_text)
+    if diagnostics is not None and diagnostics.candidate_limit is not None:
+        status = "DIAGNOSTIC_PARTIAL"
+    with _diagnostic_phase(diagnostics, "snapshot_id_hash"):
+        snapshot_id = _snapshot_id(frames, as_of_text)
     config_fingerprint = settings.fingerprint
     run_id = hashlib.sha256(f"{snapshot_id}:{config_fingerprint}".encode("ascii")).hexdigest()[:16]
     for frame in (ranked, diagnostic_ranked):
@@ -548,9 +776,15 @@ def run_replay(
     *,
     as_of_date: str | date | datetime | pd.Timestamp,
     config: ReplayConfig | None = None,
+    diagnostics: ReplayDiagnostics | None = None,
 ) -> ReplayResult:
     frames = _frames_from_store(data_dir)
-    result = run_replay_frames(frames, as_of_date=as_of_date, config=config)
+    result = run_replay_frames(
+        frames,
+        as_of_date=as_of_date,
+        config=config,
+        diagnostics=diagnostics,
+    )
     coverage = build_coverage_report(data_dir, as_of_date=result.as_of_date)
     if any(dataset.status in {"FAIL", "PARTIAL", "UNKNOWN"} for dataset in coverage.datasets):
         result = replace(

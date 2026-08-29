@@ -451,10 +451,20 @@ def _normalized_reason(evidence: FeatureEvidence | None) -> str:
     return str(evidence.reason or "").strip().casefold().replace("-", "_").replace(" ", "_")
 
 
-def _contains_pit_warning(value: Any, *, key: str = "") -> bool:
+def _contains_pit_warning(
+    value: Any,
+    *,
+    key: str = "",
+    cache: dict[tuple[int, str], bool] | None = None,
+) -> bool:
     """Detect explicit PIT warnings without treating ordinary provenance as bad."""
 
     normalized_key = key.casefold().replace("-", "_")
+    cache_key = (id(value), normalized_key)
+    if cache is not None and isinstance(value, (Mapping, list, tuple, set)):
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached
     if normalized_key in {"pit_warning", "pit_unsafe", "future_unsafe", "future_unsafe_warning"}:
         return bool(value)
     if "pit" in normalized_key and ("warning" in normalized_key or "unsafe" in normalized_key):
@@ -468,17 +478,26 @@ def _contains_pit_warning(value: Any, *, key: str = "") -> bool:
         if isinstance(value, (list, tuple, set)):
             return any(_contains_pit_warning(item, key="warning") for item in value)
     if isinstance(value, Mapping):
-        return any(
-            _contains_pit_warning(item, key=str(item_key)) for item_key, item in value.items()
+        result = any(
+            _contains_pit_warning(item, key=str(item_key), cache=cache)
+            for item_key, item in value.items()
         )
-    if isinstance(value, (list, tuple, set)):
-        return any(_contains_pit_warning(item, key=normalized_key) for item in value)
-    return False
+    elif isinstance(value, (list, tuple, set)):
+        result = any(
+            _contains_pit_warning(item, key=normalized_key, cache=cache) for item in value
+        )
+    else:
+        result = False
+    if cache is not None and isinstance(value, (Mapping, list, tuple, set)):
+        cache[cache_key] = result
+    return result
 
 
 def _field_category(
     evidence: FeatureEvidence | None,
     value: Any,
+    *,
+    warning_cache: dict[tuple[int, str], bool] | None = None,
 ) -> tuple[bool, str, str | None]:
     """Return valid/category/reason for one explicit evidence record."""
 
@@ -486,9 +505,13 @@ def _field_category(
         return False, "missing", "missing_evidence"
     status = _normalized_status(evidence)
     reason = _normalized_reason(evidence)
-    if _contains_pit_warning(evidence.metadata) or _contains_pit_warning(evidence.provenance):
+    if _contains_pit_warning(evidence.metadata, cache=warning_cache) or _contains_pit_warning(
+        evidence.provenance, cache=warning_cache
+    ):
         return False, "invalid", evidence.reason or "pit_warning"
-    if _contains_pit_warning(evidence.components) or _contains_pit_warning(evidence.config):
+    if _contains_pit_warning(evidence.components, cache=warning_cache) or _contains_pit_warning(
+        evidence.config, cache=warning_cache
+    ):
         return False, "invalid", evidence.reason or "pit_warning"
     if (
         status in _UNSUPPORTED_STATUSES
@@ -576,9 +599,13 @@ def _status_for_field(
     vector: FeatureVector,
     spec: FeatureGroupSpec,
     field_name: str,
+    *,
+    warning_cache: dict[tuple[int, str], bool] | None = None,
 ) -> dict[str, Any]:
     resolved, evidence, value = _resolve_evidence(vector, spec, field_name)
-    valid, category, reason = _field_category(evidence, value)
+    valid, category, reason = _field_category(
+        evidence, value, warning_cache=warning_cache
+    )
     return {
         "field": field_name,
         "resolved_field": resolved,
@@ -705,16 +732,29 @@ def assess_evidence_coverage(
     missing_fields: list[str] = []
     invalid_fields: list[str] = []
     unsupported_fields: list[str] = []
+    warning_cache: dict[tuple[int, str], bool] = {}
 
     total_required = 0
     total_valid = 0
     for group_name in FEATURE_GROUP_ORDER:
         spec = FEATURE_GROUP_REGISTRY[group_name]
         required_states = [
-            _status_for_field(vector, spec, field_name) for field_name in spec.required_fields
+            _status_for_field(
+                vector,
+                spec,
+                field_name,
+                warning_cache=warning_cache,
+            )
+            for field_name in spec.required_fields
         ]
         optional_states = [
-            _status_for_field(vector, spec, field_name) for field_name in spec.optional_fields
+            _status_for_field(
+                vector,
+                spec,
+                field_name,
+                warning_cache=warning_cache,
+            )
+            for field_name in spec.optional_fields
         ]
         valid_count = sum(1 for state in required_states if state["valid"])
         required_count = len(required_states)

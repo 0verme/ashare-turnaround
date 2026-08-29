@@ -20,6 +20,7 @@ from typing import Any
 import pandas as pd
 
 from ..dates import normalize_date_series
+from ..replay_cache import current_replay_cache
 
 COMPARABLE_PERIOD_CONTRACT_VERSION = "comparable-period-v1"
 COMPARABLE_FINANCIAL_PERIOD_CONTRACT_VERSION = COMPARABLE_PERIOD_CONTRACT_VERSION
@@ -125,7 +126,10 @@ def _clean_value(value: Any) -> Any:
 def _numeric(value: Any) -> float | None:
     if _is_missing(value):
         return None
-    parsed = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError, OverflowError):
+        parsed = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
     return None if pd.isna(parsed) else float(parsed)
 
 
@@ -690,6 +694,35 @@ def identity_unknown_reason(identity: PeriodIdentity) -> str:
     return "insufficient_evidence"
 
 
+def _period_identity_cache_key(
+    row: Mapping[str, Any], *, dataset: str
+) -> tuple[str, tuple[Any, ...]]:
+    return (
+        dataset,
+        tuple(
+            _clean_value(row.get(column))
+            for column in (
+                "report_period",
+                "end_date",
+                "fiscal_year",
+                "fiscal_period",
+                "quarter",
+                "report_family",
+                "statement_type",
+                "duration_semantics",
+                "period_semantics",
+                "scope",
+                "unit",
+                "accounting_semantics",
+                "source_dataset",
+                "source_version_identity",
+                "actual_available_date",
+                "comparable_period_contract_version",
+            )
+        ),
+    )
+
+
 def period_identity(row: Mapping[str, Any], dataset: str = "income") -> PeriodIdentity:
     """Return a :class:`PeriodIdentity` for a raw or annotated row."""
 
@@ -702,13 +735,45 @@ def period_identity(row: Mapping[str, Any], dataset: str = "income") -> PeriodId
     }
     if not required_identity.issubset(row):
         row = annotate_period_identity(dataset, pd.DataFrame([dict(row)])).iloc[0].to_dict()
+    cache = current_replay_cache()
+    version_value = row.get("source_version_identity")
+    version_columns = (
+        "report_period",
+        "fiscal_year",
+        "fiscal_period",
+        "quarter",
+        "report_family",
+        "statement_type",
+        "duration_semantics",
+        "scope",
+        "unit",
+        "accounting_semantics",
+        "actual_available_date",
+        "comparable_period_contract_version",
+    )
+    version_key = (
+        (dataset, str(version_value), tuple(str(row.get(column)) for column in version_columns))
+        if not _is_missing(version_value)
+        else None
+    )
+    if cache is not None and version_key is not None:
+        cached = cache.period_identities_by_version.get(version_key)
+        if cached is not None:
+            return cached
+    cache_key = _period_identity_cache_key(row, dataset=dataset)
+    if cache is not None:
+        cached = cache.period_identities.get(cache_key)
+        if cached is not None:
+            if version_key is not None:
+                cache.period_identities_by_version[version_key] = cached
+            return cached
     year_value = row.get("fiscal_year")
     quarter_value = row.get("quarter")
     year_number = int(year_value) if not _is_missing(year_value) else None
     quarter_number = int(quarter_value) if not _is_missing(quarter_value) else None
     duration_value = row.get("duration_semantics")
     duration = UNKNOWN if _is_missing(duration_value) else str(duration_value)
-    return PeriodIdentity(
+    identity = PeriodIdentity(
         report_period=_date_text(row.get("report_period")),
         fiscal_year=year_number,
         fiscal_period=None if _is_missing(row.get("fiscal_period")) else str(row["fiscal_period"]),
@@ -740,6 +805,11 @@ def period_identity(row: Mapping[str, Any], dataset: str = "income") -> PeriodId
             else COMPARABLE_PERIOD_CONTRACT_VERSION
         ),
     )
+    if cache is not None:
+        cache.period_identities[cache_key] = identity
+        if version_key is not None:
+            cache.period_identities_by_version[version_key] = identity
+    return identity
 
 
 @dataclass(frozen=True, slots=True)
@@ -847,6 +917,24 @@ def _version_rank(row: Mapping[str, Any]) -> tuple[Any, ...]:
     )
 
 
+def _row_mapping(row: pd.Series | Mapping[str, Any]) -> dict[str, Any]:
+    return row.to_dict() if isinstance(row, pd.Series) else dict(row)
+
+
+def _select_visible_row(
+    row: Mapping[str, Any],
+    *,
+    visible_at: pd.Timestamp | None,
+) -> tuple[Mapping[str, Any] | None, str | None]:
+    available = _row_available(row)
+    if visible_at is not None:
+        if available is None:
+            return None, "insufficient_evidence"
+        if available > visible_at:
+            return None, "future_disclosure_not_visible"
+    return row, None
+
+
 def _select_visible_candidate(
     candidates: pd.DataFrame,
     *,
@@ -855,6 +943,15 @@ def _select_visible_candidate(
 ) -> tuple[pd.Series | None, str | None]:
     if candidates.empty:
         return None, "missing_comparable_period"
+    if len(candidates) == 1:
+        row = candidates.iloc[0]
+        available = _row_available(row)
+        if visible_at is not None:
+            if available is None:
+                return None, "insufficient_evidence"
+            if available > visible_at:
+                return None, "future_disclosure_not_visible"
+        return row, None
     rows: list[pd.Series] = []
     for _, row in candidates.iterrows():
         available = _row_available(row)
@@ -880,6 +977,78 @@ def _select_visible_candidate(
         ties.sort(key=lambda row: str(row.get("source_version_identity") or ""), reverse=True)
         best = ties[0]
     return best, None
+
+
+def _semantic_period_key(row: Mapping[str, Any], *, dataset: str) -> tuple[Any, ...] | None:
+    """Build the exact identity used by comparable-period pool filters."""
+
+    code = row.get("ts_code")
+    identity = period_identity(row, dataset=dataset)
+    if (
+        _is_missing(code)
+        or identity.fiscal_year is None
+        or identity.quarter is None
+    ):
+        return None
+    return (
+        str(code),
+        identity.fiscal_year,
+        identity.quarter,
+        identity.duration_semantics,
+        identity.report_family,
+        identity.statement_type,
+        identity.scope,
+        identity.unit,
+        identity.accounting_semantics,
+    )
+
+
+def _semantic_period_index(
+    frame: pd.DataFrame,
+    *,
+    dataset: str,
+) -> dict[tuple[Any, ...], tuple[int, ...]]:
+    """Index a prepared financial frame by its full economic identity.
+
+    The index is held by the active snapshot-local cache only.  It is never
+    included in an artifact and is discarded after the candidate is complete.
+    """
+
+    cache = current_replay_cache()
+    cache_key = (id(frame), dataset)
+    if cache is not None:
+        cached = cache.semantic_period_indexes.get(cache_key)
+        if cached is not None:
+            return cached
+    positions: dict[tuple[Any, ...], list[int]] = {}
+    records: list[dict[str, Any]] = []
+    for position, (_, row) in enumerate(frame.iterrows()):
+        record = row.to_dict()
+        records.append(record)
+        key = _semantic_period_key(record, dataset=dataset)
+        if key is not None:
+            positions.setdefault(key, []).append(position)
+    index = {key: tuple(values) for key, values in positions.items()}
+    if cache is not None:
+        cache.semantic_period_indexes[cache_key] = index
+        cache.semantic_period_rows[cache_key] = tuple(records)
+    return index
+
+
+def _semantic_period_rows(
+    frame: pd.DataFrame,
+    *,
+    dataset: str,
+) -> tuple[dict[str, Any], ...] | None:
+    cache = current_replay_cache()
+    if cache is None:
+        return None
+    cache_key = (id(frame), dataset)
+    rows = cache.semantic_period_rows.get(cache_key)
+    if rows is None:
+        _semantic_period_index(frame, dataset=dataset)
+        rows = cache.semantic_period_rows.get(cache_key)
+    return rows
 
 
 def _unknown_match(
@@ -1024,12 +1193,20 @@ def match_comparable_period(
             return _unknown_match(comparison=kind, reason="missing_current_period")
         current_row = prepared.iloc[current]
     else:
-        current_frame = pd.DataFrame([dict(current)])
-        current_row = (
-            current
-            if _has_identity_columns(current_frame)
-            else _prepared_frame(dataset, current_frame).iloc[0]
-        )
+        required_identity = {
+            "report_period",
+            "fiscal_year",
+            "quarter",
+            "duration_semantics",
+            "source_version_identity",
+        }
+        if isinstance(current, pd.Series) and required_identity.issubset(current.index):
+            current_row = current
+        elif isinstance(current, Mapping) and required_identity.issubset(current):
+            current_row = current
+        else:
+            current_frame = pd.DataFrame([dict(current)])
+            current_row = _prepared_frame(dataset, current_frame).iloc[0]
     current_map = current_row.to_dict() if isinstance(current_row, pd.Series) else dict(current_row)
     identity = period_identity(current_map, dataset=dataset)
     if not identity.is_known:
@@ -1094,55 +1271,101 @@ def match_comparable_period(
             current_row=current_map,
         )
     code = str(current_map.get("ts_code", ""))
-    pool = prepared.loc[
-        prepared["ts_code"].astype("string").eq(code)
-        & prepared["fiscal_year"].eq(target_year)
-        & prepared["quarter"].eq(target_quarter)
-    ].copy()
-    if pool.empty:
-        return _unknown_match(
-            comparison=kind,
-            reason="missing_comparable_period",
-            current_identity=identity,
-            current_row=current_map,
-        )
-
-    # Return a reason that identifies which semantic boundary rejected an
-    # otherwise time-aligned candidate.
-    for column, reason in (
-        ("duration_semantics", "period_semantics_mismatch"),
-        ("report_family", "report_family_mismatch"),
-        ("statement_type", "statement_type_mismatch"),
-        ("scope", "scope_mismatch"),
-        ("unit", "unit_mismatch"),
-        ("accounting_semantics", "accounting_semantics_mismatch"),
-    ):
-        matching = pool.loc[pool[column].astype("string").eq(str(getattr(identity, column)))]
-        if matching.empty:
-            return _unknown_match(
-                comparison=kind,
-                reason=reason,
-                current_identity=identity,
-                current_row=current_map,
-            )
-        pool = matching
-
-    if "comparable_status" in pool.columns:
-        unknown_rows = pool.loc[pool["comparable_status"].astype("string").ne("known")]
-        if not unknown_rows.empty and len(unknown_rows) == len(pool):
-            reason_value = unknown_rows.iloc[0].get("comparable_reason")
-            return _unknown_match(
-                comparison=kind,
-                reason=str(reason_value or "unsupported_quarterization"),
-                current_identity=identity,
-                current_row=current_map,
-            )
-
-    comparison_row, reason = _select_visible_candidate(
-        pool,
-        visible_at=as_of or current_available,
-        value_column=value_column,
+    semantic_index = _semantic_period_index(prepared, dataset=dataset)
+    semantic_rows = _semantic_period_rows(prepared, dataset=dataset)
+    lookup_key = (
+        code,
+        target_year,
+        target_quarter,
+        identity.duration_semantics,
+        identity.report_family,
+        identity.statement_type,
+        identity.scope,
+        identity.unit,
+        identity.accounting_semantics,
     )
+    indexed_positions = semantic_index.get(lookup_key)
+    indexed_exact = indexed_positions is not None
+    comparison_row: Mapping[str, Any] | None = None
+    reason: str | None = None
+    if indexed_exact and len(indexed_positions) == 1:
+        comparison_row = (
+            semantic_rows[indexed_positions[0]]
+            if semantic_rows is not None
+            else prepared.iloc[indexed_positions[0]]
+        )
+        if (
+            "comparable_status" in comparison_row
+            and str(comparison_row.get("comparable_status")) != "known"
+        ):
+            return _unknown_match(
+                comparison=kind,
+                reason=str(
+                    comparison_row.get("comparable_reason") or "unsupported_quarterization"
+                ),
+                current_identity=identity,
+                current_row=current_map,
+            )
+        comparison_row, reason = _select_visible_row(
+            comparison_row,
+            visible_at=as_of or current_available,
+        )
+    else:
+        if indexed_exact:
+            pool = prepared.iloc[list(indexed_positions)].copy()
+        else:
+            pool = prepared.loc[
+                prepared["ts_code"].astype("string").eq(code)
+                & prepared["fiscal_year"].eq(target_year)
+                & prepared["quarter"].eq(target_quarter)
+            ].copy()
+        if pool.empty:
+            return _unknown_match(
+                comparison=kind,
+                reason="missing_comparable_period",
+                current_identity=identity,
+                current_row=current_map,
+            )
+
+        # Return a reason that identifies which semantic boundary rejected an
+        # otherwise time-aligned candidate.
+        if not indexed_exact:
+            for column, boundary_reason in (
+                ("duration_semantics", "period_semantics_mismatch"),
+                ("report_family", "report_family_mismatch"),
+                ("statement_type", "statement_type_mismatch"),
+                ("scope", "scope_mismatch"),
+                ("unit", "unit_mismatch"),
+                ("accounting_semantics", "accounting_semantics_mismatch"),
+            ):
+                matching = pool.loc[
+                    pool[column].astype("string").eq(str(getattr(identity, column)))
+                ]
+                if matching.empty:
+                    return _unknown_match(
+                        comparison=kind,
+                        reason=boundary_reason,
+                        current_identity=identity,
+                        current_row=current_map,
+                    )
+                pool = matching
+
+        if "comparable_status" in pool.columns:
+            unknown_rows = pool.loc[pool["comparable_status"].astype("string").ne("known")]
+            if not unknown_rows.empty and len(unknown_rows) == len(pool):
+                reason_value = unknown_rows.iloc[0].get("comparable_reason")
+                return _unknown_match(
+                    comparison=kind,
+                    reason=str(reason_value or "unsupported_quarterization"),
+                    current_identity=identity,
+                    current_row=current_map,
+                )
+
+        comparison_row, reason = _select_visible_candidate(
+            pool,
+            visible_at=as_of or current_available,
+            value_column=value_column,
+        )
     if comparison_row is None:
         return _unknown_match(
             comparison=kind,
@@ -1150,7 +1373,11 @@ def match_comparable_period(
             current_identity=identity,
             current_row=current_map,
         )
-    comparison_map = comparison_row.to_dict()
+    comparison_map = (
+        comparison_row.to_dict()
+        if isinstance(comparison_row, pd.Series)
+        else dict(comparison_row)
+    )
     if (
         "comparable_status" in comparison_map
         and str(comparison_map.get("comparable_status")) != "known"
@@ -1626,10 +1853,20 @@ def ttm_from_series(
     elif isinstance(end, int):
         end_row = prepared.iloc[end]
     else:
-        end_frame = pd.DataFrame([dict(end)])
-        end_row = (
-            end if _has_identity_columns(end_frame) else _prepared_frame(dataset, end_frame).iloc[0]
-        )
+        required_identity = {
+            "report_period",
+            "fiscal_year",
+            "quarter",
+            "duration_semantics",
+            "source_version_identity",
+        }
+        if (
+            isinstance(end, pd.Series) and required_identity.issubset(end.index)
+        ) or (isinstance(end, Mapping) and required_identity.issubset(end)):
+            end_row = end
+        else:
+            end_frame = pd.DataFrame([dict(end)])
+            end_row = _prepared_frame(dataset, end_frame).iloc[0]
     end_map = end_row.to_dict() if isinstance(end_row, pd.Series) else dict(end_row)
     end_identity = period_identity(end_map, dataset=dataset)
     if not end_identity.is_known:
@@ -1677,14 +1914,84 @@ def ttm_from_series(
         )
     )
     source_field = source_field_values[0] if len(source_field_values) == 1 else value_column
-    pool = prepared
+    semantic_index = _semantic_period_index(prepared, dataset=dataset)
+    semantic_rows = _semantic_period_rows(prepared, dataset=dataset)
+    code = str(end_map.get("ts_code", ""))
+    semantic_suffix = (
+        end_identity.duration_semantics,
+        end_identity.report_family,
+        end_identity.statement_type,
+        end_identity.scope,
+        end_identity.unit,
+        end_identity.accounting_semantics,
+    )
     for target_year, target_quarter in expected:
-        target_pool = pool.loc[
-            pool.get("ts_code", pd.Series(dtype="string"))
+        indexed_positions = semantic_index.get(
+            (code, target_year, target_quarter, *semantic_suffix)
+        )
+        if indexed_positions is not None:
+            if len(indexed_positions) == 1:
+                row = (
+                    semantic_rows[indexed_positions[0]]
+                    if semantic_rows is not None
+                    else prepared.iloc[indexed_positions[0]]
+                )
+                if (
+                    "comparable_status" in row
+                    and str(row.get("comparable_status")) != "known"
+                ):
+                    return DerivedMetric(
+                        metric=metric,
+                        value=None,
+                        status="unknown",
+                        reason="missing_quarter",
+                        current_identity=end_identity,
+                    )
+                row, reason = _select_visible_row(
+                    row, visible_at=as_of or current_available
+                )
+            else:
+                candidates = prepared.iloc[list(indexed_positions)].copy()
+                if "comparable_status" in candidates.columns:
+                    candidates = candidates.loc[
+                        candidates["comparable_status"].astype("string").eq("known")
+                    ]
+                row, reason = _select_visible_candidate(
+                    candidates, visible_at=as_of or current_available, value_column=value_column
+                )
+            if row is None:
+                selected_reason = (
+                    "missing_quarter"
+                    if len(indexed_positions) != 1
+                    else reason
+                )
+                return DerivedMetric(
+                    metric=metric,
+                    value=None,
+                    status="unknown",
+                    reason=(
+                        "missing_quarter"
+                        if selected_reason == "missing_comparable_period"
+                        else selected_reason
+                    ),
+                    current_identity=end_identity,
+                )
+            if _numeric(row.get(value_column)) is None:
+                return DerivedMetric(
+                    metric=metric,
+                    value=None,
+                    status="unknown",
+                    reason=str(row.get("comparable_reason") or "missing_value"),
+                    current_identity=end_identity,
+                )
+            selected.append(row)
+            continue
+        target_pool = prepared.loc[
+            prepared.get("ts_code", pd.Series(dtype="string"))
             .astype("string")
-            .eq(str(end_map.get("ts_code", "")))
-            & pool["fiscal_year"].eq(target_year)
-            & pool["quarter"].eq(target_quarter)
+            .eq(code)
+            & prepared["fiscal_year"].eq(target_year)
+            & prepared["quarter"].eq(target_quarter)
         ]
         candidates = target_pool
         mismatch_reason = "missing_quarter"
@@ -1736,7 +2043,7 @@ def ttm_from_series(
         selected.append(row)
     references = [
         _source_reference(
-            row.to_dict(), dataset=dataset, fields=(source_field,), value_column=value_column
+            _row_mapping(row), dataset=dataset, fields=(source_field,), value_column=value_column
         )
         for row in selected
     ]
@@ -1754,7 +2061,7 @@ def ttm_from_series(
     )
     source_periods = tuple(
         identity.report_period
-        for identity in (period_identity(row.to_dict(), dataset=dataset) for row in selected)
+        for identity in (period_identity(_row_mapping(row), dataset=dataset) for row in selected)
         if identity.report_period is not None
     )
     return DerivedMetric(
@@ -1865,8 +2172,38 @@ def validated_single_quarter_series(
     output["single_quarter_availability_dates"] = pd.NA
     output["single_quarter_contract_version"] = COMPARABLE_PERIOD_CONTRACT_VERSION
 
+    fast_period_index: dict[tuple[str, ...], tuple[int, ...]] | None = None
+    fast_economic_index: dict[tuple[str, ...], tuple[int, ...]] | None = None
+    if as_of is not None:
+        period_positions: dict[tuple[str, ...], list[int]] = {}
+        economic_positions: dict[tuple[str, ...], list[int]] = {}
+        for position, (_, prepared_row) in enumerate(output.iterrows()):
+            identity_key = tuple(
+                "<NA>" if _is_missing(prepared_row.get(column)) else str(prepared_row.get(column))
+                for column in (
+                    "ts_code",
+                    "fiscal_year",
+                    "fiscal_period",
+                    "duration_semantics",
+                    "report_family",
+                    "statement_type",
+                    "scope",
+                    "unit",
+                    "accounting_semantics",
+                )
+            )
+            period_positions.setdefault(identity_key, []).append(position)
+            economic_positions.setdefault(identity_key[:3], []).append(position)
+        fast_period_index = {
+            key: tuple(values) for key, values in period_positions.items()
+        }
+        fast_economic_index = {
+            key: tuple(values) for key, values in economic_positions.items()
+        }
+    batch_results: dict[Any, dict[str, Any]] | None = {} if as_of is not None else None
+
     def set_result(
-        index: Any, value: Any, status: str, reason: str | None, rows: list[pd.Series]
+        index: Any, value: Any, status: str, reason: str | None, rows: list[Any]
     ) -> None:
         source_periods = [
             _date_text(row.get("report_period"))
@@ -1888,45 +2225,57 @@ def validated_single_quarter_series(
             for row in rows
             if _date_text(row.get("actual_available_date"))
         ]
-        output.loc[index, "comparable_value"] = value if value is not None else pd.NA
-        output.loc[index, "comparable_status"] = status
-        output.loc[index, "comparable_reason"] = reason
-        output.loc[index, "single_quarter"] = value if value is not None else pd.NA
-        output.loc[index, "single_quarter_status"] = status
-        output.loc[index, "single_quarter_reason"] = reason
-        output.loc[index, "single_quarter_period"] = (
-            f"Q{int(output.loc[index, 'quarter'])}"
-            if not _is_missing(output.loc[index, "quarter"])
-            else pd.NA
-        )
-        output.loc[index, "single_quarter_duration_semantics"] = (
-            SINGLE_QUARTER if status == "known" else UNKNOWN
-        )
-        output.loc[index, "single_quarter_source_periods"] = "|".join(source_periods) or pd.NA
-        output.loc[index, "single_quarter_source_versions"] = "|".join(source_versions) or pd.NA
-        output.loc[index, "single_quarter_source_values"] = "|".join(source_values) or pd.NA
-        output.loc[index, "single_quarter_availability_dates"] = "|".join(available) or pd.NA
+        quarter = output.at[index, "quarter"]
+        payload = {
+            "comparable_value": value if value is not None else pd.NA,
+            "comparable_status": status,
+            "comparable_reason": reason,
+            "single_quarter": value if value is not None else pd.NA,
+            "single_quarter_status": status,
+            "single_quarter_reason": reason,
+            "single_quarter_period": (
+                f"Q{int(quarter)}" if not _is_missing(quarter) else pd.NA
+            ),
+            "single_quarter_duration_semantics": (
+                SINGLE_QUARTER if status == "known" else UNKNOWN
+            ),
+            "single_quarter_source_periods": "|".join(source_periods) or pd.NA,
+            "single_quarter_source_versions": "|".join(source_versions) or pd.NA,
+            "single_quarter_source_values": "|".join(source_values) or pd.NA,
+            "single_quarter_availability_dates": "|".join(available) or pd.NA,
+        }
+        if batch_results is not None:
+            batch_results[index] = payload
+            return
+        for column, result in payload.items():
+            output.at[index, column] = result
 
-    for index, row in output.iterrows():
-        identity = period_identity(row.to_dict(), dataset=dataset_kind)
+    row_iterator = (
+        zip(output.index, output.to_dict(orient="records"))
+        if as_of is not None
+        else output.iterrows()
+    )
+    for index, row in row_iterator:
+        identity = period_identity(_row_mapping(row), dataset=dataset_kind)
         row_available = _row_available(row)
         if as_of is not None and (row_available is None or row_available > as_of):
             set_result(index, None, "unknown", "insufficient_evidence", [])
             continue
-        duplicate_mask = (
-            output["ts_code"].astype("string").eq(str(row.get("ts_code")))
-            & output["fiscal_year"].eq(identity.fiscal_year)
-            & output["fiscal_period"].eq(identity.fiscal_period)
-            & output["duration_semantics"].eq(identity.duration_semantics)
-            & output["report_family"].eq(identity.report_family)
-            & output["statement_type"].eq(identity.statement_type)
-            & output["scope"].eq(identity.scope)
-            & output["unit"].eq(identity.unit)
-            & output["accounting_semantics"].eq(identity.accounting_semantics)
-        )
-        if duplicate_mask.sum() > 1 and row_available is None and as_of is None:
-            set_result(index, None, "unknown", "ambiguous_period_chain", [])
-            continue
+        if as_of is None:
+            duplicate_mask = (
+                output["ts_code"].astype("string").eq(str(row.get("ts_code")))
+                & output["fiscal_year"].eq(identity.fiscal_year)
+                & output["fiscal_period"].eq(identity.fiscal_period)
+                & output["duration_semantics"].eq(identity.duration_semantics)
+                & output["report_family"].eq(identity.report_family)
+                & output["statement_type"].eq(identity.statement_type)
+                & output["scope"].eq(identity.scope)
+                & output["unit"].eq(identity.unit)
+                & output["accounting_semantics"].eq(identity.accounting_semantics)
+            )
+            if duplicate_mask.sum() > 1 and row_available is None:
+                set_result(index, None, "unknown", "ambiguous_period_chain", [])
+                continue
         if not identity.is_known:
             set_result(index, None, "unknown", identity_unknown_reason(identity), [])
             continue
@@ -1950,23 +2299,51 @@ def validated_single_quarter_series(
         if identity.quarter == 1:
             predecessor = None
         else:
-            predecessor = output.loc[
-                output["ts_code"].astype("string").eq(str(row.get("ts_code")))
-                & output["fiscal_year"].eq(identity.fiscal_year)
-                & output["fiscal_period"].eq(predecessor_period)
-                & output["duration_semantics"].eq(CUMULATIVE_YTD)
-                & output["report_family"].eq(identity.report_family)
-                & output["statement_type"].eq(identity.statement_type)
-                & output["scope"].eq(identity.scope)
-                & output["unit"].eq(identity.unit)
-                & output["accounting_semantics"].eq(identity.accounting_semantics)
-            ]
-            if predecessor.empty:
+            if as_of is not None and fast_period_index is not None:
+                key = (
+                    str(row.get("ts_code")),
+                    str(identity.fiscal_year),
+                    str(predecessor_period),
+                    CUMULATIVE_YTD,
+                    str(identity.report_family),
+                    str(identity.statement_type),
+                    str(identity.scope),
+                    str(identity.unit),
+                    str(identity.accounting_semantics),
+                )
+                positions = fast_period_index.get(key, ())
+                predecessor = output.iloc[list(positions)]
+                same_positions = (
+                    fast_economic_index.get(
+                        (
+                            str(row.get("ts_code")),
+                            str(identity.fiscal_year),
+                            str(predecessor_period),
+                        ),
+                        (),
+                    )
+                    if fast_economic_index is not None
+                    else ()
+                )
+                same_period = output.iloc[list(same_positions)]
+            else:
+                predecessor = output.loc[
+                    output["ts_code"].astype("string").eq(str(row.get("ts_code")))
+                    & output["fiscal_year"].eq(identity.fiscal_year)
+                    & output["fiscal_period"].eq(predecessor_period)
+                    & output["duration_semantics"].eq(CUMULATIVE_YTD)
+                    & output["report_family"].eq(identity.report_family)
+                    & output["statement_type"].eq(identity.statement_type)
+                    & output["scope"].eq(identity.scope)
+                    & output["unit"].eq(identity.unit)
+                    & output["accounting_semantics"].eq(identity.accounting_semantics)
+                ]
                 same_period = output.loc[
                     output["ts_code"].astype("string").eq(str(row.get("ts_code")))
                     & output["fiscal_year"].eq(identity.fiscal_year)
                     & output["fiscal_period"].eq(predecessor_period)
                 ]
+            if predecessor.empty:
                 reason = "missing_preceding_cumulative_period"
                 if not same_period.empty:
                     for column, mismatch_reason in (
@@ -2027,6 +2404,23 @@ def validated_single_quarter_series(
             None,
             [row] + ([] if predecessor is None else [predecessor.iloc[0]]),
         )
+
+    if batch_results is not None:
+        for column in (
+            "comparable_value",
+            "comparable_status",
+            "comparable_reason",
+            "single_quarter",
+            "single_quarter_status",
+            "single_quarter_reason",
+            "single_quarter_period",
+            "single_quarter_duration_semantics",
+            "single_quarter_source_periods",
+            "single_quarter_source_versions",
+            "single_quarter_source_values",
+            "single_quarter_availability_dates",
+        ):
+            output[column] = [batch_results[index][column] for index in output.index]
 
     if strict and output["comparable_status"].astype("string").ne("known").any():
         reasons = sorted(

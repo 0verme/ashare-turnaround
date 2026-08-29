@@ -185,6 +185,12 @@ class TrendSummary:
     comparable_period_contract_version: str = COMPARABLE_PERIOD_CONTRACT_VERSION
     trend_contract_version: str = TREND_CONTRACT_VERSION
     provenance: Mapping[str, Any] = field(default_factory=dict)
+    _serialized: dict[str, Any] | None = field(
+        default=None,
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     @property
     def level_unit(self) -> str:
@@ -236,7 +242,10 @@ class TrendSummary:
         raise KeyError(f"unknown trend component: {name}")
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        cached = self._serialized
+        if cached is not None:
+            return dict(cached)
+        payload = {
             "metric": self.metric,
             "value_kind": self.value_kind,
             "unit": self.unit,
@@ -292,15 +301,20 @@ class TrendSummary:
             "trend_contract_version": self.trend_contract_version,
             "provenance": dict(self.provenance),
         }
+        object.__setattr__(self, "_serialized", payload)
+        return dict(payload)
 
 
 def _finite(value: Any) -> float | None:
     if value is None:
         return None
-    parsed = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
-    if pd.isna(parsed):
-        return None
-    result = float(parsed)
+    try:
+        result = float(value)
+    except (TypeError, ValueError, OverflowError):
+        parsed = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+        if pd.isna(parsed):
+            return None
+        result = float(parsed)
     return result if math.isfinite(result) else None
 
 
@@ -1139,7 +1153,7 @@ def _yoy_observations(
             status=UNKNOWN_STATUS,
         )
     observations: list[ValidatedTrendObservation] = []
-    for _, row in source.iterrows():
+    for row in source.to_dict(orient="records"):
         match = match_comparable_period(
             history,
             row,
@@ -1154,7 +1168,7 @@ def _yoy_observations(
                 result,
                 metric=metric,
                 value_kind="rate",
-                fallback_row=row.to_dict(),
+                fallback_row=row,
                 source_fields=(field_name,),
             )
         )
@@ -1193,7 +1207,7 @@ def _qoq_observations(
             reason=series_reason,
         )
     observations: list[ValidatedTrendObservation] = []
-    for _, row in source.iterrows():
+    for row in source.to_dict(orient="records"):
         match = match_comparable_period(
             source,
             row,
@@ -1208,7 +1222,7 @@ def _qoq_observations(
                 result,
                 metric=metric,
                 value_kind="rate",
-                fallback_row=row.to_dict(),
+                fallback_row=row,
                 source_fields=(field_name,),
             )
         )
@@ -1239,7 +1253,7 @@ def _margin_observations(
             reason=series_reason,
         )
     observations: list[ValidatedTrendObservation] = []
-    for _, row in source.iterrows():
+    for row in source.to_dict(orient="records"):
         result = margin_from_row(
             row,
             dataset="income",
@@ -1252,7 +1266,7 @@ def _margin_observations(
                 result,
                 metric=metric,
                 value_kind="rate",
-                fallback_row=row.to_dict(),
+                fallback_row=row,
                 source_fields=(numerator_field, denominator_field),
             )
         )
@@ -1291,7 +1305,7 @@ def _ttm_observations(
             reason=series_reason,
         )
     observations: list[ValidatedTrendObservation] = []
-    for _, row in source.iterrows():
+    for row in source.to_dict(orient="records"):
         result = ttm_from_series(
             source,
             dataset="income",
@@ -1305,7 +1319,7 @@ def _ttm_observations(
                 result,
                 metric=metric,
                 value_kind="absolute",
-                fallback_row=row.to_dict(),
+                fallback_row=row,
                 source_fields=(field_name,),
             )
         )
@@ -1330,9 +1344,10 @@ def _add_summary(
         ("state", f"{prefix}_state"),
         ("turnaround_evidence", f"{prefix}_turnaround_evidence"),
     )
+    base_provenance = summary.as_dict()
     for component, name in components:
         value, status, reason = summary.component(component)
-        provenance = summary.as_dict()
+        provenance = dict(base_provenance)
         provenance.update(
             {
                 "component": component,

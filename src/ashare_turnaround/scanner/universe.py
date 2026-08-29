@@ -10,6 +10,7 @@ import pandas as pd
 
 from ..dates import normalize_date_series
 from ..pit.financial import canonicalize_financial_frame, select_financial_as_of
+from ..replay_cache import current_replay_cache
 
 HISTORICAL_UNIVERSE_CONTRACT_VERSION = "historical-universe-v1"
 
@@ -120,6 +121,11 @@ def _suspended_on_date(
 
     if suspension_frame is None or suspension_frame.empty:
         return False
+    cache = current_replay_cache()
+    if cache is not None:
+        indexed = cache.has_suspension_on_as_of(suspension_frame, code)
+        if indexed is not None:
+            return indexed
     required = {"ts_code", "trade_date"}
     if not required.issubset(suspension_frame.columns):
         return False
@@ -244,7 +250,22 @@ def _market_history(
 ) -> pd.DataFrame:
     if daily_basic is None or daily_basic.empty or "ts_code" not in daily_basic.columns:
         return pd.DataFrame()
-    frame = daily_basic.loc[daily_basic["ts_code"].astype("string").eq(code)].copy()
+    cache = current_replay_cache()
+    indexed = (
+        cache.daily_basic_history_for_code(
+            daily_basic,
+            code,
+            as_of=as_of,
+            lookback=lookback,
+        )
+        if cache is not None
+        else None
+    )
+    frame = (
+        indexed
+        if indexed is not None
+        else daily_basic.loc[daily_basic["ts_code"].astype("string").eq(code)].copy()
+    )
     if "trade_date" not in frame.columns:
         return pd.DataFrame()
     dates = normalize_date_series(frame["trade_date"])

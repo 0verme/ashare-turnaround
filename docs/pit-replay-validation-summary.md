@@ -47,6 +47,16 @@ single-snapshot attempts through the bounded loader/streaming path each ran for
 7,200 seconds and also timed out without an artifact; the first observed peak
 RSS was about 1.7 GiB. No real smoke/yearly/monthly result is claimed here.
 
+The bounded diagnostic/repair pass was intentionally not promoted to a smoke
+PASS. On the same local corpus it measured 5,102 candidates; a 100-candidate
+bounded diagnostic completed in about 367 seconds with peak RSS about 1.95
+GiB. A separate 10-candidate serialization probe measured 45--69 MiB per
+vector (mean about 48 MiB), projecting roughly 228 GiB for the complete
+semantic JSON payload while the filesystem had about 21 GiB free. The full
+single-snapshot
+run was therefore not started: its completion and artifact-storage probability
+were not reasonable, and no determinism second pass was run.
+
 ## Correctness-only findings
 
 - Financial visibility is bounded by `actual_available_date <= as_of`, including
@@ -64,5 +74,7 @@ RSS was about 1.7 GiB. No real smoke/yearly/monthly result is claimed here.
 ## Scope guard
 
 This summary contains no forward-return evaluation, return metric, parameter or
-weight tuning, Score v2, ablation, performance optimization, or production
-strategy claim.  It is an information-availability and auditability gate only.
+weight tuning, Score v2, ablation, or production strategy claim. The bounded
+repair is execution-only: snapshot-local indexes, reuse, and streaming
+serialization preserve the existing PIT/evidence/score payload. It is an
+information-availability and auditability gate only.

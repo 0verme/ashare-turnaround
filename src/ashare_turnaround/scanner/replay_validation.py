@@ -19,7 +19,8 @@ import subprocess
 import tempfile
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import asdict, dataclass, field, replace
+from contextlib import nullcontext
+from dataclasses import asdict, dataclass, field, fields, replace
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -31,7 +32,7 @@ from ..dates import normalize_date_series
 from ..pit.financial import query_financial_as_of
 from ..storage.parquet import RawParquetStore
 from .contracts import FeatureEvidence, FeatureVector
-from .replay import ReplayConfig, ReplayResult, run_replay_frames
+from .replay import ReplayConfig, ReplayDiagnostics, ReplayResult, run_replay_frames
 from .score import rank_scores, score_feature_vector
 from .universe import UniverseConfig, build_investable_universe
 
@@ -201,6 +202,10 @@ UNSUPPORTED_CURRENT_REFERENCE_FIELDS = frozenset(
 )
 
 
+def _diagnostic_phase(diagnostics: ReplayDiagnostics | None, name: str) -> Any:
+    return diagnostics.phase(name) if diagnostics is not None else nullcontext()
+
+
 @dataclass(frozen=True, slots=True)
 class ReplayValidationConfig:
     """Frozen orchestration settings; score settings remain in ``ReplayConfig``."""
@@ -368,6 +373,68 @@ def _write_json(path: str | Path, payload: Any) -> Path:
                 indent=2,
                 sort_keys=True,
             )
+            temporary.write("\n")
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        os.replace(temporary_path, destination)
+    except BaseException:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+        raise
+    return destination
+
+
+def _write_json_with_streamed_vectors(
+    path: str | Path,
+    payload: Any,
+    spool_path: str | Path,
+) -> Path:
+    """Atomically write a snapshot while copying its vector array from a spool."""
+
+    destination = Path(path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    marker = "__ASHARE_TURNAROUND_STREAMED_VECTORS__"
+    safe_payload = _json_safe(payload)
+    replay = safe_payload.get("replay") if isinstance(safe_payload, dict) else None
+    if not isinstance(replay, dict) or "vectors" not in replay:
+        raise ValueError("streamed snapshot payload is missing replay.vectors")
+    replay["vectors"] = marker
+    encoded = json.dumps(
+        safe_payload,
+        ensure_ascii=False,
+        indent=2,
+        sort_keys=True,
+    )
+    marker_text = json.dumps(marker, ensure_ascii=False)
+    if encoded.count(marker_text) != 1:
+        raise ValueError("streamed vector marker is not unique")
+    prefix, suffix = encoded.split(marker_text, 1)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            prefix=f".{destination.name}.",
+            suffix=".tmp",
+            dir=destination.parent,
+            delete=False,
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+            temporary.write(prefix)
+            temporary.write("[")
+            first = True
+            with Path(spool_path).open("r", encoding="utf-8") as spool:
+                for line in spool:
+                    record = line.strip()
+                    if not record:
+                        continue
+                    if not first:
+                        temporary.write(",")
+                    temporary.write("\n")
+                    temporary.write(record)
+                    first = False
+            temporary.write("\n]")
+            temporary.write(suffix)
             temporary.write("\n")
             temporary.flush()
             os.fsync(temporary.fileno())
@@ -972,10 +1039,15 @@ def _parse_possible_date(value: Any) -> pd.Timestamp | None:
     if not isinstance(value, str):
         return None
     text = value.strip()
-    if not re.fullmatch(r"\d{8}|\d{4}-\d{2}-\d{2}", text):
-        return None
-    parsed = pd.to_datetime(text, errors="coerce")
-    return None if pd.isna(parsed) else pd.Timestamp(parsed).normalize()
+    formats = ("%Y%m%d", "%Y-%m-%d")
+    for pattern, value_format in zip((r"\d{8}", r"\d{4}-\d{2}-\d{2}"), formats):
+        if not re.fullmatch(pattern, text):
+            continue
+        try:
+            return pd.Timestamp(datetime.strptime(text, value_format)).normalize()
+        except ValueError:
+            return None
+    return None
 
 
 def _date_key_is_observable(key: str) -> bool:
@@ -1001,40 +1073,200 @@ def _date_key_is_observable(key: str) -> bool:
     )
 
 
+def _observable_key(key: str, cache: dict[str, bool] | None) -> bool:
+    if cache is None:
+        return _date_key_is_observable(key)
+    observable = cache.get(key)
+    if observable is None:
+        observable = _date_key_is_observable(key)
+        cache[key] = observable
+    return observable
+
+
 def _collect_observable_dates(
-    value: Any, *, key: str, path: str, output: list[tuple[str, pd.Timestamp]]
-) -> None:
+    value: Any,
+    *,
+    key: str,
+    path: str,
+    output: list[tuple[str, pd.Timestamp]],
+    observable_key_cache: dict[str, bool] | None = None,
+    date_cache: dict[str, pd.Timestamp | None] | None = None,
+    safe_container_cache: dict[tuple[int, str], bool] | None = None,
+    as_of: pd.Timestamp | None = None,
+) -> bool:
+    is_container = isinstance(value, (Mapping, list, tuple, set, frozenset))
+    safe_cache_key = (id(value), key)
+    cache_this_container = is_container and path != "evidence"
+    if (
+        cache_this_container
+        and safe_container_cache is not None
+        and safe_container_cache.get(safe_cache_key)
+    ):
+        return False
+    future_observed = False
     if isinstance(value, Mapping):
         for child_key, child_value in value.items():
-            _collect_observable_dates(
+            child_key_text = str(child_key)
+            child_is_container = isinstance(
+                child_value, (Mapping, list, tuple, set, frozenset)
+            )
+            if not child_is_container and not _observable_key(
+                child_key_text, observable_key_cache
+            ):
+                continue
+            future_observed |= _collect_observable_dates(
                 child_value,
-                key=str(child_key),
+                key=child_key_text,
                 path=f"{path}.{child_key}",
                 output=output,
+                observable_key_cache=observable_key_cache,
+                date_cache=date_cache,
+                safe_container_cache=safe_container_cache,
+                as_of=as_of,
             )
-        return
-    if isinstance(value, (list, tuple, set, frozenset)):
+    elif isinstance(value, (list, tuple, set, frozenset)):
+        observable = _observable_key(key, observable_key_cache)
         for index, child_value in enumerate(value):
-            _collect_observable_dates(
+            child_is_container = isinstance(
+                child_value, (Mapping, list, tuple, set, frozenset)
+            )
+            if not child_is_container and not observable:
+                continue
+            future_observed |= _collect_observable_dates(
                 child_value,
                 key=key,
                 path=f"{path}[{index}]",
                 output=output,
+                observable_key_cache=observable_key_cache,
+                date_cache=date_cache,
+                safe_container_cache=safe_container_cache,
+                as_of=as_of,
             )
-        return
-    if not _date_key_is_observable(key):
-        return
-    parsed = _parse_possible_date(value)
-    if parsed is not None:
-        output.append((path, parsed))
+    elif _observable_key(key, observable_key_cache):
+        if date_cache is not None and isinstance(value, str):
+            text = value.strip()
+            if text not in date_cache:
+                date_cache[text] = _parse_possible_date(text)
+            parsed = date_cache[text]
+        else:
+            parsed = _parse_possible_date(value)
+        if parsed is not None:
+            output.append((path, parsed))
+            future_observed = as_of is not None and parsed > as_of
+    if cache_this_container and safe_container_cache is not None and not future_observed:
+        safe_container_cache[safe_cache_key] = True
+    return future_observed
 
 
-def _evidence_dates(evidence: FeatureEvidence) -> list[tuple[str, pd.Timestamp]]:
+def _evidence_dates(
+    evidence: FeatureEvidence,
+    *,
+    observable_key_cache: dict[str, bool] | None = None,
+    date_cache: dict[str, pd.Timestamp | None] | None = None,
+    safe_container_cache: dict[tuple[int, str], bool] | None = None,
+    as_of: pd.Timestamp | None = None,
+) -> list[tuple[str, pd.Timestamp]]:
+    """Find observable dates without deep-copying the full evidence payload."""
+
+    payload = {item.name: getattr(evidence, item.name) for item in fields(FeatureEvidence)}
+    for key in (
+        "start_session",
+        "end_session",
+        "stock_start",
+        "stock_end",
+        "benchmark_start",
+        "benchmark_end",
+        "benchmark_id",
+        "stock_return",
+        "benchmark_return",
+        "excess_return",
+    ):
+        if key in evidence.components:
+            payload[key] = evidence.components[key]
     return_dates: list[tuple[str, pd.Timestamp]] = []
     _collect_observable_dates(
-        evidence.as_dict(), key="evidence", path="evidence", output=return_dates
+        payload,
+        key="evidence",
+        path="evidence",
+        output=return_dates,
+        observable_key_cache=observable_key_cache,
+        date_cache=date_cache,
+        safe_container_cache=safe_container_cache,
+        as_of=as_of,
     )
     return return_dates
+
+
+def _validate_replay_vector_pit(
+    vector: FeatureVector,
+    *,
+    as_of: pd.Timestamp,
+    benchmark_id: str,
+    observable_key_cache: dict[str, bool],
+    date_cache: dict[str, pd.Timestamp | None],
+    safe_container_cache: dict[tuple[int, str], bool],
+) -> tuple[str, ...]:
+    violations: list[str] = []
+    if vector.as_of_date != as_of.strftime("%Y%m%d"):
+        violations.append(f"{vector.ts_code}:vector_as_of_date_mismatch")
+    vector_dates: list[tuple[str, pd.Timestamp]] = []
+    _collect_observable_dates(
+        vector.metadata,
+        key="metadata",
+        path="vector.metadata",
+        output=vector_dates,
+        observable_key_cache=observable_key_cache,
+        date_cache=date_cache,
+        safe_container_cache=safe_container_cache,
+        as_of=as_of,
+    )
+    _collect_observable_dates(
+        vector.benchmark_metadata,
+        key="benchmark_metadata",
+        path="vector.benchmark_metadata",
+        output=vector_dates,
+        observable_key_cache=observable_key_cache,
+        date_cache=date_cache,
+        safe_container_cache=safe_container_cache,
+        as_of=as_of,
+    )
+    for path, observed in vector_dates:
+        if observed > as_of:
+            violations.append(
+                f"{vector.ts_code}:{path}:observation_after_as_of={observed.strftime('%Y%m%d')}"
+            )
+    for name, evidence in vector.evidence.items():
+        for path, observed in _evidence_dates(
+            evidence,
+            observable_key_cache=observable_key_cache,
+            date_cache=date_cache,
+            safe_container_cache=safe_container_cache,
+            as_of=as_of,
+        ):
+            if observed > as_of:
+                violations.append(
+                    f"{vector.ts_code}:{name}:{path}:observation_after_as_of={observed.strftime('%Y%m%d')}"
+                )
+        components = evidence.components
+        if name.startswith("excess_return_") or name in {
+            "recent_excess_return",
+            "recent_excess_return",
+        }:
+            if evidence.status in {"known", "valid"} and components.get("benchmark_return") is None:
+                violations.append(f"{vector.ts_code}:{name}:benchmark_missing_but_excess_known")
+            component_benchmark = components.get("benchmark_id")
+            if (
+                component_benchmark is not None
+                and str(component_benchmark).upper() != str(benchmark_id).upper()
+            ):
+                violations.append(f"{vector.ts_code}:{name}:benchmark_id={component_benchmark}")
+    if vector.benchmark_metadata.get("benchmark_id") not in {
+        None,
+        benchmark_id,
+        str(benchmark_id).upper(),
+    }:
+        violations.append(f"{vector.ts_code}:benchmark_metadata_mismatch")
+    return tuple(dict.fromkeys(violations))
 
 
 def validate_replay_pit(
@@ -1043,11 +1275,15 @@ def validate_replay_pit(
     as_of_date: str | date | datetime | pd.Timestamp | None = None,
     benchmark_id: str = DEFAULT_BENCHMARK_ID,
     require_historical_universe: bool = False,
+    prevalidated_vector_violations: Iterable[str] | None = None,
 ) -> tuple[str, ...]:
     """Return hard PIT violations found in one production replay result."""
 
     as_of = _normalise_timestamp(as_of_date or result.as_of_date, name="as_of_date")
     violations: list[str] = []
+    observable_key_cache: dict[str, bool] = {}
+    date_cache: dict[str, pd.Timestamp | None] = {}
+    safe_container_cache: dict[tuple[int, str], bool] = {}
     if result.as_of_date != as_of.strftime("%Y%m%d"):
         violations.append("result_as_of_date_mismatch")
     if require_historical_universe:
@@ -1073,55 +1309,20 @@ def validate_replay_pit(
                     + ",".join(sorted(unsafe_decision_fields))
                 )
 
-    for vector in result.vectors:
-        if vector.as_of_date != as_of.strftime("%Y%m%d"):
-            violations.append(f"{vector.ts_code}:vector_as_of_date_mismatch")
-        vector_dates: list[tuple[str, pd.Timestamp]] = []
-        _collect_observable_dates(
-            vector.metadata,
-            key="metadata",
-            path="vector.metadata",
-            output=vector_dates,
-        )
-        _collect_observable_dates(
-            vector.benchmark_metadata,
-            key="benchmark_metadata",
-            path="vector.benchmark_metadata",
-            output=vector_dates,
-        )
-        for path, observed in vector_dates:
-            if observed > as_of:
-                violations.append(
-                    f"{vector.ts_code}:{path}:observation_after_as_of={observed.strftime('%Y%m%d')}"
+    if prevalidated_vector_violations is None:
+        for vector in result.vectors:
+            violations.extend(
+                _validate_replay_vector_pit(
+                    vector,
+                    as_of=as_of,
+                    benchmark_id=benchmark_id,
+                    observable_key_cache=observable_key_cache,
+                    date_cache=date_cache,
+                    safe_container_cache=safe_container_cache,
                 )
-        for name, evidence in vector.evidence.items():
-            for path, observed in _evidence_dates(evidence):
-                if observed > as_of:
-                    violations.append(
-                        f"{vector.ts_code}:{name}:{path}:observation_after_as_of={observed.strftime('%Y%m%d')}"
-                    )
-            components = evidence.components
-            if name.startswith("excess_return_") or name in {
-                "recent_excess_return",
-                "recent_excess_return",
-            }:
-                if (
-                    evidence.status in {"known", "valid"}
-                    and components.get("benchmark_return") is None
-                ):
-                    violations.append(f"{vector.ts_code}:{name}:benchmark_missing_but_excess_known")
-                component_benchmark = components.get("benchmark_id")
-                if (
-                    component_benchmark is not None
-                    and str(component_benchmark).upper() != str(benchmark_id).upper()
-                ):
-                    violations.append(f"{vector.ts_code}:{name}:benchmark_id={component_benchmark}")
-        if vector.benchmark_metadata.get("benchmark_id") not in {
-            None,
-            benchmark_id,
-            str(benchmark_id).upper(),
-        }:
-            violations.append(f"{vector.ts_code}:benchmark_metadata_mismatch")
+            )
+    else:
+        violations.extend(str(value) for value in prevalidated_vector_violations)
 
     score_by_code = {score.ts_code: score for score in result.scores}
     diagnostic = result.diagnostic_ranked
@@ -2107,6 +2308,7 @@ def _run_validation(
     resource_guard: bool = False,
     artifact_output: str | Path | None = None,
     retain_snapshot_results: bool | None = None,
+    diagnostics: ReplayDiagnostics | None = None,
 ) -> ReplayValidationResult:
     if top_n <= 0:
         raise ValueError("top_n must be positive")
@@ -2193,12 +2395,40 @@ def _run_validation(
         retain_snapshot_results = artifact_output is None
     stream_output = Path(artifact_output) if artifact_output is not None else None
     stream_results = stream_output is not None and not retain_snapshot_results
+    stream_candidates = stream_results
     snapshot_metrics: dict[str, dict[str, Any]] = {}
     stream_manual_records: list[dict[str, Any]] = []
     completed: list[dict[str, Any]] = []
+    candidate_spool_path: Path | None = None
+    candidate_spool_handle = None
     if stream_output is not None:
         stream_output.mkdir(parents=True, exist_ok=True)
         (stream_output / "snapshots").mkdir(parents=True, exist_ok=True)
+        if stream_results:
+            candidate_spool_path = stream_output / ".candidate-vectors.jsonl"
+            candidate_spool_handle = candidate_spool_path.open("w", encoding="utf-8")
+
+            def stream_candidate(vector: FeatureVector, _score: Any) -> None:
+                if candidate_spool_handle is None:
+                    raise RuntimeError("candidate spool is closed")
+                candidate_spool_handle.write(
+                    json.dumps(
+                        _json_safe(vector.as_dict()),
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    )
+                    + "\n"
+                )
+
+            if diagnostics is None:
+                diagnostics = ReplayDiagnostics(
+                    candidate_sink=stream_candidate,
+                    retain_vectors=False,
+                )
+            else:
+                diagnostics.candidate_sink = stream_candidate
+                diagnostics.retain_vectors = False
         _write_stream_checkpoint(
             stream_output,
             status="RUNNING",
@@ -2213,16 +2443,29 @@ def _run_validation(
     def record_snapshot(snapshot: ReplayValidationSnapshot) -> None:
         """Write one complete snapshot before dropping its heavy result."""
 
+        nonlocal candidate_spool_path
         if snapshot.result is not None and stream_results:
             snapshot_metrics[snapshot.target.target_month] = _snapshot_metrics(snapshot.result)
             if snapshot.regime is not None:
                 one = build_manual_review_sample((snapshot,), top_n=min(3, top_n))
                 stream_manual_records.extend(one["reviews"])
         if stream_output is not None:
-            _write_json(
-                stream_output / "snapshots" / _snapshot_filename(snapshot),
-                snapshot.as_dict(),
-            )
+            with _diagnostic_phase(diagnostics, "artifact_serialization"):
+                payload = snapshot.as_dict()
+                if candidate_spool_path is not None and snapshot.result is not None:
+                    _write_json_with_streamed_vectors(
+                        stream_output / "snapshots" / _snapshot_filename(snapshot),
+                        payload,
+                        candidate_spool_path,
+                    )
+                else:
+                    _write_json(
+                        stream_output / "snapshots" / _snapshot_filename(snapshot),
+                        payload,
+                    )
+            if candidate_spool_path is not None:
+                candidate_spool_path.unlink(missing_ok=True)
+                candidate_spool_path = None
         completed.append(
             {
                 "target_month": snapshot.target.target_month,
@@ -2305,18 +2548,41 @@ def _run_validation(
 
         as_of = target.selected_trading_date
         assert as_of is not None
+        if stream_candidates and candidate_spool_handle is None:
+            assert stream_output is not None
+            candidate_spool_path = stream_output / ".candidate-vectors.jsonl"
+            candidate_spool_handle = candidate_spool_path.open("w", encoding="utf-8")
+        if stream_candidates and diagnostics is not None:
+            diagnostics.candidate_validation_violations.clear()
+            candidate_observable_key_cache: dict[str, bool] = {}
+            candidate_date_cache: dict[str, pd.Timestamp | None] = {}
+            candidate_safe_container_cache: dict[tuple[int, str], bool] = {}
+            candidate_as_of = _normalise_timestamp(as_of, name="as_of_date")
+
+            def validate_candidate(vector: FeatureVector) -> tuple[str, ...]:
+                return _validate_replay_vector_pit(
+                    vector,
+                    as_of=candidate_as_of,
+                    benchmark_id=settings.crowding.benchmark.benchmark_id,
+                    observable_key_cache=candidate_observable_key_cache,
+                    date_cache=candidate_date_cache,
+                    safe_container_cache=candidate_safe_container_cache,
+                )
+
+            diagnostics.candidate_validator = validate_candidate
         regime: RegimeResult | None = None
         try:
             replay_frames = (
                 dict(frame_loader(as_of, settings)) if frame_loader is not None else frames
             )
             missing = _missing_inputs(replay_frames, target)
-            regime = classify_market_regime(
-                replay_frames.get("index_daily", pd.DataFrame()),
-                as_of,
-                trade_calendar=replay_frames.get("trade_cal"),
-                benchmark_id=settings.crowding.benchmark.benchmark_id,
-            )
+            with _diagnostic_phase(diagnostics, "market_regime"):
+                regime = classify_market_regime(
+                    replay_frames.get("index_daily", pd.DataFrame()),
+                    as_of,
+                    trade_calendar=replay_frames.get("trade_cal"),
+                    benchmark_id=settings.crowding.benchmark.benchmark_id,
+                )
             if missing:
                 warnings = tuple(
                     dict.fromkeys(
@@ -2326,17 +2592,30 @@ def _run_validation(
                 )
             else:
                 warnings = ("incomplete_current_month",) if target.incomplete_month else ()
-            replay_result = run_replay_frames(
-                replay_frames,
-                as_of_date=as_of,
-                config=settings,
-            )
-            pit_violations = validate_replay_pit(
-                replay_result,
-                as_of_date=as_of,
-                benchmark_id=settings.crowding.benchmark.benchmark_id,
-                require_historical_universe=True,
-            )
+            try:
+                replay_result = run_replay_frames(
+                    replay_frames,
+                    as_of_date=as_of,
+                    config=settings,
+                    diagnostics=diagnostics,
+                )
+            finally:
+                if candidate_spool_handle is not None:
+                    candidate_spool_handle.flush()
+                    candidate_spool_handle.close()
+                    candidate_spool_handle = None
+            with _diagnostic_phase(diagnostics, "pit_validation"):
+                pit_violations = validate_replay_pit(
+                    replay_result,
+                    as_of_date=as_of,
+                    benchmark_id=settings.crowding.benchmark.benchmark_id,
+                    require_historical_universe=True,
+                    prevalidated_vector_violations=(
+                        diagnostics.candidate_validation_violations
+                        if stream_candidates and diagnostics is not None
+                        else None
+                    ),
+                )
             if pit_violations:
                 stopped_reason = "P0 PIT violation"
                 snapshot_status = "FAILED"
@@ -2370,11 +2649,25 @@ def _run_validation(
                 and len(determinism_checks) < determinism_sample
                 and stopped_reason is None
             ):
-                repeated = run_replay_frames(
-                    replay_frames,
-                    as_of_date=as_of,
-                    config=settings,
-                )
+                saved_sink = diagnostics.candidate_sink if stream_candidates else None
+                saved_validator = diagnostics.candidate_validator if stream_candidates else None
+                saved_retain_vectors = diagnostics.retain_vectors if stream_candidates else True
+                if stream_candidates and diagnostics is not None:
+                    diagnostics.candidate_sink = None
+                    diagnostics.candidate_validator = None
+                    diagnostics.retain_vectors = False
+                try:
+                    repeated = run_replay_frames(
+                        replay_frames,
+                        as_of_date=as_of,
+                        config=settings,
+                        diagnostics=diagnostics,
+                    )
+                finally:
+                    if stream_candidates and diagnostics is not None:
+                        diagnostics.candidate_sink = saved_sink
+                        diagnostics.candidate_validator = saved_validator
+                        diagnostics.retain_vectors = saved_retain_vectors
                 determinism = _determinism_compare(replay_result, repeated)
                 del repeated
                 check = {
@@ -2469,6 +2762,14 @@ def _run_validation(
                 )
             )
 
+    if candidate_spool_handle is not None:
+        candidate_spool_handle.flush()
+        candidate_spool_handle.close()
+        candidate_spool_handle = None
+        if candidate_spool_path is not None:
+            candidate_spool_path.unlink(missing_ok=True)
+            candidate_spool_path = None
+
     snapshots_tuple = tuple(snapshots)
     summary = _build_summary(
         targets,
@@ -2532,17 +2833,20 @@ def _run_validation(
         warnings=run_warnings,
     )
     if stream_output is not None:
-        _write_stream_checkpoint(
-            stream_output,
-            status="COMPLETE",
-            contract_version=PIT_REPLAY_VALIDATION_CONTRACT_VERSION,
-            stage=stage,
-            input_manifest_id=input_manifest.get("manifest_id"),
-            config_hash=validation_config_hash,
-            targets=targets,
-            completed=completed,
-            summary=summary,
-        )
+        with _diagnostic_phase(diagnostics, "artifact_serialization"):
+            _write_stream_checkpoint(
+                stream_output,
+                status="COMPLETE",
+                contract_version=PIT_REPLAY_VALIDATION_CONTRACT_VERSION,
+                stage=stage,
+                input_manifest_id=input_manifest.get("manifest_id"),
+                config_hash=validation_config_hash,
+                targets=targets,
+                completed=completed,
+                summary=summary,
+            )
+    if diagnostics is not None:
+        diagnostics.emit_summary()
     return validation_result
 
 
@@ -2562,6 +2866,7 @@ def run_replay_validation_frames(
     determinism_sample: int = 3,
     artifact_output: str | Path | None = None,
     retain_snapshot_results: bool | None = None,
+    diagnostics: ReplayDiagnostics | None = None,
 ) -> ReplayValidationResult:
     """Run validation over supplied frames, primarily for tests and fixtures."""
 
@@ -2597,6 +2902,7 @@ def run_replay_validation_frames(
         determinism_sample=determinism_sample,
         artifact_output=artifact_output,
         retain_snapshot_results=retain_snapshot_results,
+        diagnostics=diagnostics,
     )
 
 
@@ -2641,7 +2947,7 @@ def _partition_may_overlap(
     return True
 
 
-def _read_projected_dataset(
+def _read_projected_dataset_raw(
     data_dir: str | Path,
     dataset: str,
     *,
@@ -2676,6 +2982,27 @@ def _read_projected_dataset(
     if not pieces:
         return pd.DataFrame(columns=projection)
     return pd.concat(pieces, ignore_index=True, sort=False)
+
+
+def _read_projected_dataset(
+    data_dir: str | Path,
+    dataset: str,
+    *,
+    columns: Iterable[str],
+    date_field: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    diagnostics: ReplayDiagnostics | None = None,
+) -> pd.DataFrame:
+    with _diagnostic_phase(diagnostics, f"input_loading.{dataset}"):
+        return _read_projected_dataset_raw(
+            data_dir,
+            dataset,
+            columns=columns,
+            date_field=date_field,
+            start_date=start_date,
+            end_date=end_date,
+        )
 
 
 def _visible_market_rows(
@@ -2747,6 +3074,7 @@ def _validation_frames_for_as_of(
     *,
     as_of_date: str,
     settings: ReplayConfig,
+    diagnostics: ReplayDiagnostics | None = None,
 ) -> dict[str, pd.DataFrame]:
     """Build a bounded frame mapping while preserving the production replay API."""
 
@@ -2773,6 +3101,7 @@ def _validation_frames_for_as_of(
             date_field="trade_date",
             start_date=market_start,
             end_date=as_of.strftime("%Y%m%d"),
+            diagnostics=diagnostics,
         )
         if "actual_available_date" in frames[dataset].columns:
             frames[dataset] = _visible_market_rows(frames[dataset], as_of=as_of)
@@ -2783,6 +3112,7 @@ def _validation_frames_for_as_of(
         date_field="trade_date",
         start_date=as_of.strftime("%Y%m%d"),
         end_date=as_of.strftime("%Y%m%d"),
+        diagnostics=diagnostics,
     )
     for dataset in FINANCIAL_CORPUS_DATASETS:
         frames[dataset] = _visible_financial_rows(
@@ -2792,6 +3122,7 @@ def _validation_frames_for_as_of(
                 columns=_FINANCIAL_PROJECTION_COLUMNS[dataset],
                 date_field="end_date",
                 end_date=as_of.strftime("%Y%m%d"),
+                diagnostics=diagnostics,
             ),
             as_of=as_of,
         )
@@ -2801,11 +3132,17 @@ def _validation_frames_for_as_of(
         columns=_MARKET_PROJECTION_COLUMNS["disclosure_date"],
         date_field="end_date",
         end_date=as_of.strftime("%Y%m%d"),
+        diagnostics=diagnostics,
     )
     return frames
 
 
-def _validation_frames(data_dir: str | Path, *, base_only: bool = False) -> dict[str, pd.DataFrame]:
+def _validation_frames(
+    data_dir: str | Path,
+    *,
+    base_only: bool = False,
+    diagnostics: ReplayDiagnostics | None = None,
+) -> dict[str, pd.DataFrame]:
     datasets = ("trade_cal", "stock_basic", "index_basic") if base_only else MANIFEST_DATASETS
     return {
         dataset: _read_projected_dataset(
@@ -2814,6 +3151,7 @@ def _validation_frames(data_dir: str | Path, *, base_only: bool = False) -> dict
             columns=_MARKET_PROJECTION_COLUMNS.get(
                 dataset, _FINANCIAL_PROJECTION_COLUMNS.get(dataset, ())
             ),
+            diagnostics=diagnostics,
         )
         for dataset in datasets
     }
@@ -2836,6 +3174,7 @@ def run_replay_validation(
     content_hash: bool = True,
     artifact_output: str | Path | None = None,
     retain_snapshot_results: bool | None = None,
+    diagnostics: ReplayDiagnostics | None = None,
 ) -> ReplayValidationResult:
     """Run a read-only historical validation sample from the production path."""
 
@@ -2854,8 +3193,9 @@ def run_replay_validation(
     else:
         replay_settings = config or ReplayConfig(top_n=top_n)
     _assert_initial_resource_gate(data_dir)
-    frames = _validation_frames(data_dir, base_only=True)
-    manifest = build_input_manifest(data_dir, content_hash=content_hash)
+    frames = _validation_frames(data_dir, base_only=True, diagnostics=diagnostics)
+    with _diagnostic_phase(diagnostics, "input_loading.manifest"):
+        manifest = build_input_manifest(data_dir, content_hash=content_hash)
 
     def load_snapshot_frames(as_of: str, settings: ReplayConfig) -> Mapping[str, pd.DataFrame]:
         return _validation_frames_for_as_of(
@@ -2863,6 +3203,7 @@ def run_replay_validation(
             frames,
             as_of_date=as_of,
             settings=settings,
+            diagnostics=diagnostics,
         )
 
     return _run_validation(
@@ -2884,6 +3225,7 @@ def run_replay_validation(
         resource_guard=_raw_corpus_bytes(data_dir) >= LARGE_CORPUS_BYTES,
         artifact_output=artifact_output,
         retain_snapshot_results=retain_snapshot_results,
+        diagnostics=diagnostics,
     )
 
 
@@ -3068,6 +3410,7 @@ __all__ = [
     "MARKET_REGIME_CONTRACT_VERSION",
     "HISTORICAL_UNIVERSE_CONTRACT_VERSION",
     "ReplayValidationConfig",
+    "ReplayDiagnostics",
     "PITViolation",
     "PITValidationError",
     "ResourceBlocked",
