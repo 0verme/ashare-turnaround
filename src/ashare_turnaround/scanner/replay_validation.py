@@ -2555,6 +2555,8 @@ def _run_validation(
     candidate_spool_handle = None
     stream_store_builder: ChunkedContentAddressedStore | None = None
     stream_candidate_digest_map: dict[str, str] = {}
+    stream_candidate_count = 0
+    candidate_flush_interval = 100
     if stream_output is not None:
         stream_output.mkdir(parents=True, exist_ok=True)
         (stream_output / "snapshots").mkdir(parents=True, exist_ok=True)
@@ -2563,10 +2565,16 @@ def _run_validation(
             candidate_spool_handle = candidate_spool_path.open("w", encoding="utf-8")
 
             def stream_candidate(vector: FeatureVector, _score: Any) -> None:
+                nonlocal stream_candidate_count
                 if candidate_spool_handle is None or stream_store_builder is None:
                     raise RuntimeError("candidate spool or normalized store is closed")
                 normalized = normalize_feature_vector(vector, store=stream_store_builder)
-                stream_store_builder.flush_chunk_if_needed()
+                stream_candidate_count += 1
+                if stream_candidate_count % candidate_flush_interval == 0:
+                    stream_store_builder.flush_chunk(force=True)
+                else:
+                    # Physical limits remain a secondary safety boundary.
+                    stream_store_builder.flush_chunk_if_needed()
                 # The ref-bearing normalized record is the full-scale digest
                 # boundary; do not materialize FeatureVector.as_dict() again.
                 stream_candidate_digest_map[str(vector.ts_code)] = content_digest(normalized)
@@ -2718,8 +2726,12 @@ def _run_validation(
         as_of = target.selected_trading_date
         assert as_of is not None
         if stream_candidates:
+            stream_candidate_count = 0
             stream_store_builder = ChunkedContentAddressedStore(
-                stream_output / ".cas", chunk_entries=100
+                stream_output / ".cas",
+                chunk_entries=100_000,
+                max_active_entries=100_000,
+                max_active_physical_bytes=64 * 1024 * 1024,
             )
             stream_candidate_digest_map = {}
         if stream_candidates and candidate_spool_handle is None:
@@ -2784,6 +2796,10 @@ def _run_validation(
                     candidate_spool_handle.flush()
                     candidate_spool_handle.close()
                     candidate_spool_handle = None
+            if stream_candidates and stream_store_builder is not None:
+                # Finalization has an explicit boundary even when the last
+                # candidate completed exactly on an interval.
+                stream_store_builder.flush_chunk(force=True)
             with _diagnostic_phase(diagnostics, "pit_validation"):
                 pit_violations = validate_replay_pit(
                     replay_result,

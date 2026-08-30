@@ -28,6 +28,7 @@ import os
 import tempfile
 import zlib
 from collections.abc import Iterable, Iterator, Mapping, MutableMapping
+from contextlib import ExitStack
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -316,6 +317,7 @@ class ContentAddressedStore:
         # Python trees multiply the resident set dramatically for a 100-stock
         # stream even when the final JSON is only a few hundred MiB.
         self._entries: dict[str, bytes] = {}
+        self._physical_bytes = 0
         # This cache is intentionally scoped by normalize_feature_vector;
         # retaining source objects across streamed candidates would defeat the
         # memory benefit of the physical store.
@@ -330,12 +332,13 @@ class ContentAddressedStore:
                 if not ref.startswith(_REF_PREFIX):
                     raise ValueError(f"invalid content-addressed ref: {ref!r}")
                 if isinstance(value, bytes):
-                    self._entries[ref] = bytes(value)
+                    encoded = bytes(value)
                 elif _is_compressed_wrapper(value):
-                    compressed = _COMPRESSED_PREFIX + value["data"].encode("ascii")
-                    self._entries[ref] = compressed
+                    encoded = _COMPRESSED_PREFIX + value["data"].encode("ascii")
                 else:
-                    self._entries[ref] = _store_bytes(_json_safe(value))
+                    encoded = _store_bytes(_json_safe(value))
+                self._entries[ref] = encoded
+                self._physical_bytes += len(encoded)
 
     @property
     def entries(self) -> dict[str, Any]:
@@ -378,7 +381,7 @@ class ContentAddressedStore:
 
     @property
     def physical_byte_count(self) -> int:
-        return sum(len(value) for value in self._entries.values())
+        return self._physical_bytes
 
     def __len__(self) -> int:
         return len(self._entries)
@@ -443,7 +446,9 @@ class ContentAddressedStore:
         canonical = _canonical_safe_bytes(encoded)
         ref = _REF_PREFIX + hashlib.sha256(canonical).hexdigest()
         if ref not in self._entries:
-            self._entries[ref] = _store_bytes(encoded)
+            stored = _store_bytes(encoded)
+            self._entries[ref] = stored
+            self._physical_bytes += len(stored)
         if _is_container(original):
             self._identity_cache[id(original)] = (original, ref)
         return ref
@@ -453,7 +458,9 @@ class ContentAddressedStore:
         canonical = _canonical_safe_bytes(encoded)
         ref = _REF_PREFIX + hashlib.sha256(canonical).hexdigest()
         if ref not in self._entries:
-            self._entries[ref] = _store_bytes(encoded)
+            stored = _store_bytes(encoded)
+            self._entries[ref] = stored
+            self._physical_bytes += len(stored)
         return ref
 
     def intern(self, value: Any) -> str:
@@ -476,11 +483,24 @@ class ChunkedContentAddressedStore(ContentAddressedStore):
     file; final iteration performs a k-way merge and verifies duplicate refs.
     """
 
-    def __init__(self, directory: str | Path | None = None, *, chunk_entries: int = 100) -> None:
-        if chunk_entries <= 0:
-            raise ValueError("chunk_entries must be positive")
+    MERGE_FAN_IN = 32
+
+    def __init__(self, directory: str | Path | None = None, *, chunk_entries: int = 100_000,
+                 max_active_entries: int = 100_000,
+                 max_active_physical_bytes: int = 64 * 1024 * 1024,
+                 merge_fan_in: int = MERGE_FAN_IN) -> None:
+        if min(chunk_entries, max_active_entries, max_active_physical_bytes) <= 0:
+            raise ValueError("chunk and active safety limits must be positive")
+        if not 2 <= merge_fan_in <= 64:
+            raise ValueError("merge_fan_in must be between 2 and 64")
         super().__init__()
+        # This is a physical-entry safety limit, not a candidate-count policy.
         self.chunk_entries = int(chunk_entries)
+        self.max_active_entries = int(max_active_entries)
+        self.max_active_physical_bytes = int(max_active_physical_bytes)
+        self.merge_fan_in = int(merge_fan_in)
+        self.peak_open_chunk_streams = 0
+        self._temporary_merges: list[Path] = []
         self._chunk_dir = Path(directory) if directory is not None else Path(
             tempfile.mkdtemp(prefix="ashare-cas-")
         )
@@ -491,20 +511,26 @@ class ChunkedContentAddressedStore(ContentAddressedStore):
     def chunk_count(self) -> int:
         return len(self._chunks)
 
-    def flush_chunk(self) -> Path | None:
+    def flush_chunk(self, *, force: bool = False) -> Path | None:
+        """Persist the active physical chunk; ``force`` documents the boundary."""
+        del force
         if not self._entries:
             return None
         path = self._chunk_dir / f"chunk-{len(self._chunks):08d}.cas"
         with path.open("wb") as handle:
-            for ref, value in self.iter_entries_sorted():
+            for ref, value in super().iter_entries_sorted():
                 handle.write(ref.encode("ascii") + b"\t" + base64.b64encode(value) + b"\n")
         self._chunks.append(path)
         self._entries.clear()
+        self._physical_bytes = 0
         self.clear_identity_cache()
         return path
 
     def flush_chunk_if_needed(self, *, force: bool = False) -> Path | None:
-        if force or len(self._entries) >= self.chunk_entries:
+        """Apply physical safety limits; callers explicitly own candidate batches."""
+        if (force or len(self._entries) >= self.chunk_entries
+                or len(self._entries) >= self.max_active_entries
+                or self._physical_bytes >= self.max_active_physical_bytes):
             return self.flush_chunk()
         return None
 
@@ -514,10 +540,8 @@ class ChunkedContentAddressedStore(ContentAddressedStore):
                 ref, encoded = line.rstrip(b"\n").split(b"\t", 1)
                 yield ref.decode("ascii"), base64.b64decode(encoded)
 
-    def iter_entries_sorted(self) -> Iterator[tuple[str, bytes]]:
-        streams = [self._chunk_entries(path) for path in self._chunks]
-        if self._entries:
-            streams.append(iter(super().iter_entries_sorted()))
+    @staticmethod
+    def _merge_streams(streams: list[Iterator[tuple[str, bytes]]]) -> Iterator[tuple[str, bytes]]:
         heap: list[tuple[str, int, bytes]] = []
         for index, stream in enumerate(streams):
             try:
@@ -541,6 +565,58 @@ class ChunkedContentAddressedStore(ContentAddressedStore):
                     continue
                 heapq.heappush(heap, (next_ref, stream_index, next_value))
 
+    def _merge_group(self, paths: list[Path], output: Path) -> None:
+        try:
+            with ExitStack() as stack:
+                handles = [stack.enter_context(path.open("rb")) for path in paths]
+                self.peak_open_chunk_streams = max(self.peak_open_chunk_streams, len(handles))
+                streams = [self._chunk_entries_from_handle(handle) for handle in handles]
+                with output.open("wb") as target:
+                    for ref, value in self._merge_streams(streams):
+                        target.write(
+                            ref.encode("ascii") + b"\t" + base64.b64encode(value) + b"\n"
+                        )
+        except BaseException:
+            output.unlink(missing_ok=True)
+            raise
+
+    @staticmethod
+    def _chunk_entries_from_handle(handle: Any) -> Iterator[tuple[str, bytes]]:
+        for line in handle:
+            ref, encoded = line.rstrip(b"\n").split(b"\t", 1)
+            yield ref.decode("ascii"), base64.b64decode(encoded)
+
+    def iter_entries_sorted(self) -> Iterator[tuple[str, bytes]]:
+        if self._entries:
+            self.flush_chunk(force=True)
+        paths = list(self._chunks)
+        created: list[Path] = []
+        try:
+            level = 0
+            while len(paths) > self.merge_fan_in:
+                next_paths: list[Path] = []
+                for start in range(0, len(paths), self.merge_fan_in):
+                    output = self._chunk_dir / (
+                        f"merge-{level:04d}-{start // self.merge_fan_in:08d}.cas"
+                    )
+                    self._merge_group(paths[start:start + self.merge_fan_in], output)
+                    created.append(output)
+                    next_paths.append(output)
+                for path in paths:
+                    if path not in self._chunks:
+                        path.unlink(missing_ok=True)
+                paths, level = next_paths, level + 1
+            with ExitStack() as stack:
+                handles = [stack.enter_context(path.open("rb")) for path in paths]
+                self.peak_open_chunk_streams = max(self.peak_open_chunk_streams, len(handles))
+                yield from self._merge_streams([
+                    self._chunk_entries_from_handle(handle) for handle in handles
+                ])
+        finally:
+            for path in created:
+                path.unlink(missing_ok=True)
+            self._temporary_merges.clear()
+
     def digest(self) -> str:
         digest = hashlib.sha256()
         digest.update(b"{")
@@ -561,19 +637,29 @@ class ChunkedContentAddressedStore(ContentAddressedStore):
         return sum(1 for _ in self.iter_entries_sorted())
 
     @property
+    def active_entry_count(self) -> int:
+        return len(self._entries)
+
+    @property
+    def active_physical_byte_count(self) -> int:
+        return self._physical_bytes
+
+    @property
     def physical_byte_count(self) -> int:
         return sum(len(value) for _, value in self.iter_entries_sorted())
 
     def close(self, *, cleanup: bool = True) -> None:
         if cleanup:
-            for path in self._chunks:
+            for path in (*self._chunks, *self._temporary_merges):
                 path.unlink(missing_ok=True)
             self._chunks.clear()
+            self._temporary_merges.clear()
             try:
                 self._chunk_dir.rmdir()
             except OSError:
                 pass
         self._entries.clear()
+        self._physical_bytes = 0
         self.clear_identity_cache()
 
 
