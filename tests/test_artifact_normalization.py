@@ -8,6 +8,7 @@ import pytest
 
 from ashare_turnaround.scanner.artifacts import (
     ARTIFACT_LAYOUT_VERSION,
+    ChunkedContentAddressedStore,
     ContentAddressedStore,
     assert_lossless_expansion,
     attribute_feature_vector_size,
@@ -224,6 +225,22 @@ def test_direct_object_normalization_does_not_mutate_or_call_vector_as_dict(
         reference
     )
     assert vector.evidence["trend_a"].provenance["metric"] == "synthetic_trend"
+
+
+def test_chunked_store_merges_deduplicates_and_matches_mapping_digest(tmp_path) -> None:
+    memory = ContentAddressedStore()
+    chunked = ChunkedContentAddressedStore(tmp_path / "chunks", chunk_entries=1)
+    for value in ({"kind": "same"}, {"kind": "other"}, {"kind": "same"}):
+        memory.intern(value)
+        chunked.intern(value)
+        chunked.flush_chunk_if_needed()
+
+    assert chunked.chunk_count == 3
+    assert list(chunked.iter_entries_sorted()) == list(memory.iter_entries_sorted())
+    assert chunked.digest() == memory.digest()
+    assert chunked.entry_count == len(memory)
+    chunked.close()
+    assert not (tmp_path / "chunks").exists()
 
 
 def test_canonical_spool_is_copied_verbatim_and_gzip_is_deterministic(tmp_path) -> None:

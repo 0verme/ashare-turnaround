@@ -34,6 +34,7 @@ from ..storage.parquet import RawParquetStore
 from .artifacts import (
     ARTIFACT_LAYOUT_VERSION,
     PIT_REPLAY_ARTIFACT_LAYOUT_VERSION,
+    ChunkedContentAddressedStore,
     ContentAddressedStore,
     content_digest,
     deterministic_replay_digests,
@@ -2552,7 +2553,7 @@ def _run_validation(
     completed: list[dict[str, Any]] = []
     candidate_spool_path: Path | None = None
     candidate_spool_handle = None
-    stream_store_builder: ContentAddressedStore | None = None
+    stream_store_builder: ChunkedContentAddressedStore | None = None
     stream_candidate_digest_map: dict[str, str] = {}
     if stream_output is not None:
         stream_output.mkdir(parents=True, exist_ok=True)
@@ -2565,6 +2566,7 @@ def _run_validation(
                 if candidate_spool_handle is None or stream_store_builder is None:
                     raise RuntimeError("candidate spool or normalized store is closed")
                 normalized = normalize_feature_vector(vector, store=stream_store_builder)
+                stream_store_builder.flush_chunk_if_needed()
                 # The ref-bearing normalized record is the full-scale digest
                 # boundary; do not materialize FeatureVector.as_dict() again.
                 stream_candidate_digest_map[str(vector.ts_code)] = content_digest(normalized)
@@ -2617,7 +2619,7 @@ def _run_validation(
                         / _snapshot_filename(snapshot, compressed=True),
                         payload,
                         candidate_spool_path,
-                        stream_store_builder.entries_view(),
+                        stream_store_builder.iter_entries_sorted(),
                         canonical_spool=True,
                         gzip_level=1,
                     )
@@ -2629,6 +2631,8 @@ def _run_validation(
             if candidate_spool_path is not None:
                 candidate_spool_path.unlink(missing_ok=True)
                 candidate_spool_path = None
+            if stream_store_builder is not None:
+                stream_store_builder.close()
             stream_store_builder = None
             stream_candidate_digest_map = {}
         completed.append(
@@ -2714,7 +2718,9 @@ def _run_validation(
         as_of = target.selected_trading_date
         assert as_of is not None
         if stream_candidates:
-            stream_store_builder = ContentAddressedStore()
+            stream_store_builder = ChunkedContentAddressedStore(
+                stream_output / ".cas", chunk_entries=100
+            )
             stream_candidate_digest_map = {}
         if stream_candidates and candidate_spool_handle is None:
             assert stream_output is not None
@@ -2724,18 +2730,24 @@ def _run_validation(
             diagnostics.candidate_validation_violations.clear()
             candidate_observable_key_cache: dict[str, bool] = {}
             candidate_date_cache: dict[str, pd.Timestamp | None] = {}
-            candidate_safe_container_cache: dict[tuple[int, str], bool] = {}
             candidate_as_of = _normalise_timestamp(as_of, name="as_of_date")
 
             def validate_candidate(vector: FeatureVector) -> tuple[str, ...]:
-                return _validate_replay_vector_pit(
-                    vector,
-                    as_of=candidate_as_of,
-                    benchmark_id=settings.crowding.benchmark.benchmark_id,
-                    observable_key_cache=candidate_observable_key_cache,
-                    date_cache=candidate_date_cache,
-                    safe_container_cache=candidate_safe_container_cache,
-                )
+                # ``safe_container_cache`` is keyed by object id.  It must not
+                # outlive this vector: CPython may reuse an id for a later
+                # candidate after the previous object graph is released.
+                candidate_safe_container_cache: dict[tuple[int, str], bool] = {}
+                try:
+                    return _validate_replay_vector_pit(
+                        vector,
+                        as_of=candidate_as_of,
+                        benchmark_id=settings.crowding.benchmark.benchmark_id,
+                        observable_key_cache=candidate_observable_key_cache,
+                        date_cache=candidate_date_cache,
+                        safe_container_cache=candidate_safe_container_cache,
+                    )
+                finally:
+                    candidate_safe_container_cache.clear()
 
             diagnostics.candidate_validator = validate_candidate
         regime: RegimeResult | None = None
@@ -2814,7 +2826,7 @@ def _run_validation(
                     stream_candidate_digest_map if stream_candidates else None
                 ),
                 provenance_store=(
-                    stream_store_builder.entries_view()
+                    stream_store_builder
                     if stream_candidates and stream_store_builder is not None
                     else None
                 ),
@@ -2861,12 +2873,12 @@ def _run_validation(
                         repeated_candidate_digests if stream_candidates else None
                     ),
                     first_provenance_store=(
-                        stream_store_builder.entries_view()
+                        stream_store_builder
                         if stream_candidates and stream_store_builder is not None
                         else None
                     ),
                     second_provenance_store=(
-                        repeated_store.entries_view() if stream_candidates else None
+                        repeated_store.iter_entries_sorted() if stream_candidates else None
                     ),
                 )
                 del repeated

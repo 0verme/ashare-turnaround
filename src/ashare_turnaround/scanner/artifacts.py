@@ -20,13 +20,14 @@ import base64
 import copy
 import gzip
 import hashlib
+import heapq
 import io
 import json
 import math
 import os
 import tempfile
 import zlib
-from collections.abc import Iterable, Mapping, MutableMapping
+from collections.abc import Iterable, Iterator, Mapping, MutableMapping
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -356,10 +357,28 @@ class ContentAddressedStore:
             for key, value in sorted(self._entries.items())
         }
 
-    def entries_view(self) -> Mapping[str, bytes]:
-        """Return a sorted shallow view for streaming writers."""
+    def iter_entries_sorted(self) -> Iterator[tuple[str, bytes]]:
+        """Yield physical entries in ref order without a second dictionary."""
 
-        return {key: self._entries[key] for key in sorted(self._entries)}
+        for key in sorted(self._entries):
+            yield key, self._entries[key]
+
+    def entries_view(self) -> Mapping[str, bytes]:
+        """Compatibility view for small stores only.
+
+        Production streaming paths use :meth:`iter_entries_sorted`; this
+        method intentionally remains a materialising compatibility API.
+        """
+
+        return dict(self.iter_entries_sorted())
+
+    @property
+    def entry_count(self) -> int:
+        return len(self._entries)
+
+    @property
+    def physical_byte_count(self) -> int:
+        return sum(len(value) for value in self._entries.values())
 
     def __len__(self) -> int:
         return len(self._entries)
@@ -367,6 +386,8 @@ class ContentAddressedStore:
     def clear_identity_cache(self) -> None:
         self._identity_cache.clear()
         self._safe_cache.clear()
+
+    clear_candidate_identity_cache = clear_identity_cache
 
     def _encode_child(self, value: Any) -> Any:
         if _is_container(value):
@@ -445,6 +466,116 @@ class ContentAddressedStore:
 
     def serialized_size(self) -> int:
         return len(serialized_json_bytes(self.entries))
+
+
+class ChunkedContentAddressedStore(ContentAddressedStore):
+    """A bounded-memory CAS backed by sorted temporary chunk files.
+
+    The active chunk has the same implementation and byte contract as the
+    in-memory store.  Flushing moves its physical bytes to a private binary
+    file; final iteration performs a k-way merge and verifies duplicate refs.
+    """
+
+    def __init__(self, directory: str | Path | None = None, *, chunk_entries: int = 100) -> None:
+        if chunk_entries <= 0:
+            raise ValueError("chunk_entries must be positive")
+        super().__init__()
+        self.chunk_entries = int(chunk_entries)
+        self._chunk_dir = Path(directory) if directory is not None else Path(
+            tempfile.mkdtemp(prefix="ashare-cas-")
+        )
+        self._chunk_dir.mkdir(parents=True, exist_ok=True)
+        self._chunks: list[Path] = []
+
+    @property
+    def chunk_count(self) -> int:
+        return len(self._chunks)
+
+    def flush_chunk(self) -> Path | None:
+        if not self._entries:
+            return None
+        path = self._chunk_dir / f"chunk-{len(self._chunks):08d}.cas"
+        with path.open("wb") as handle:
+            for ref, value in self.iter_entries_sorted():
+                handle.write(ref.encode("ascii") + b"\t" + base64.b64encode(value) + b"\n")
+        self._chunks.append(path)
+        self._entries.clear()
+        self.clear_identity_cache()
+        return path
+
+    def flush_chunk_if_needed(self, *, force: bool = False) -> Path | None:
+        if force or len(self._entries) >= self.chunk_entries:
+            return self.flush_chunk()
+        return None
+
+    def _chunk_entries(self, path: Path) -> Iterator[tuple[str, bytes]]:
+        with path.open("rb") as handle:
+            for line in handle:
+                ref, encoded = line.rstrip(b"\n").split(b"\t", 1)
+                yield ref.decode("ascii"), base64.b64decode(encoded)
+
+    def iter_entries_sorted(self) -> Iterator[tuple[str, bytes]]:
+        streams = [self._chunk_entries(path) for path in self._chunks]
+        if self._entries:
+            streams.append(iter(super().iter_entries_sorted()))
+        heap: list[tuple[str, int, bytes]] = []
+        for index, stream in enumerate(streams):
+            try:
+                ref, value = next(stream)
+            except StopIteration:
+                continue
+            heapq.heappush(heap, (ref, index, value))
+        while heap:
+            ref, index, value = heapq.heappop(heap)
+            same = [(index, value)]
+            while heap and heap[0][0] == ref:
+                _, other_index, other_value = heapq.heappop(heap)
+                same.append((other_index, other_value))
+            if any(other_value != value for _, other_value in same):
+                raise ValueError(f"conflicting physical bytes for duplicate ref: {ref}")
+            yield ref, value
+            for stream_index, _ in same:
+                try:
+                    next_ref, next_value = next(streams[stream_index])
+                except StopIteration:
+                    continue
+                heapq.heappush(heap, (next_ref, stream_index, next_value))
+
+    def digest(self) -> str:
+        digest = hashlib.sha256()
+        digest.update(b"{")
+        for index, (ref, value) in enumerate(self.iter_entries_sorted()):
+            if index:
+                digest.update(b",")
+            digest.update(_canonical_safe_bytes(ref))
+            digest.update(b":")
+            digest.update(_physical_store_value_bytes(value))
+        digest.update(b"}")
+        return digest.hexdigest()
+
+    def __len__(self) -> int:
+        return self.entry_count
+
+    @property
+    def entry_count(self) -> int:
+        return sum(1 for _ in self.iter_entries_sorted())
+
+    @property
+    def physical_byte_count(self) -> int:
+        return sum(len(value) for _, value in self.iter_entries_sorted())
+
+    def close(self, *, cleanup: bool = True) -> None:
+        if cleanup:
+            for path in self._chunks:
+                path.unlink(missing_ok=True)
+            self._chunks.clear()
+            try:
+                self._chunk_dir.rmdir()
+            except OSError:
+                pass
+        self._entries.clear()
+        self.clear_identity_cache()
+
 
 
 def _store_argument(
@@ -956,7 +1087,7 @@ def deterministic_replay_digests(
     *,
     input_manifest: Mapping[str, Any] | None = None,
     candidate_vector_digests: Mapping[str, str] | None = None,
-    provenance_store: Mapping[str, Any] | None = None,
+    provenance_store: Mapping[str, Any] | Iterable[tuple[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build stable replay digests independent of timing or object identity."""
 
@@ -988,6 +1119,16 @@ def deterministic_replay_digests(
     diagnostic = _frame_records(component("diagnostic_ranked", []))
     if provenance_store is None:
         provenance_store = {}
+    if provenance_store is not None and hasattr(provenance_store, "digest"):
+        provenance_store_digest = provenance_store.digest()
+    elif isinstance(provenance_store, Mapping):
+        provenance_store_digest = _mapping_content_digest(provenance_store)
+    elif provenance_store is None:
+        provenance_store_digest = _mapping_content_digest({})
+    else:
+        # This compatibility path is for small external iterators only.
+        digest_store = ContentAddressedStore(dict(provenance_store))
+        provenance_store_digest = digest_store.digest()
     return {
         "digest_contract_version": DIGEST_CONTRACT_VERSION,
         "input_manifest_digest": str(manifest.get("manifest_id") or content_digest(manifest)),
@@ -1005,11 +1146,7 @@ def deterministic_replay_digests(
         "formal_ranking_digest": semantic_digest(formal),
         "diagnostic_ranking_digest": semantic_digest(diagnostic),
         "warnings_digest": semantic_digest(list(component("warnings", ()))),
-        "provenance_store_digest": (
-            _mapping_content_digest(provenance_store)
-            if isinstance(provenance_store, Mapping)
-            else content_digest(provenance_store)
-        ),
+        "provenance_store_digest": provenance_store_digest,
     }
 
 
@@ -1457,7 +1594,7 @@ def write_normalized_snapshot_with_streamed_vectors(
     path: str | Path,
     snapshot: Mapping[str, Any],
     spool_path: str | Path,
-    provenance_store: Mapping[str, Any],
+    provenance_store: Mapping[str, Any] | Iterable[tuple[str, Any]],
     *,
     canonical_spool: bool = False,
     gzip_level: int | None = None,
@@ -1535,7 +1672,12 @@ def write_normalized_snapshot_with_streamed_vectors(
 
             def write_store(handle: Any) -> None:
                 handle.write("{")
-                for index, (ref, value) in enumerate(sorted(provenance_store.items())):
+                entries = (
+                    sorted(provenance_store.items())
+                    if isinstance(provenance_store, Mapping)
+                    else provenance_store
+                )
+                for index, (ref, value) in enumerate(entries):
                     if index:
                         handle.write(",")
                     handle.write("\n  ")
@@ -1627,6 +1769,7 @@ __all__ = [
     "PIT_REPLAY_ARTIFACT_LAYOUT_VERSION",
     "DIGEST_CONTRACT_VERSION",
     "ContentAddressedStore",
+    "ChunkedContentAddressedStore",
     "canonical_json",
     "canonical_json_bytes",
     "content_digest",
