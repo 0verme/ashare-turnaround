@@ -8,6 +8,7 @@ import os
 import re
 import time
 from collections.abc import Callable, Iterable, Mapping
+from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
 from contextlib import nullcontext
 from dataclasses import asdict, dataclass, field, replace
 from datetime import date, datetime
@@ -111,6 +112,8 @@ class ReplayDiagnostics:
     candidate_validator: Callable[[FeatureVector], Iterable[str]] | None = None
     candidate_validation_violations: list[str] = field(default_factory=list)
     retain_vectors: bool = True
+    workers: int = 1
+    max_in_flight: int = 2
     started_at: float = field(default_factory=time.perf_counter)
     phases: dict[str, _DiagnosticPhase] = field(default_factory=dict)
     checkpoints: list[dict[str, Any]] = field(default_factory=list)
@@ -125,6 +128,10 @@ class ReplayDiagnostics:
             raise ValueError("diagnostic candidate_limit must be positive")
         if self.checkpoint_every <= 0:
             raise ValueError("diagnostic checkpoint_every must be positive")
+        if self.workers not in {1, 2}:
+            raise ValueError("diagnostic workers must be 1 or 2")
+        if self.max_in_flight < self.workers:
+            raise ValueError("max_in_flight must be at least workers")
         self.peak_rss_bytes = self.current_rss_bytes()
 
     @staticmethod
@@ -204,6 +211,8 @@ class ReplayDiagnostics:
         )
         return {
             "candidate_limit": self.candidate_limit,
+            "workers": self.workers,
+            "max_in_flight": self.max_in_flight,
             "candidate_total": self.candidate_total,
             "candidate_processed": self.candidate_processed,
             "candidate_validation_violation_count": len(
@@ -651,6 +660,111 @@ def _attach_low_attention_evidence(vector: FeatureVector, attention: FeatureVect
     vector.metadata.setdefault("low_attention_v2_source_version", attention.version)
 
 
+
+_CANDIDATE_WORKER_STATE: tuple[Any, ...] | None = None
+
+
+def _compute_replay_candidate(
+    position: int, row: Mapping[str, Any]
+) -> tuple[int, FeatureVector, ScoreResult, dict[str, float]]:
+    """Compute one isolated candidate; payload order is restored by the parent."""
+
+    if _CANDIDATE_WORKER_STATE is None:
+        raise RuntimeError("candidate worker state is not initialized")
+    frames, financial_frames, market, as_of, settings, investable_codes, population = (
+        _CANDIDATE_WORKER_STATE
+    )
+    code = str(row["ts_code"])
+    timings: dict[str, float] = {}
+
+    def measured(name: str, operation: Callable[[], Any]) -> Any:
+        started = time.perf_counter()
+        value = operation()
+        timings[name] = time.perf_counter() - started
+        return value
+
+    financial_context = measured(
+        "candidate.financial_semantic_prepare",
+        lambda: FinancialSemanticContext.prepare(financial_frames, code, as_of),
+    )
+    vector = measured(
+        "candidate.fundamental",
+        lambda: compute_fundamental_features(
+            financial_frames, code, as_of, _semantic_context=financial_context
+        ),
+    )
+    vector.merge(
+        measured(
+            "candidate.trend",
+            lambda: compute_trend_features(
+                financial_frames, code, as_of, _semantic_context=financial_context
+            ),
+        )
+    )
+    vector.merge(
+        measured(
+            "candidate.quality",
+            lambda: compute_quality_features(financial_frames, code, as_of),
+        )
+    )
+    vector.merge(
+        measured("candidate.attention", lambda: compute_attention_features(market, code, as_of))
+    )
+    vector.merge(
+        measured(
+            "candidate.crowding",
+            lambda: compute_crowding_features(
+                market,
+                code,
+                as_of,
+                config=settings.crowding,
+                calendar_frame=frames.get("trade_cal"),
+                disclosure_frame=frames.get("disclosure_date"),
+                benchmark_frame=frames.get("index_daily"),
+                benchmark_definition_frame=frames.get("index_basic"),
+                suspension_frame=frames.get("suspend_d"),
+            ),
+        )
+    )
+    low_attention = measured(
+        "candidate.low_attention",
+        lambda: compute_low_attention_v2(
+            market,
+            code,
+            as_of,
+            config=settings.low_attention,
+            list_date=row.get("list_date"),
+            investable_codes=investable_codes,
+            population_frame=population,
+        ),
+    )
+    _attach_low_attention_evidence(vector, low_attention)
+    score = measured(
+        "candidate.scoring",
+        lambda: score_feature_vector(
+            vector,
+            config=settings.score,
+            evidence_config=settings.evidence_confidence,
+        ),
+    )
+    cache = current_replay_cache()
+    if cache is not None:
+        cache.clear_candidate_state()
+    return position, vector, score, timings
+
+
+def _record_worker_timings(
+    diagnostics: ReplayDiagnostics | None, timings: Mapping[str, float]
+) -> None:
+    if diagnostics is None:
+        return
+    for name, elapsed in timings.items():
+        phase = diagnostics.phases.setdefault(name, _DiagnosticPhase())
+        phase.calls += 1
+        phase.total_seconds += elapsed
+        phase.max_seconds = max(phase.max_seconds, elapsed)
+
+
 def run_replay_frames(
     frames: dict[str, pd.DataFrame],
     *,
@@ -689,6 +803,7 @@ def _run_replay_frames_with_cache(
 ) -> ReplayResult:
     """Run the scanner against supplied frames, making tests independent of I/O."""
 
+    global _CANDIDATE_WORKER_STATE
     settings = config or ReplayConfig()
     parsed = pd.to_datetime(as_of_date, errors="coerce")
     if pd.isna(parsed):
@@ -734,66 +849,24 @@ def _run_replay_frames_with_cache(
         if diagnostics.candidate_limit is not None:
             candidate_limit = min(candidate_total, diagnostics.candidate_limit)
         diagnostics.start_candidates(candidate_total)
-    for candidate_position, (_, row) in enumerate(universe.included.iterrows()):
-        if candidate_position >= candidate_limit:
-            break
-        code = str(row["ts_code"])
-        with _diagnostic_phase(diagnostics, "candidate.financial_semantic_prepare"):
-            financial_context = FinancialSemanticContext.prepare(
-                financial_frames, code, as_of
-            )
-        with _diagnostic_phase(diagnostics, "candidate.fundamental"):
-            vector = compute_fundamental_features(
-                financial_frames,
-                code,
-                as_of,
-                _semantic_context=financial_context,
-            )
-        with _diagnostic_phase(diagnostics, "candidate.trend"):
-            vector.merge(
-                compute_trend_features(
-                    financial_frames,
-                    code,
-                    as_of,
-                    _semantic_context=financial_context,
-                )
-            )
-        with _diagnostic_phase(diagnostics, "candidate.quality"):
-            vector.merge(compute_quality_features(financial_frames, code, as_of))
-        with _diagnostic_phase(diagnostics, "candidate.attention"):
-            vector.merge(compute_attention_features(market, code, as_of))
-        with _diagnostic_phase(diagnostics, "candidate.crowding"):
-            vector.merge(
-                compute_crowding_features(
-                    market,
-                    code,
-                    as_of,
-                    config=settings.crowding,
-                    calendar_frame=frames.get("trade_cal"),
-                    disclosure_frame=frames.get("disclosure_date"),
-                    benchmark_frame=frames.get("index_daily"),
-                    benchmark_definition_frame=frames.get("index_basic"),
-                    suspension_frame=frames.get("suspend_d"),
-                )
-            )
-        with _diagnostic_phase(diagnostics, "candidate.low_attention"):
-            low_attention = compute_low_attention_v2(
-                market,
-                code,
-                as_of,
-                config=settings.low_attention,
-                list_date=row.get("list_date"),
-                investable_codes=investable_codes,
-                population_frame=low_attention_population,
-            )
-            _attach_low_attention_evidence(vector, low_attention)
-        with _diagnostic_phase(diagnostics, "candidate.scoring"):
-            score = score_feature_vector(
-                vector,
-                config=settings.score,
-                evidence_config=settings.evidence_confidence,
-            )
-            scores.append(score)
+    candidate_rows = [
+        (position, row.to_dict())
+        for position, (_, row) in enumerate(universe.included.head(candidate_limit).iterrows())
+    ]
+    _CANDIDATE_WORKER_STATE = (
+        frames,
+        financial_frames,
+        market,
+        as_of,
+        settings,
+        investable_codes,
+        low_attention_population,
+    )
+
+    def consume(payload: tuple[int, FeatureVector, ScoreResult, dict[str, float]]) -> None:
+        _, vector, score, timings = payload
+        _record_worker_timings(diagnostics, timings)
+        scores.append(score)
         if diagnostics is not None and diagnostics.candidate_sink is not None:
             with _diagnostic_phase(diagnostics, "artifact_serialization"):
                 diagnostics.candidate_sink(vector, score)
@@ -805,13 +878,35 @@ def _run_replay_frames_with_cache(
         if diagnostics is None or diagnostics.retain_vectors:
             vectors.append(vector)
         elif diagnostics.candidate_sink is not None and not vectors:
-            # Keep one representative for manual-review checks; the sink
-            # carries the complete vector array for streamed artifacts.
             vectors.append(vector)
         if diagnostics is not None:
             diagnostics.record_candidate(len(scores))
-        if cache is not None:
-            cache.clear_candidate_state()
+
+    workers = diagnostics.workers if diagnostics is not None else 1
+    if workers == 1:
+        for position, row in candidate_rows:
+            consume(_compute_replay_candidate(position, row))
+    else:
+        max_in_flight = diagnostics.max_in_flight if diagnostics is not None else workers
+        pending: dict[Any, int] = {}
+        completed: dict[int, tuple[int, FeatureVector, ScoreResult, dict[str, float]]] = {}
+        next_submit = 0
+        next_consume = 0
+        with ProcessPoolExecutor(max_workers=workers) as executor:
+            while next_consume < len(candidate_rows):
+                while next_submit < len(candidate_rows) and len(pending) < max_in_flight:
+                    position, row = candidate_rows[next_submit]
+                    future = executor.submit(_compute_replay_candidate, position, row)
+                    pending[future] = position
+                    next_submit += 1
+                done, _ = wait(pending, return_when=FIRST_COMPLETED)
+                for future in done:
+                    position = pending.pop(future)
+                    completed[position] = future.result()
+                while next_consume in completed:
+                    consume(completed.pop(next_consume))
+                    next_consume += 1
+    _CANDIDATE_WORKER_STATE = None
     if diagnostics is not None:
         diagnostics.record_candidate(len(scores), force=True)
         diagnostics.finish_candidates()

@@ -69,11 +69,63 @@ parallel production path was added. The measured bounded speedup would still
 project an integrated full run above 7,200 seconds once parent serialization
 and PIT work are included.
 
+## Endpoint batching and bounded replay follow-up
+
+The next round introduced immutable, candidate-local `PreparedFinancialRow`
+and `PreparedComparableSeries` objects. YoY/QoQ prepare the semantic index and
+row evidence once per selected series, while TTM prepares one rolling endpoint
+table and uses scalar fallback for ambiguous, revision, mismatch, and missing
+paths. The public scalar functions remain the reference implementations.
+Prepared objects are compute-only and do not change the artifact schema.
+
+A real financial cap=20 cProfile (deliberately biased toward the longest
+histories) attributed 325.65 growth constructions and 596.55 trend observation
+constructions per candidate. Batch dispatch reduced scalar
+`match_comparable_period` to 18.5 and scalar `ttm_from_series` to 11.55 calls per
+candidate in that sample; the remaining scalar calls are fail-closed fallback
+paths. Prepared references recursively equal scalar references. Fresh result
+references preserve the pre-existing artifact object-sharing layout.
+
+Detached `8e6731a` versus the new serial path over the same real cap=10 was
+byte-identical after gzip decompression (SHA-256
+`d76589c22165442ef1f8256a5c09a7a07e0eae8ba4018ba9e332d52f3d60cee0`).
+The current workers=1 and workers=2 cap=10 artifacts had the same digest as
+well. This covers full normalized vectors/evidence, scores, formal and
+diagnostic ranking, provenance store, and `pit-replay-digests-v2`.
+
+The final serial cap=100 measured 301.078 s wall, 104.772 s fixed overhead,
+1.9631 s candidate wall, and 1.1712 s feature CPU per candidate. Fundamental
+and trend were 0.1996 and 0.6742 s/candidate; PIT and serialization were 0.1048
+and 0.4258 s/candidate. This meets the updated 1.18 s useful single-thread
+feature threshold.
+
+Replay diagnostics now optionally use exactly two forked workers with two
+in-flight candidates. Workers have isolated candidate caches; the parent
+restores input order and performs artifact serialization/PIT validation. No
+worker shares a mutable content-addressed store, and at most two completed
+payloads can be pending.
+
+The final production gzip-1 cap=250 workers=2 run measured 415.552 s wall,
+117.182 s fixed overhead, 298.371 s candidate-loop time, and 1.1935 s candidate
+wall. The projected full wall is 6,206.3 s for 5,102 candidates. The artifact
+was 173,232,467 bytes, projecting to 3.293 GiB. PIT violations and failed
+snapshots were zero.
+
+`smaps_rollup` sampling covered the parent and both workers. Peak summed RSS,
+PSS, and private memory were 5,786,004 KiB, 3,206,800 KiB, and 1,906,816 KiB
+while all three processes were alive. Parent post-worker private high-water was
+2,922,076 KiB. MemAvailable stayed at or above 9,690,872 KiB and ended only
+52,672 KiB below its pre-run value. Process Swap remained zero. System counters
+showed 6,309 pages (24.6 MiB) swap-in and zero swap-out, with no sustained swap
+pressure. PSS/private, rather than summed fork RSS, therefore support the
+bounded-memory decision.
+
+All financial datasets are consumed by the combined fundamental/trend path, so
+lazy `FinancialSemanticContext` canonicalization showed no real integrated
+saving and was not introduced. RAW files were neither downloaded nor modified.
+
 ## Decision
 
-**BLOCKED.** Semantic equivalence, PIT/determinism, artifact-size, and
-single-process RSS gates remain passing, but feature compute is about 1.49
-s/candidate versus the 0.8 s target. A conservative integrated projection is
-about 10.3--10.6 ks single-threaded; bounded two-worker feasibility remains
-above the runtime gate and is not comfortably within the memory gate. No
-cap=250 or full 2025-06 run was performed.
+**READY_FOR_FULL_SMOKE.** Semantic equivalence, PIT, determinism, artifact size,
+memory, swap-pressure, and projected-wall gates pass. Candidate caps remain
+strictly diagnostic-only. No full 2025-06 replay was run in this round.

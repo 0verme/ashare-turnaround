@@ -15,6 +15,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from numbers import Real
+from types import MappingProxyType
 from typing import Any
 
 import pandas as pd
@@ -1168,6 +1169,213 @@ class PeriodMatch:
         }
 
 
+@dataclass(frozen=True, slots=True)
+class PreparedFinancialRow:
+    """Immutable candidate-local row metadata used only by batch computation."""
+
+    row: Mapping[str, Any]
+    identity: PeriodIdentity
+    semantic_key: tuple[Any, ...] | None
+    availability: pd.Timestamp | None
+    reference: SourceReference
+    value: float | None
+    raw_value: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedComparableSeries:
+    """One-pass semantic index and evidence objects for an endpoint series."""
+
+    frame: pd.DataFrame = field(repr=False, compare=False)
+    dataset: str
+    value_column: str
+    rows: tuple[PreparedFinancialRow, ...]
+    semantic_index: Mapping[tuple[Any, ...], tuple[int, ...]] = field(repr=False)
+    economic_index: Mapping[tuple[str, int, int], tuple[int, ...]] = field(repr=False)
+    version_index: Mapping[str, int] = field(repr=False)
+
+    @classmethod
+    def prepare(
+        cls, frame: pd.DataFrame, *, dataset: str, value_column: str
+    ) -> PreparedComparableSeries:
+        prepared = _prepared_frame(dataset, frame)
+        rows: list[PreparedFinancialRow] = []
+        positions: dict[tuple[Any, ...], list[int]] = {}
+        economic_positions: dict[tuple[str, int, int], list[int]] = {}
+        versions: dict[str, int] = {}
+        fields = (value_column,)
+        for position, record in enumerate(prepared.to_dict(orient="records")):
+            immutable = MappingProxyType(record)
+            identity = period_identity(record, dataset=dataset)
+            key = _semantic_period_key(record, dataset=dataset)
+            reference = _source_reference(
+                record, dataset=dataset, fields=fields, value_column=value_column
+            )
+            rows.append(
+                PreparedFinancialRow(
+                    row=immutable,
+                    identity=identity,
+                    semantic_key=key,
+                    availability=_row_available(record),
+                    reference=reference,
+                    value=_numeric(record.get(value_column)),
+                    raw_value=_numeric(
+                        record.get("comparable_raw_value", record.get(value_column))
+                    ),
+                )
+            )
+            if key is not None:
+                positions.setdefault(key, []).append(position)
+                economic_positions.setdefault(key[:3], []).append(position)
+            version = identity.source_version
+            if version is not None and version not in versions:
+                versions[version] = position
+        return cls(
+            frame=prepared,
+            dataset=dataset,
+            value_column=value_column,
+            rows=tuple(rows),
+            semantic_index=MappingProxyType(
+                {key: tuple(value) for key, value in positions.items()}
+            ),
+            economic_index=MappingProxyType(
+                {key: tuple(value) for key, value in economic_positions.items()}
+            ),
+            version_index=MappingProxyType(versions),
+        )
+
+    def row_for(self, current: Mapping[str, Any]) -> PreparedFinancialRow | None:
+        version = current.get("source_version_identity")
+        if not _is_missing(version):
+            position = self.version_index.get(str(version))
+            if position is not None:
+                return self.rows[position]
+        return None
+
+
+def _known_batch_match(
+    current: PreparedFinancialRow,
+    comparison: PreparedFinancialRow,
+    *,
+    kind: str,
+    dataset: str,
+    value_column: str,
+) -> PeriodMatch:
+    # Keep serialized object-sharing shape identical to the scalar reference.
+    # Prepared references remain available for compute-only callers, but each
+    # result owns the same fresh reference objects that scalar matching owns.
+    current_reference = _source_reference(
+        current.row, dataset=dataset, fields=(value_column,), value_column=value_column
+    )
+    comparison_reference = _source_reference(
+        comparison.row, dataset=dataset, fields=(value_column,), value_column=value_column
+    )
+    return PeriodMatch(
+        status="known",
+        reason=None,
+        comparison_kind=kind,
+        current_identity=current.identity,
+        comparison_identity=comparison.identity,
+        current_value=current.value,
+        comparison_value=comparison.value,
+        current_raw_value=current.raw_value,
+        comparison_raw_value=comparison.raw_value,
+        current_reference=current_reference,
+        comparison_reference=comparison_reference,
+        current_row=current.row,
+        comparison_row=comparison.row,
+    )
+
+
+def match_comparable_period_series(
+    history: pd.DataFrame,
+    currents: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...],
+    *,
+    comparison: str,
+    dataset: str = "income",
+    value_column: str,
+    as_of_date: str | date | datetime | pd.Timestamp | None = None,
+    prepared_series: PreparedComparableSeries | None = None,
+) -> tuple[PeriodMatch, ...]:
+    """Batch equivalent of scalar matching for a complete endpoint series."""
+
+    kind = comparison.lower()
+    prepared = prepared_series or PreparedComparableSeries.prepare(
+        history, dataset=dataset, value_column=value_column
+    )
+    as_of = _as_of_timestamp(as_of_date)
+    output: list[PeriodMatch] = []
+    for current_map in currents:
+        current = prepared.row_for(current_map)
+        if current is None or kind not in {"yoy", "qoq"} or not current.identity.is_known:
+            output.append(match_comparable_period(
+                prepared.frame, current_map, comparison=kind, dataset=dataset,
+                value_column=value_column, as_of_date=as_of_date,
+            ))
+            continue
+        identity = current.identity
+        if as_of is not None and (
+            current.availability is None or current.availability > as_of
+        ):
+            output.append(match_comparable_period(
+                prepared.frame, current_map, comparison=kind, dataset=dataset,
+                value_column=value_column, as_of_date=as_of_date,
+            ))
+            continue
+        if (
+            kind == "qoq"
+            and identity.duration_semantics == CUMULATIVE_YTD
+            and dataset.removesuffix("_vip") in {"income", "cashflow"}
+        ):
+            output.append(match_comparable_period(
+                prepared.frame, current_map, comparison=kind, dataset=dataset,
+                value_column=value_column, as_of_date=as_of_date,
+            ))
+            continue
+        if kind == "yoy":
+            target_year, target_quarter = identity.fiscal_year - 1, identity.quarter
+        elif identity.quarter > 1:
+            target_year, target_quarter = identity.fiscal_year, identity.quarter - 1
+        else:
+            target_year, target_quarter = identity.fiscal_year - 1, 4
+        key = (
+            str(current.row.get("ts_code", "")), target_year, target_quarter,
+            identity.duration_semantics, identity.report_family, identity.statement_type,
+            identity.scope, identity.unit, identity.accounting_semantics,
+        )
+        positions = prepared.semantic_index.get(key)
+        if positions is None or len(positions) != 1:
+            output.append(match_comparable_period(
+                prepared.frame, current_map, comparison=kind, dataset=dataset,
+                value_column=value_column, as_of_date=as_of_date,
+            ))
+            continue
+        matched = prepared.rows[positions[0]]
+        visible_at = as_of or current.availability
+        if (
+            str(matched.row.get("comparable_status", "known")) != "known"
+            or (visible_at is not None and matched.availability is None)
+            or (visible_at is not None and matched.availability > visible_at)
+            or current.value is None
+            or matched.value is None
+        ):
+            output.append(match_comparable_period(
+                prepared.frame, current_map, comparison=kind, dataset=dataset,
+                value_column=value_column, as_of_date=as_of_date,
+            ))
+            continue
+        output.append(
+            _known_batch_match(
+                current,
+                matched,
+                kind=kind,
+                dataset=dataset,
+                value_column=value_column,
+            )
+        )
+    return tuple(output)
+
+
 def match_comparable_period(
     history: pd.DataFrame,
     current: pd.Series | Mapping[str, Any] | int,
@@ -2086,6 +2294,145 @@ def ttm_from_series(
     )
 
 
+def ttm_from_series_batch(
+    series: pd.DataFrame,
+    *,
+    dataset: str,
+    value_column: str = "comparable_value",
+    ends: list[Mapping[str, Any]] | tuple[Mapping[str, Any], ...],
+    as_of_date: str | date | datetime | pd.Timestamp | None = None,
+    metric: str = "ttm",
+    prepared_series: PreparedComparableSeries | None = None,
+) -> tuple[DerivedMetric, ...]:
+    """Build all rolling-four-quarter endpoints from one prepared index."""
+
+    prepared = prepared_series or PreparedComparableSeries.prepare(
+        series, dataset=dataset, value_column=value_column
+    )
+    as_of = _as_of_timestamp(as_of_date)
+    source_field_values = tuple(
+        dict.fromkeys(
+            str(value)
+            for value in prepared.frame.get(
+                "comparable_source_field", pd.Series(dtype="string")
+            )
+            if not _is_missing(value)
+        )
+    )
+    source_field = source_field_values[0] if len(source_field_values) == 1 else value_column
+    output: list[DerivedMetric] = []
+    for end_map in ends:
+        end = prepared.row_for(end_map)
+        selected_positions: list[int] = []
+        if end is not None and end.identity.is_known:
+            identity = end.identity
+            if (
+                identity.duration_semantics == SINGLE_QUARTER
+                and identity.fiscal_year is not None
+                and identity.quarter is not None
+                and not (
+                    as_of is not None
+                    and (end.availability is None or end.availability > as_of)
+                )
+            ):
+                semantic_suffix = (
+                    identity.duration_semantics,
+                    identity.report_family,
+                    identity.statement_type,
+                    identity.scope,
+                    identity.unit,
+                    identity.accounting_semantics,
+                )
+                code = str(end.row.get("ts_code", ""))
+                end_index = identity.fiscal_year * 4 + identity.quarter - 1
+                for offset in range(3, -1, -1):
+                    index = end_index - offset
+                    economic_key = (code, index // 4, index % 4 + 1)
+                    positions = prepared.semantic_index.get(
+                        (*economic_key, *semantic_suffix)
+                    )
+                    if positions is None or len(positions) != 1:
+                        selected_positions = []
+                        break
+                    row = prepared.rows[positions[0]]
+                    visible_at = as_of or end.availability
+                    if (
+                        str(row.row.get("comparable_status", "known")) != "known"
+                        or row.value is None
+                        or (visible_at is not None and row.availability is None)
+                        or (visible_at is not None and row.availability > visible_at)
+                    ):
+                        selected_positions = []
+                        break
+                    selected_positions.append(positions[0])
+        if len(selected_positions) != 4 or end is None:
+            output.append(
+                ttm_from_series(
+                    prepared.frame,
+                    dataset=dataset,
+                    value_column=value_column,
+                    end=end_map,
+                    as_of_date=as_of_date,
+                    metric=metric,
+                )
+            )
+            continue
+        selected = [prepared.rows[position] for position in selected_positions]
+        endpoint_references = tuple(
+            _source_reference(
+                prepared.rows[position].row,
+                dataset=dataset,
+                fields=(source_field,),
+                value_column=value_column,
+            )
+            for position in selected_positions
+        )
+        records = tuple(
+            record
+            for reference in endpoint_references
+            for record in reference.source_chain
+        )
+        versions = tuple(
+            dict.fromkeys(
+                record.source_version for record in records if record.source_version is not None
+            )
+        )
+        availability = tuple(
+            dict.fromkeys(
+                record.availability_date
+                for record in records
+                if record.availability_date is not None
+            )
+        )
+        source_periods = tuple(
+            row.identity.report_period
+            for row in selected
+            if row.identity.report_period is not None
+        )
+        output.append(
+            DerivedMetric(
+                metric=metric,
+                value=sum(float(row.value) for row in selected if row.value is not None),
+                status="known",
+                current_identity=end.identity,
+                current_raw_value=end.raw_value,
+                period_semantics=SINGLE_QUARTER,
+                source_datasets=(dataset,),
+                source_fields=(source_field,),
+                source_versions=versions,
+                availability_dates=availability,
+                source_chain=records,
+                provenance={
+                    "ttm_end_period": end.identity.as_dict(),
+                    "source_quarters": list(source_periods),
+                    "source_versions": list(versions),
+                    "availability_dates": list(availability),
+                },
+            )
+        )
+    return tuple(output)
+
+
 def validated_single_quarter_series(
     frame: pd.DataFrame,
     value_column: str,
@@ -2512,6 +2859,8 @@ __all__ = [
     "POINT_IN_TIME",
     "PeriodIdentity",
     "PeriodMatch",
+    "PreparedComparableSeries",
+    "PreparedFinancialRow",
     "SINGLE_QUARTER",
     "SourceRecord",
     "SourceReference",
@@ -2523,8 +2872,10 @@ __all__ = [
     "margin_from_row",
     "margin_yoy_from_match",
     "match_comparable_period",
+    "match_comparable_period_series",
     "period_identity",
     "quarterize_financial_frame",
     "ttm_from_series",
+    "ttm_from_series_batch",
     "validated_single_quarter_series",
 ]

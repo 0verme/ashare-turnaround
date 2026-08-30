@@ -20,11 +20,12 @@ import pandas as pd
 from ..pit.comparable import (
     COMPARABLE_PERIOD_CONTRACT_VERSION,
     DerivedMetric,
+    PreparedComparableSeries,
     growth_from_match,
     margin_from_row,
-    match_comparable_period,
+    match_comparable_period_series,
     period_identity,
-    ttm_from_series,
+    ttm_from_series_batch,
 )
 from ..replay_cache import current_replay_cache
 from ..scanner.contracts import TURNAROUND_TREND_CONTRACT_VERSION, FeatureVector
@@ -1184,15 +1185,16 @@ def _yoy_observations(
             status=UNKNOWN_STATUS,
         )
     observations: list[ValidatedTrendObservation] = []
-    for row in source.to_dict(orient="records"):
-        match = match_comparable_period(
-            history,
-            row,
-            comparison="yoy",
-            dataset="income",
-            value_column=field_name,
-            as_of_date=as_of_date,
-        )
+    rows = source.to_dict(orient="records")
+    matches = match_comparable_period_series(
+        history,
+        rows,
+        comparison="yoy",
+        dataset="income",
+        value_column=field_name,
+        as_of_date=as_of_date,
+    )
+    for row, match in zip(rows, matches, strict=True):
         result = growth_from_match(match, metric=metric)
         observations.append(
             _result_observation(
@@ -1213,6 +1215,7 @@ def _qoq_observations(
     metric: str,
     as_of_date: str | date | datetime | pd.Timestamp,
     prepared_quarters: tuple[pd.DataFrame, Mapping[str, str]] | None = None,
+    prepared_endpoints: PreparedComparableSeries | None = None,
 ) -> list[ValidatedTrendObservation]:
     if field_name is None:
         return [_invalid_observation(metric=metric, reason="missing_value")]
@@ -1258,15 +1261,17 @@ def _qoq_observations(
             reason=series_reason,
         )
     observations: list[ValidatedTrendObservation] = []
-    for row in source.to_dict(orient="records"):
-        match = match_comparable_period(
-            source,
-            row,
-            comparison="qoq",
-            dataset="income",
-            value_column="comparable_value",
-            as_of_date=as_of_date,
-        )
+    rows = source.to_dict(orient="records")
+    matches = match_comparable_period_series(
+        source,
+        rows,
+        comparison="qoq",
+        dataset="income",
+        value_column="comparable_value",
+        as_of_date=as_of_date,
+        prepared_series=prepared_endpoints,
+    )
+    for row, match in zip(rows, matches, strict=True):
         result = growth_from_match(match, metric=metric)
         observations.append(
             _result_observation(
@@ -1331,6 +1336,7 @@ def _ttm_observations(
     metric: str,
     as_of_date: str | date | datetime | pd.Timestamp,
     prepared_quarters: tuple[pd.DataFrame, Mapping[str, str]] | None = None,
+    prepared_endpoints: PreparedComparableSeries | None = None,
 ) -> list[ValidatedTrendObservation]:
     if field_name is None:
         return [_invalid_observation(metric=metric, reason="missing_value")]
@@ -1374,15 +1380,17 @@ def _ttm_observations(
             reason=series_reason,
         )
     observations: list[ValidatedTrendObservation] = []
-    for row in source.to_dict(orient="records"):
-        result = ttm_from_series(
-            source,
-            dataset="income",
-            value_column="comparable_value",
-            end=row,
-            as_of_date=as_of_date,
-            metric=metric,
-        )
+    rows = source.to_dict(orient="records")
+    results = ttm_from_series_batch(
+        source,
+        dataset="income",
+        value_column="comparable_value",
+        ends=rows,
+        as_of_date=as_of_date,
+        metric=metric,
+        prepared_series=prepared_endpoints,
+    )
+    for row, result in zip(rows, results, strict=True):
         observations.append(
             _result_observation(
                 result,

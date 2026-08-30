@@ -335,6 +335,7 @@ def _parser() -> argparse.ArgumentParser:
     replay_profile.add_argument("--as-of", required=True)
     replay_profile.add_argument("--top-n", type=int, default=20)
     replay_profile.add_argument("--candidate-cap", type=int, default=100)
+    replay_profile.add_argument("--workers", type=int, choices=(1, 2), default=1)
     replay_profile.add_argument("--output", default="data/reports/replay-profile")
 
     scan = subparsers.add_parser("scan", help="run and persist the daily Top-N scanner")
@@ -999,7 +1000,12 @@ def _replay_profile(args: argparse.Namespace) -> int:
     try:
         as_of = pd.Timestamp(args.as_of).normalize()
         month = as_of.strftime("%Y-%m")
-        diagnostics = ReplayDiagnostics(candidate_limit=args.candidate_cap, checkpoint_every=100)
+        diagnostics = ReplayDiagnostics(
+            candidate_limit=args.candidate_cap,
+            checkpoint_every=100,
+            workers=args.workers,
+            max_in_flight=max(2, args.workers),
+        )
         result = run_replay_validation(
             args.data_dir,
             start=month,

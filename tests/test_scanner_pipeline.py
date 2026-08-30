@@ -11,7 +11,7 @@ from ashare_turnaround.features import (
     compute_trend_features,
 )
 from ashare_turnaround.scanner.contracts import FeatureVector
-from ashare_turnaround.scanner.replay import ReplayConfig, run_replay_frames
+from ashare_turnaround.scanner.replay import ReplayConfig, ReplayDiagnostics, run_replay_frames
 from ashare_turnaround.scanner.report import candidate_report, candidate_report_markdown
 from ashare_turnaround.scanner.score import ablation_score_configs, score_feature_vector
 from ashare_turnaround.scanner.universe import UniverseConfig, build_investable_universe
@@ -196,6 +196,44 @@ def test_historical_universe_keeps_a_later_delisted_security_before_delist_date(
     assert before.included["ts_code"].tolist() == [CODE]
     assert after.included.empty
     assert after.excluded[0].reason == "delisted_by_as_of"
+
+
+def test_workers_two_restores_order_and_matches_serial_payload() -> None:
+    frames = _frames()
+    codes = ("600000.SH", "000001.SZ", "300001.SZ")
+    for dataset in ("income", "balancesheet", "cashflow", "daily", "daily_basic"):
+        source = frames[dataset]
+        frames[dataset] = pd.concat(
+            [source.assign(ts_code=code) for code in codes], ignore_index=True
+        )
+    frames["stock_basic"] = pd.DataFrame(
+        {
+            "ts_code": list(codes),
+            "symbol": [code.split(".")[0] for code in codes],
+            "name": [f"Synthetic {index}" for index in range(len(codes))],
+            "list_date": ["20100101"] * len(codes),
+            "list_status": ["L"] * len(codes),
+        }
+    )
+    config = ReplayConfig(top_n=5, universe=UniverseConfig(min_financial_periods=4))
+    serial = run_replay_frames(
+        frames,
+        as_of_date=AS_OF,
+        config=config,
+        diagnostics=ReplayDiagnostics(workers=1),
+    )
+    parallel = run_replay_frames(
+        frames,
+        as_of_date=AS_OF,
+        config=config,
+        diagnostics=ReplayDiagnostics(workers=2, max_in_flight=2),
+    )
+
+    assert [vector.ts_code for vector in parallel.vectors] == [
+        vector.ts_code for vector in serial.vectors
+    ]
+    assert parallel.artifact_dict() == serial.artifact_dict()
+    assert parallel.deterministic_digests() == serial.deterministic_digests()
 
 
 def test_replay_score_and_candidate_report_are_deterministic() -> None:
