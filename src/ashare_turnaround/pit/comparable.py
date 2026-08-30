@@ -733,7 +733,8 @@ def period_identity(row: Mapping[str, Any], dataset: str = "income") -> PeriodId
         "duration_semantics",
         "source_version_identity",
     }
-    if not required_identity.issubset(row):
+    row_keys = row.index if isinstance(row, pd.Series) else row
+    if not required_identity.issubset(row_keys):
         row = annotate_period_identity(dataset, pd.DataFrame([dict(row)])).iloc[0].to_dict()
     cache = current_replay_cache()
     version_value = row.get("source_version_identity")
@@ -2143,16 +2144,28 @@ def validated_single_quarter_series(
             )
             if column in output.columns
         ]
-        selected_indices: list[Any] = []
-        for _, group in output.groupby(identity_columns, dropna=False, sort=False):
-            selected, _ = _select_visible_candidate(
-                group,
-                visible_at=as_of,
-                value_column=value_column,
+        if not output.duplicated(identity_columns, keep=False).any():
+            # Canonical candidate histories normally contain one selected
+            # source version per semantic identity.  Preserve the singleton
+            # visibility rule without constructing thousands of one-row
+            # groupby DataFrames.
+            available = normalize_date_series(output["actual_available_date"])
+            output = output.loc[available.notna() & available.le(as_of)].reset_index(
+                drop=True
             )
-            if selected is not None:
-                selected_indices.append(selected.name)
-        output = output.loc[selected_indices].reset_index(drop=True)
+        else:
+            # Revisions/tied versions can be value-column dependent; retain
+            # the exact fail-closed selector for that uncommon path.
+            selected_indices: list[Any] = []
+            for _, group in output.groupby(identity_columns, dropna=False, sort=False):
+                selected, _ = _select_visible_candidate(
+                    group,
+                    visible_at=as_of,
+                    value_column=value_column,
+                )
+                if selected is not None:
+                    selected_indices.append(selected.name)
+            output = output.loc[selected_indices].reset_index(drop=True)
     output["source_duration_semantics"] = output["duration_semantics"]
     output["source_fiscal_period"] = output["fiscal_period"]
     output["source_quarter"] = output["quarter"]
@@ -2250,9 +2263,10 @@ def validated_single_quarter_series(
         for column, result in payload.items():
             output.at[index, column] = result
 
+    prepared_records = output.to_dict(orient="records") if as_of is not None else None
     row_iterator = (
-        zip(output.index, output.to_dict(orient="records"))
-        if as_of is not None
+        zip(output.index, prepared_records, strict=True)
+        if prepared_records is not None
         else output.iterrows()
     )
     for index, row in row_iterator:
@@ -2296,10 +2310,13 @@ def validated_single_quarter_series(
             set_result(index, None, "unknown", "unsupported_report_period", [])
             continue
         predecessor_period = {1: None, 2: "Q1", 3: "H1", 4: "Q3"}[identity.quarter]
-        if identity.quarter == 1:
-            predecessor = None
-        else:
-            if as_of is not None and fast_period_index is not None:
+        predecessor_row: Mapping[str, Any] | None = None
+        if identity.quarter > 1:
+            if (
+                as_of is not None
+                and fast_period_index is not None
+                and prepared_records is not None
+            ):
                 key = (
                     str(row.get("ts_code")),
                     str(identity.fiscal_year),
@@ -2312,7 +2329,6 @@ def validated_single_quarter_series(
                     str(identity.accounting_semantics),
                 )
                 positions = fast_period_index.get(key, ())
-                predecessor = output.iloc[list(positions)]
                 same_positions = (
                     fast_economic_index.get(
                         (
@@ -2325,7 +2341,24 @@ def validated_single_quarter_series(
                     if fast_economic_index is not None
                     else ()
                 )
-                same_period = output.iloc[list(same_positions)]
+                same_rows = [prepared_records[position] for position in same_positions]
+                if len(positions) == 1:
+                    predecessor_row = prepared_records[positions[0]]
+                elif len(positions) > 1:
+                    predecessor = output.iloc[list(positions)]
+                    selected, selection_reason = _select_visible_candidate(
+                        predecessor, visible_at=as_of, value_column=value_column
+                    )
+                    if selected is None:
+                        set_result(
+                            index,
+                            None,
+                            "unknown",
+                            selection_reason or "ambiguous_period_chain",
+                            [],
+                        )
+                        continue
+                    predecessor_row = selected
             else:
                 predecessor = output.loc[
                     output["ts_code"].astype("string").eq(str(row.get("ts_code")))
@@ -2343,9 +2376,28 @@ def validated_single_quarter_series(
                     & output["fiscal_year"].eq(identity.fiscal_year)
                     & output["fiscal_period"].eq(predecessor_period)
                 ]
-            if predecessor.empty:
+                same_rows = same_period.to_dict(orient="records")
+                if len(predecessor) == 1:
+                    predecessor_row = predecessor.iloc[0]
+                elif len(predecessor) > 1:
+                    selected, selection_reason = _select_visible_candidate(
+                        predecessor,
+                        visible_at=as_of or _row_available(row),
+                        value_column=value_column,
+                    )
+                    if selected is None:
+                        set_result(
+                            index,
+                            None,
+                            "unknown",
+                            selection_reason or "ambiguous_period_chain",
+                            [],
+                        )
+                        continue
+                    predecessor_row = selected
+            if predecessor_row is None:
                 reason = "missing_preceding_cumulative_period"
-                if not same_period.empty:
+                if same_rows:
                     for column, mismatch_reason in (
                         ("duration_semantics", "period_semantics_mismatch"),
                         ("statement_type", "statement_type_mismatch"),
@@ -2354,29 +2406,22 @@ def validated_single_quarter_series(
                         ("report_family", "report_family_mismatch"),
                         ("accounting_semantics", "accounting_semantics_mismatch"),
                     ):
-                        if not same_period[column].eq(identity.__getattribute__(column)).any():
+                        expected = _clean_value(getattr(identity, column))
+                        if not any(
+                            _clean_value(candidate.get(column)) == expected
+                            for candidate in same_rows
+                        ):
                             reason = mismatch_reason
                             break
                 set_result(index, None, "unknown", reason, [])
                 continue
-            if len(predecessor) > 1:
-                visible_at = as_of or _row_available(row)
-                selected, selection_reason = _select_visible_candidate(
-                    predecessor, visible_at=visible_at, value_column=value_column
-                )
-                if selected is None:
-                    set_result(
-                        index, None, "unknown", selection_reason or "ambiguous_period_chain", []
-                    )
-                    continue
-                predecessor = pd.DataFrame([selected])
         current_available = _row_available(row)
         visibility_date = as_of or current_available
         if as_of is not None and (current_available is None or current_available > as_of):
             set_result(index, None, "unknown", "insufficient_evidence", [])
             continue
-        if visibility_date is not None and predecessor is not None:
-            predecessor_available = _row_available(predecessor.iloc[0])
+        if visibility_date is not None and predecessor_row is not None:
+            predecessor_available = _row_available(predecessor_row)
             if predecessor_available is None:
                 set_result(index, None, "unknown", "insufficient_evidence", [])
                 continue
@@ -2385,25 +2430,18 @@ def validated_single_quarter_series(
                 continue
         current_value = _numeric(row.get(value_column))
         predecessor_value = (
-            None if predecessor is None else _numeric(predecessor.iloc[0].get(value_column))
+            None if predecessor_row is None else _numeric(predecessor_row.get(value_column))
         )
+        source_rows = [row] + ([] if predecessor_row is None else [predecessor_row])
         if current_value is None or (identity.quarter > 1 and predecessor_value is None):
-            set_result(
-                index,
-                None,
-                "unknown",
-                "missing_value",
-                [row] + ([] if predecessor is None else [predecessor.iloc[0]]),
-            )
+            set_result(index, None, "unknown", "missing_value", source_rows)
             continue
-        value = current_value if predecessor is None else current_value - predecessor_value
-        set_result(
-            index,
-            value,
-            "known",
-            None,
-            [row] + ([] if predecessor is None else [predecessor.iloc[0]]),
+        value = (
+            current_value
+            if predecessor_row is None
+            else current_value - predecessor_value
         )
+        set_result(index, value, "known", None, source_rows)
 
     if batch_results is not None:
         for column in (

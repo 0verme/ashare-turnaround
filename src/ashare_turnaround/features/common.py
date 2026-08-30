@@ -339,6 +339,12 @@ def single_quarter_history(
         )
         value_name = f"__comparable_{field_name}"
         field_columns[field_name] = value_name
+        provenance_columns = (
+            "single_quarter_source_periods",
+            "single_quarter_source_versions",
+            "single_quarter_source_values",
+            "single_quarter_availability_dates",
+        )
         extra = quarterized[
             [
                 key,
@@ -346,6 +352,7 @@ def single_quarter_history(
                 "comparable_status",
                 "comparable_reason",
                 field_name,
+                *provenance_columns,
             ]
         ].copy()
         extra = extra.rename(
@@ -354,6 +361,10 @@ def single_quarter_history(
                 "comparable_status": f"{value_name}_status",
                 "comparable_reason": f"{value_name}_reason",
                 field_name: f"{value_name}_raw",
+                **{
+                    column: f"{value_name}_{column}"
+                    for column in provenance_columns
+                },
             }
         )
         if result is None:

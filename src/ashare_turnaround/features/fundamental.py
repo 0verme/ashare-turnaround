@@ -31,6 +31,7 @@ from .common import (
     safe_ratio,
     single_quarter_history,
 )
+from .financial_context import FinancialSemanticContext
 
 
 def _history(
@@ -460,13 +461,18 @@ def compute_fundamental_features(
     financial_frames: dict[str, pd.DataFrame],
     code: str,
     as_of_date: str | date | datetime | pd.Timestamp,
+    *,
+    _semantic_context: FinancialSemanticContext | None = None,
 ) -> FeatureVector:
     """Compute fundamental values only from validated comparable periods."""
 
     vector = new_vector(code, as_of_date)
-    income = _history(financial_frames, "income", code, as_of_date)
-    balance = _history(financial_frames, "balancesheet", code, as_of_date)
-    cashflow = _history(financial_frames, "cashflow", code, as_of_date)
+    context = _semantic_context or FinancialSemanticContext.prepare(
+        financial_frames, code, as_of_date
+    )
+    income = context.history("income")
+    balance = context.history("balancesheet")
+    cashflow = context.history("cashflow")
 
     revenue_field = _field(income, "revenue", "total_revenue")
     profit_field = _field(income, "n_income_attr_p", "n_income", "net_profit")

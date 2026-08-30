@@ -252,6 +252,7 @@ class ReplaySnapshotCache:
 
         self.canonical_histories.clear()
         self.single_quarter_histories.clear()
+        self.trend_series.clear()
         self.semantic_period_indexes.clear()
         self.semantic_period_rows.clear()
         self.period_identities.clear()

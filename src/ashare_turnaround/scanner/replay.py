@@ -30,6 +30,7 @@ from ..features import (
     compute_quality_features,
     compute_trend_features,
 )
+from ..features.financial_context import FinancialSemanticContext
 from ..pit.comparable import COMPARABLE_PERIOD_CONTRACT_VERSION
 from ..replay_cache import ReplaySnapshotCache, current_replay_cache, replay_cache_scope
 from ..storage.inventory import build_coverage_report
@@ -737,10 +738,26 @@ def _run_replay_frames_with_cache(
         if candidate_position >= candidate_limit:
             break
         code = str(row["ts_code"])
+        with _diagnostic_phase(diagnostics, "candidate.financial_semantic_prepare"):
+            financial_context = FinancialSemanticContext.prepare(
+                financial_frames, code, as_of
+            )
         with _diagnostic_phase(diagnostics, "candidate.fundamental"):
-            vector = compute_fundamental_features(financial_frames, code, as_of)
+            vector = compute_fundamental_features(
+                financial_frames,
+                code,
+                as_of,
+                _semantic_context=financial_context,
+            )
         with _diagnostic_phase(diagnostics, "candidate.trend"):
-            vector.merge(compute_trend_features(financial_frames, code, as_of))
+            vector.merge(
+                compute_trend_features(
+                    financial_frames,
+                    code,
+                    as_of,
+                    _semantic_context=financial_context,
+                )
+            )
         with _diagnostic_phase(diagnostics, "candidate.quality"):
             vector.merge(compute_quality_features(financial_frames, code, as_of))
         with _diagnostic_phase(diagnostics, "candidate.attention"):

@@ -28,11 +28,8 @@ from ..pit.comparable import (
 )
 from ..replay_cache import current_replay_cache
 from ..scanner.contracts import TURNAROUND_TREND_CONTRACT_VERSION, FeatureVector
-from .common import (
-    canonical_history,
-    new_vector,
-    single_quarter_history,
-)
+from .common import new_vector, single_quarter_history
+from .financial_context import FinancialSemanticContext
 
 TREND_CONTRACT_VERSION = TURNAROUND_TREND_CONTRACT_VERSION
 
@@ -1215,6 +1212,7 @@ def _qoq_observations(
     *,
     metric: str,
     as_of_date: str | date | datetime | pd.Timestamp,
+    prepared_quarters: tuple[pd.DataFrame, Mapping[str, str]] | None = None,
 ) -> list[ValidatedTrendObservation]:
     if field_name is None:
         return [_invalid_observation(metric=metric, reason="missing_value")]
@@ -1225,14 +1223,33 @@ def _qoq_observations(
             reason="invalid_comparable_period_contract",
             status=UNSUPPORTED,
         )
-    source, columns = single_quarter_history(
+    source, columns = prepared_quarters or single_quarter_history(
         history,
         "income",
         (field_name,),
         as_of_date=as_of_date,
     )
-    if source.empty or not columns:
+    if source.empty or not columns or field_name not in columns:
         return [_invalid_observation(metric=metric, reason="qoq_requires_validated_single_quarter")]
+    # Standalone callers may provide the wide frame directly; replay passes a
+    # cached immutable field projection shared with TTM.
+    value_column = columns[field_name]
+    if value_column != "comparable_value":
+        source = source.copy()
+        source["comparable_value"] = source[value_column]
+        source["comparable_raw_value"] = source[f"{value_column}_raw"]
+        source["comparable_status"] = source[f"{value_column}_status"]
+        source["comparable_reason"] = source[f"{value_column}_reason"]
+        source["comparable_source_field"] = field_name
+        for provenance_column in (
+            "single_quarter_source_periods",
+            "single_quarter_source_versions",
+            "single_quarter_source_values",
+            "single_quarter_availability_dates",
+        ):
+            source[provenance_column] = source[
+                f"{value_column}_{provenance_column}"
+            ]
     source, series_reason = _choose_series(source, dataset="income")
     if series_reason is not None:
         return _invalid_series_observations(
@@ -1313,6 +1330,7 @@ def _ttm_observations(
     *,
     metric: str,
     as_of_date: str | date | datetime | pd.Timestamp,
+    prepared_quarters: tuple[pd.DataFrame, Mapping[str, str]] | None = None,
 ) -> list[ValidatedTrendObservation]:
     if field_name is None:
         return [_invalid_observation(metric=metric, reason="missing_value")]
@@ -1323,14 +1341,31 @@ def _ttm_observations(
             reason="invalid_comparable_period_contract",
             status=UNSUPPORTED,
         )
-    source, columns = single_quarter_history(
+    source, columns = prepared_quarters or single_quarter_history(
         history,
         "income",
         (field_name,),
         as_of_date=as_of_date,
     )
-    if source.empty or not columns:
+    if source.empty or not columns or field_name not in columns:
         return [_invalid_observation(metric=metric, reason="ttm_requires_validated_single_quarter")]
+    value_column = columns[field_name]
+    if value_column != "comparable_value":
+        source = source.copy()
+        source["comparable_value"] = source[value_column]
+        source["comparable_raw_value"] = source[f"{value_column}_raw"]
+        source["comparable_status"] = source[f"{value_column}_status"]
+        source["comparable_reason"] = source[f"{value_column}_reason"]
+        source["comparable_source_field"] = field_name
+        for provenance_column in (
+            "single_quarter_source_periods",
+            "single_quarter_source_versions",
+            "single_quarter_source_values",
+            "single_quarter_availability_dates",
+        ):
+            source[provenance_column] = source[
+                f"{value_column}_{provenance_column}"
+            ]
     source, series_reason = _choose_series(source, dataset="income")
     if series_reason is not None:
         return _invalid_series_observations(
@@ -1481,6 +1516,8 @@ def compute_trend_features(
     financial_frames: dict[str, pd.DataFrame],
     code: str,
     as_of_date: str | date | datetime | pd.Timestamp,
+    *,
+    _semantic_context: FinancialSemanticContext | None = None,
 ) -> FeatureVector:
     """Compute the versioned trend contract from validated #27 primitives.
 
@@ -1493,7 +1530,10 @@ def compute_trend_features(
     vector = new_vector(code, as_of_date)
     raw_income = financial_frames.get("income")
     input_contract_invalid = _declared_contract_is_invalid(raw_income)
-    income = canonical_history("income", raw_income, code, as_of_date)
+    context = _semantic_context or FinancialSemanticContext.prepare(
+        financial_frames, code, as_of_date
+    )
+    income = context.history("income")
     if input_contract_invalid and not income.empty:
         # ``canonicalize_financial_frame`` necessarily writes the current
         # #27 version.  Preserve an explicitly supplied incompatible version
@@ -1505,6 +1545,29 @@ def compute_trend_features(
     profit_field = _field(income, "n_income_attr_p", "n_income", "net_profit")
     operating_field = _field(income, "operate_profit", "operating_profit")
     gross_field = _field(income, "gross_profit")
+    quarter_fields = tuple(
+        dict.fromkeys(
+            field_name
+            for field_name in (revenue_field, profit_field, operating_field)
+            if field_name is not None
+        )
+    )
+    prepared_quarters = (
+        context.single_quarter_history("income", quarter_fields)
+        if quarter_fields and not input_contract_invalid
+        else None
+    )
+    quarter_projections = (
+        {
+            field_name: (
+                context.single_quarter_projection(prepared_quarters, field_name),
+                {field_name: "comparable_value"},
+            )
+            for field_name in quarter_fields
+        }
+        if prepared_quarters is not None
+        else {}
+    )
 
     yoy_specs = (
         ("revenue_yoy", revenue_field),
@@ -1539,6 +1602,7 @@ def compute_trend_features(
                 field_name,
                 metric=metric,
                 as_of_date=as_of_date,
+                prepared_quarters=quarter_projections.get(field_name),
             )
             if not income.empty
             else [_invalid_observation(metric=metric, reason="no PIT income history")]
@@ -1579,6 +1643,7 @@ def compute_trend_features(
                 field_name,
                 metric=metric,
                 as_of_date=as_of_date,
+                prepared_quarters=quarter_projections.get(field_name),
             )
             if not income.empty
             else [_invalid_observation(metric=metric, reason="no PIT income history")]
