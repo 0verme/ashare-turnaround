@@ -9,6 +9,8 @@ separate from RAW data.
 ## Contract
 
 - Contract version: `pit-replay-validation-v1`
+- Resource gate: `resource-gate-v2` (live working-set/system pressure; peak RSS diagnostic only)
+- Frozen target-selection cutoff for the next validation pair: `20260830`
 - Monthly rule: `monthly-anchor-15-v1`
 - Requested target range: `2017-01` through `2026-12`
 - Anchor: fixed 15th, then first same-month `trade_cal` open session
@@ -40,12 +42,20 @@ JSON files. Running the documented command is therefore required before
 interpreting local snapshot counts. Missing or incomplete inputs remain
 `INCOMPLETE`/`UNAVAILABLE`; they are never represented as `READY`.
 
-Current execution disposition: `BLOCKED`. The pre-fix real-corpus
-invocation (`2025-06`, `top_n=3`, `determinism_sample=0`, `content_hash=False`)
-ran for 2,400 seconds and timed out without an artifact. Two subsequent
-single-snapshot attempts through the bounded loader/streaming path each ran for
-7,200 seconds and also timed out without an artifact; the first observed peak
-RSS was about 1.7 GiB. No real smoke/yearly/monthly result is claimed here.
+Current execution disposition: `READY_FOR_FULL_SMOKE_AGAIN` after the
+static/bounded resource-gate-v2 and cutoff repair. The latest preserved real
+full-corpus artifact is labelled **pre-resource-gate-v2 full correctness run**:
+`2025-06`, `top_n=3`, `determinism_sample=0`, `content_hash=False`,
+`5102/5102` candidates, PIT/artifact/CAS cleanup PASS, runtime 6,111.120s,
+and compressed artifact about 2.609 GiB. Its sole formal failure was the old
+lifetime `ru_maxrss` gate (`6.061 GiB > 6 GiB`); it is not retroactively a
+`FULL_SMOKE_PASS`.
+
+The old current-month warning is also preserved as evidence: the target was
+`2025-06` / `as_of=20250616` and `incomplete_month=true`.  The old invocation
+used that historical as-of as the selection `today` cutoff.  The repaired
+campaign records explicit `today=20260830`; no new full smoke/yearly/monthly
+run is claimed here.
 
 The bounded diagnostic/repair pass was intentionally not promoted to a smoke
 PASS. On the same local corpus it measured 5,102 candidates; a 100-candidate
@@ -62,6 +72,13 @@ lossless decoder contract are in
 [docs/pit-replay-artifact-normalization.md](pit-replay-artifact-normalization.md).
 
 ## Correctness-only findings
+
+- Target selection and feature/PIT cutoffs are separate: `trade_cal` is read
+  unprojected for target selection, while each target's feature frames remain
+  bounded at its selected trading date (`2025-06` remains `20250616`).
+- `ru_maxrss` is retained as `peak_rss_diagnostic_bytes`; live PSS/private,
+  current process swap, MemAvailable, and system swap growth are the hard
+  resource metrics under `resource-gate-v2`.
 
 - Financial visibility is bounded by `actual_available_date <= as_of`, including
   the original/revised version boundary fixture.

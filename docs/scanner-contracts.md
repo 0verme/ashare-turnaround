@@ -209,10 +209,14 @@ probability of positive return.  See [docs/evidence-confidence-v1.md](evidence-c
   diagnostic ordering in JSON).
 - `replay-variants --as-of YYYYMMDD` writes the four versioned score variants
   from one verified PIT snapshot.
-- `replay-validate --start YYYY-MM --end YYYY-MM` selects fixed monthly sessions
-  from `trade_cal`, runs the existing replay path with the historical-universe
-  gate, and writes per-snapshot PIT/evidence/manifest artifacts. It performs no
-  forward-return evaluation; see [docs/pit-replay-validation.md](pit-replay-validation.md).
+- `replay-validate --start YYYY-MM --end YYYY-MM --today YYYYMMDD` selects
+  fixed monthly sessions from the unprojected `trade_cal` using an explicit
+  orchestration cutoff, runs the existing replay path with the
+  historical-universe gate, and writes per-snapshot PIT/evidence/manifest
+  artifacts. Feature/PIT frames remain bounded by each selected date. It
+  performs no forward-return evaluation; see
+  [docs/pit-replay-validation.md](pit-replay-validation.md) and
+  [docs/pit-replay-resource-gate-v2.md](pit-replay-resource-gate-v2.md).
 - `scan` writes a daily snapshot under `data/derived/scans/`; `scan-compare`
   reports additions, removals, rank/score changes, and risk-flag changes.
 - `evaluate` persists declared holding/benchmark/cost/delisting assumptions,

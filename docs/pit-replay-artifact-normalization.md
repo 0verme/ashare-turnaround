@@ -6,6 +6,12 @@ full 2025-06 replay, yearly replay, monthly replay, feature recalibration, or
 RAW operation.  The real measurements below use only the fixed 2025-06
 `as_of=20250616` candidate probes capped at 10 and 100.
 
+**Historical status note:** decisions recorded in this artifact-normalization
+round use the pre-resource-gate-v2 contract.  The preserved later full run,
+the lifetime-`ru_maxrss` root cause, and the current
+`READY_FOR_FULL_SMOKE_AGAIN` static/bounded decision are recorded in
+[pit-replay-resource-gate-v2.md](pit-replay-resource-gate-v2.md).
+
 ## A. Baseline
 
 The baseline facts supplied for this round are:

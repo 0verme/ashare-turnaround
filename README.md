@@ -63,8 +63,11 @@ redownload is implied by this hand-off.
 The #32 validation path is read-only and must remain separate from Evaluation
 and Ablation. The planned post-calibration sequence is `#32 → calibrated
 Evaluation (#17) → Ablation / Stability (#18) → Score v2 decision`. The
-post-#41 normalized artifact audit and its continued BLOCKED decision are in
-[docs/pit-replay-artifact-normalization.md](docs/pit-replay-artifact-normalization.md).
+post-#41 normalized artifact audit and preserved pre-resource-gate-v2
+full-run evidence are in
+[docs/pit-replay-artifact-normalization.md](docs/pit-replay-artifact-normalization.md);
+the repaired resource/cutoff contract is in
+[docs/pit-replay-resource-gate-v2.md](docs/pit-replay-resource-gate-v2.md).
 
 ## Architecture
 
@@ -110,7 +113,7 @@ The minimal CLI is:
 .venv/bin/python -m ashare_turnaround sync-daily --date 20250630
 .venv/bin/python -m ashare_turnaround replay --as-of 20250630 --top 20
 .venv/bin/python -m ashare_turnaround replay-variants --as-of 20250630 --top 20
-.venv/bin/python -m ashare_turnaround replay-validate --stage smoke --start 2017-01 --end 2026-12
+.venv/bin/python -m ashare_turnaround replay-validate --stage smoke --start 2017-01 --end 2026-12 --today 20260830
 .venv/bin/python -m ashare_turnaround replay-profile --as-of 20250616 --candidate-cap 100
 .venv/bin/python -m ashare_turnaround artifact-audit --input data/reports/replay-validation/snapshots/<snapshot>.json
 .venv/bin/python -m ashare_turnaround scan --top 20

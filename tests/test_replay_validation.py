@@ -172,6 +172,54 @@ def test_future_months_are_marked_unavailable_without_neighbor_substitution() ->
     assert future.selection_reason.endswith("future substitution")
 
 
+def test_frozen_validation_cutoff_separates_historical_current_and_future_targets() -> None:
+    calendar = pd.DataFrame(
+        {
+            "exchange": ["SSE"] * 4,
+            "cal_date": ["20250616", "20260817", "20260828", "20260901"],
+            "is_open": [1] * 4,
+        }
+    )
+    targets = select_monthly_snapshot_dates(
+        calendar,
+        "2025-06",
+        "2026-09",
+        today="20260830",
+    )
+    by_month = {target.target_month: target for target in targets}
+
+    historical = by_month["2025-06"]
+    assert historical.selected_trading_date == "20250616"
+    assert historical.incomplete_month is False
+    current = by_month["2026-08"]
+    assert current.status == "AVAILABLE"
+    assert current.selected_trading_date == "20260817"
+    assert current.incomplete_month is True
+    future = by_month["2026-09"]
+    assert future.status == "UNAVAILABLE_FUTURE"
+    assert future.selected_trading_date is None
+
+
+def test_historical_cutoff_default_is_frozen_and_feature_as_of_stays_selected_date() -> None:
+    result = run_replay_validation_frames(
+        _validation_frames(),
+        start="2025-06",
+        end="2025-06",
+        top_n=3,
+        stage="monthly",
+        determinism_sample=0,
+    )
+
+    assert result.configuration["today"] == "20260830"
+    assert result.configuration["target_selection"]["cutoff_source"] == (
+        "explicit_validation_cutoff"
+    )
+    assert result.targets[0].incomplete_month is False
+    assert result.targets[0].selected_trading_date == "20250616"
+    assert result.snapshots[0].result is not None
+    assert result.snapshots[0].result.as_of_date == "20250616"
+
+
 def test_historical_universe_ignores_unsafe_current_reference_fields() -> None:
     stock_basic = pd.DataFrame(
         {
@@ -263,11 +311,16 @@ def test_validation_uses_production_replay_and_writes_complete_audit_artifacts(t
     assert result.summary["failed_count"] == 0
     assert result.summary["ready_count"] == 1
     assert result.summary["determinism_failure_count"] == 0
+    assert result.configuration["resource_gate"]["version"] == "resource-gate-v2"
+    assert "peak_rss_diagnostic_bytes" in result.summary["resource"]
+    assert "current_pss_bytes" in result.summary["resource"]
     snapshot = result.snapshots[0]
     assert snapshot.result is not None
     assert snapshot.result.universe_pit_safe is True
     assert snapshot.result.universe_version == HISTORICAL_UNIVERSE_CONTRACT_VERSION
     assert snapshot.result.universe_decisions
+    assert snapshot.run_manifest["validation_cutoff"] == "20251231"
+    assert snapshot.run_manifest["resource_gate"]["version"] == "resource-gate-v2"
     assert snapshot.result.vectors
     assert snapshot.result.scores
     assert snapshot.result.full_ranked is snapshot.result.diagnostic_ranked
@@ -276,6 +329,9 @@ def test_validation_uses_production_replay_and_writes_complete_audit_artifacts(t
     paths = write_replay_validation_artifacts(result, tmp_path / "artifacts")
     assert set(paths) >= {"manifest", "summary", "manual_review", "snapshots"}
     machine = json.loads(paths["summary"].read_text(encoding="utf-8"))
+    manifest = json.loads(paths["manifest"].read_text(encoding="utf-8"))
+    assert manifest["validation_cutoff"] == "20251231"
+    assert manifest["resource_gate"]["version"] == "resource-gate-v2"
     assert machine["summary"]["ranking_eligible_count"] >= 0
     snapshot_files = list((tmp_path / "artifacts" / "snapshots").glob("*.json"))
     assert len(snapshot_files) == 1
@@ -461,12 +517,140 @@ def test_large_corpus_resource_gate_blocks_low_available_ram(monkeypatch, tmp_pa
             "swap_total_bytes": 4 * 1024**3,
             "swap_free_bytes": 3 * 1024**3,
             "swap_used_bytes": 1 * 1024**3,
-            "peak_rss_bytes": 0,
+            "current_rss_bytes": 2 * 1024**3,
+            "current_pss_bytes": 2 * 1024**3,
+            "current_private_bytes": 2 * 1024**3,
+            "current_swap_bytes": 0,
+            "peak_rss_diagnostic_bytes": 0,
         },
     )
 
     with pytest.raises(ResourceBlocked, match="available RAM"):
         validation._assert_initial_resource_gate(tmp_path)
+
+
+def _healthy_resource_sample(**overrides):
+    sample = {
+        "available_bytes": 8 * 1024**3,
+        "swap_total_bytes": 4 * 1024**3,
+        "swap_free_bytes": 3 * 1024**3,
+        "swap_used_bytes": 1 * 1024**3,
+        "current_rss_bytes": 2 * 1024**3,
+        "current_pss_bytes": 2 * 1024**3,
+        "current_private_bytes": 2 * 1024**3,
+        "current_swap_bytes": 0,
+        "peak_rss_diagnostic_bytes": int(6.1 * 1024**3),
+        "peak_rss_bytes": int(6.1 * 1024**3),
+        "live_memory_metric": "proc_smaps_rollup",
+    }
+    sample.update(overrides)
+    return sample
+
+
+def test_resource_gate_ignores_ru_maxrss_when_live_working_set_is_healthy(monkeypatch) -> None:
+    import ashare_turnaround.scanner.replay_validation as validation
+
+    monkeypatch.setattr(validation, "_host_memory", lambda: _healthy_resource_sample())
+    validation._assert_runtime_resource_gate({"swap_used_bytes": 1 * 1024**3})
+
+
+def test_resource_gate_blocks_live_pss_over_six_gib(monkeypatch) -> None:
+    import ashare_turnaround.scanner.replay_validation as validation
+
+    monkeypatch.setattr(
+        validation,
+        "_host_memory",
+        lambda: _healthy_resource_sample(
+            current_pss_bytes=validation.MAX_LIVE_PSS_BYTES + 1,
+            current_private_bytes=2 * 1024**3,
+        ),
+    )
+    with pytest.raises(ResourceBlocked, match="live PSS"):
+        validation._assert_runtime_resource_gate({"swap_used_bytes": 1 * 1024**3})
+
+
+def test_resource_gate_blocks_swap_growth_over_contract(monkeypatch) -> None:
+    import ashare_turnaround.scanner.replay_validation as validation
+
+    monkeypatch.setattr(
+        validation,
+        "_host_memory",
+        lambda: _healthy_resource_sample(
+            swap_used_bytes=1 * 1024**3 + validation.MAX_SWAP_GROWTH_BYTES + 1,
+        ),
+    )
+    with pytest.raises(ResourceBlocked, match="swap grew"):
+        validation._assert_runtime_resource_gate({"swap_used_bytes": 1 * 1024**3})
+
+
+def test_resource_gate_blocks_process_swap_pressure(monkeypatch) -> None:
+    import ashare_turnaround.scanner.replay_validation as validation
+
+    monkeypatch.setattr(
+        validation,
+        "_host_memory",
+        lambda: _healthy_resource_sample(
+            current_swap_bytes=validation.MAX_PROCESS_SWAP_BYTES + 1,
+        ),
+    )
+    with pytest.raises(ResourceBlocked, match="process swap"):
+        validation._assert_runtime_resource_gate({"swap_used_bytes": 1 * 1024**3})
+
+
+def test_resource_parser_and_report_keep_peak_rss_as_diagnostic() -> None:
+    import ashare_turnaround.scanner.replay_validation as validation
+
+    parsed = validation._parse_proc_memory_text(
+        """Rss: 10 kB
+Pss: 8 kB
+Private_Clean: 2 kB
+VmSwap: 3 kB"""
+    )
+    assert parsed == {
+        "Rss": 10 * 1024,
+        "Pss": 8 * 1024,
+        "Private_Clean": 2 * 1024,
+        "VmSwap": 3 * 1024,
+    }
+    telemetry = validation._host_memory()
+    assert "peak_rss_diagnostic_bytes" in telemetry
+    assert "current_pss_bytes" in telemetry
+    assert "current_private_bytes" in telemetry
+
+
+def test_resource_telemetry_uses_current_vmrss_when_smaps_rollup_is_unavailable(
+    monkeypatch,
+) -> None:
+    import ashare_turnaround.scanner.replay_validation as validation
+
+    def fake_read(path):
+        path = str(path)
+        if path == "/proc/meminfo":
+            return {
+                "MemAvailable": 8 * 1024**3,
+                "SwapTotal": 4 * 1024**3,
+                "SwapFree": 3 * 1024**3,
+            }
+        if path == "/proc/self/smaps_rollup":
+            raise OSError("not supported")
+        if path == "/proc/self/status":
+            return {"VmRSS": 2 * 1024**3, "VmSwap": 7 * 1024**2}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(validation, "_read_proc_memory", fake_read)
+    monkeypatch.setattr(
+        validation.resource,
+        "getrusage",
+        lambda _: type("Usage", (), {"ru_maxrss": int(6.1 * 1024**3 / 1024)})(),
+    )
+    telemetry = validation._host_memory()
+
+    assert telemetry["current_rss_bytes"] == 2 * 1024**3
+    assert telemetry["current_pss_bytes"] is None
+    assert telemetry["current_private_bytes"] is None
+    assert telemetry["current_swap_bytes"] == 7 * 1024**2
+    assert telemetry["peak_rss_diagnostic_bytes"] > validation.MAX_LIVE_PSS_BYTES
+    assert telemetry["live_memory_metric"] == "proc_status_vmrss_fallback"
 
 
 def test_pit_validator_detects_future_evidence_as_hard_violation() -> None:

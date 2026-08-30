@@ -37,11 +37,14 @@ The default `monthly-anchor-15-v1` rule is:
 4. emit `target_month`, `anchor_date`, `selected_trading_date`, and
    `selection_reason`;
 5. mark a month `UNAVAILABLE` when no session can be proven and
-   `UNAVAILABLE_FUTURE` when it is after the current date.
+   `UNAVAILABLE_FUTURE` when it is after the explicit selection cutoff.
 
-A selected date is never a natural-calendar date.  The current month is marked
-`incomplete_month` when its fixed anchor has already been reached but the
-month is not complete.  No neighboring month is substituted.
+A selected date is never a natural-calendar date.  The target-selection
+cutoff is explicit orchestration metadata, not a feature observation cutoff.
+The current month is marked `incomplete_month` when the target month equals
+that cutoff month and its fixed anchor has already been reached.  No
+neighboring month is substituted.  The validation campaign freezes this
+cutoff at `20260830`; it is recorded in each configuration/manifest.
 
 ## Historical universe boundary
 
@@ -93,9 +96,13 @@ remain enabled.  When `artifact_output` is supplied, each complete snapshot is
 written before its `ReplayResult` is released; `checkpoint.json` records
 progress without duplicating RAW data.
 
-This is a memory/disk safety boundary only. `summary.json` and `summary.md`
-record the observed peak RSS and swap delta. It does not alter Score v1,
-feature formulas, evidence-confidence thresholds, or ranking semantics.
+This is a memory/disk safety boundary only. `resource-gate-v2` enforces
+current `/proc/self/smaps_rollup` working-set/system-pressure metrics while
+retaining `ru_maxrss` as `peak_rss_diagnostic_bytes` for diagnostics only.
+`summary.json` and `summary.md` record live telemetry, timestamped gate
+samples, the diagnostic peak, and swap delta. It does not alter Score v1,
+feature formulas, evidence-confidence thresholds, or ranking semantics. See
+[pit-replay-resource-gate-v2.md](pit-replay-resource-gate-v2.md) for the audit.
 
 ## Versioned run manifest
 
@@ -170,17 +177,19 @@ The staged commands are:
 ```bash
 # synthetic adversarial contracts, via the test suite / synthetic-fixtures output
 ashare-turnaround replay-validate --stage smoke --start 2017-01 --end 2026-12 \
-  --data-dir data --output data/reports/replay-validation
+  --today 20260830 --data-dir data --output data/reports/replay-validation
 
 # one explicit bounded target; this is diagnostic and cannot be a validation PASS
 ashare-turnaround replay-profile --as-of 20250616 --candidate-cap 100 \
   --data-dir data --output data/reports/replay-profile
 
 # one deterministic available month per year
-ashare-turnaround replay-validate --stage yearly --start 2017-01 --end 2026-12
+ashare-turnaround replay-validate --stage yearly --start 2017-01 --end 2026-12 \
+  --today 20260830
 
 # all available monthly targets; future months remain UNAVAILABLE_FUTURE
-ashare-turnaround replay-validate --stage monthly --start 2017-01 --end 2026-12
+ashare-turnaround replay-validate --stage monthly --start 2017-01 --end 2026-12 \
+  --today 20260830
 ```
 
 The output also writes a small `checkpoint.json` progress record; it is an
@@ -204,4 +213,7 @@ eligibility, or PIT semantics.
 
 The bounded attribution and performance measurements are recorded in
 [pit-replay-artifact-normalization.md](pit-replay-artifact-normalization.md).
-The final decision remains `BLOCKED`; no full 2025-06 smoke is implied.
+The preserved latest full run is explicitly a pre-resource-gate-v2 full
+correctness run and remains evidence, not a `FULL_SMOKE_PASS`.  After the
+static/bounded repair, the decision is `READY_FOR_FULL_SMOKE_AGAIN`; no new
+full replay is implied by this document.

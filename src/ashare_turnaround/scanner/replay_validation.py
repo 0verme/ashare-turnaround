@@ -16,12 +16,14 @@ import os
 import re
 import resource
 import subprocess
+import sys
 import tempfile
+import time
 from collections import Counter
 from collections.abc import Callable, Iterable, Mapping
 from contextlib import nullcontext
 from dataclasses import asdict, dataclass, field, fields, replace
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -68,9 +70,61 @@ DEFAULT_ANCHOR_DAY = 15
 DEFAULT_BENCHMARK_ID = "000300.SH"
 DEFAULT_SEED = 0
 MIN_AVAILABLE_RAM_BYTES = 4 * 1024**3
+# Keep the existing six-GiB budget, but enforce it against live working-set
+# telemetry rather than the lifetime ru_maxrss high-water mark.
 MAX_PEAK_RSS_BYTES = 6 * 1024**3
+MAX_LIVE_PSS_BYTES = MAX_PEAK_RSS_BYTES
+MAX_LIVE_PRIVATE_BYTES = MAX_PEAK_RSS_BYTES
 MIN_SWAP_FREE_BYTES = 512 * 1024**2
+MAX_SWAP_GROWTH_BYTES = 256 * 1024**2
+MAX_PROCESS_SWAP_BYTES = 256 * 1024**2
 LARGE_CORPUS_BYTES = 512 * 1024**2
+RESOURCE_GATE_CONTRACT_VERSION = "resource-gate-v2"
+DEFAULT_VALIDATION_CUTOFF = "20260830"
+
+
+def _resource_gate_declaration(*, enabled: bool | None = None) -> dict[str, Any]:
+    """Return the versioned hard/diagnostic resource contract.
+
+    ``ru_maxrss`` is intentionally declared only as a diagnostic.  It is a
+    lifetime high-water value and cannot identify which replay phase caused a
+    large allocation.  The live limits retain the old six-GiB budget.
+    """
+
+    declaration: dict[str, Any] = {
+        "version": RESOURCE_GATE_CONTRACT_VERSION,
+        "min_available_ram_bytes": MIN_AVAILABLE_RAM_BYTES,
+        "min_swap_free_bytes": MIN_SWAP_FREE_BYTES,
+        "max_swap_growth_bytes": MAX_SWAP_GROWTH_BYTES,
+        "max_live_pss_bytes": MAX_LIVE_PSS_BYTES,
+        "max_live_private_bytes": MAX_LIVE_PRIVATE_BYTES,
+        "max_live_rss_fallback_bytes": MAX_PEAK_RSS_BYTES,
+        "max_process_swap_bytes": MAX_PROCESS_SWAP_BYTES,
+        "large_corpus_threshold_bytes": LARGE_CORPUS_BYTES,
+        "hard_metrics": [
+            "available_bytes",
+            "swap_free_bytes",
+            "swap_used_growth_bytes",
+            "current_pss_bytes",
+            "current_private_bytes",
+            "current_swap_bytes",
+        ],
+        "diagnostic_metrics": {
+            "peak_rss": {
+                "metric": "ru_maxrss",
+                "field": "peak_rss_diagnostic_bytes",
+                "threshold_bytes": MAX_PEAK_RSS_BYTES,
+                "enforcement": "diagnostic_only",
+            }
+        },
+        "live_metric_fallback": (
+            "current VmRSS from /proc/self/status when smaps_rollup is unavailable; "
+            "ru_maxrss is never substituted for PSS/private"
+        ),
+    }
+    if enabled is not None:
+        declaration["enabled"] = enabled
+    return declaration
 
 FINANCIAL_CORPUS_DATASETS = (
     "income",
@@ -241,6 +295,9 @@ class ReplayValidationConfig:
     stage: str = "monthly"
     determinism_sample: int = 3
     replay: ReplayConfig | None = None
+    # Validation target selection is orchestration metadata.  Keep it
+    # explicit and frozen so a replay does not inherit the wall clock.
+    today: str | date | datetime | pd.Timestamp | None = DEFAULT_VALIDATION_CUTOFF
 
     def __post_init__(self) -> None:
         if self.top_n <= 0:
@@ -262,8 +319,10 @@ class ReplayValidationConfig:
             "calendar_exchange": self.calendar_exchange,
             "top_n": self.top_n,
             "seed": self.seed,
+            "today": _date_text(self.today),
             "stage": self.stage,
             "determinism_sample": self.determinism_sample,
+            "resource_gate": _resource_gate_declaration(),
         }
 
     @property
@@ -467,38 +526,125 @@ def _write_json_with_streamed_vectors(
     return destination
 
 
-def _host_memory() -> dict[str, int | None]:
-    values: dict[str, int | None] = {
+def _parse_proc_memory_text(text: str) -> dict[str, int]:
+    """Parse Linux ``/proc`` memory values into bytes.
+
+    ``meminfo``, ``status`` and ``smaps_rollup`` all use the same
+    ``<field>: <integer> kB`` shape for the fields consumed here.  Keeping the
+    parser independent of the filesystem makes the production fallback
+    deterministic and straightforward to test.
+    """
+
+    multipliers = {
+        "b": 1,
+        "kb": 1024,
+        "mb": 1024**2,
+        "gb": 1024**3,
+    }
+    values: dict[str, int] = {}
+    for line in text.splitlines():
+        key, separator, raw = line.partition(":")
+        if not separator:
+            continue
+        parts = raw.strip().split()
+        if not parts:
+            continue
+        try:
+            number = int(parts[0])
+        except ValueError:
+            continue
+        unit = parts[1].lower() if len(parts) > 1 else "b"
+        multiplier = multipliers.get(unit)
+        if multiplier is not None:
+            values[key.strip()] = number * multiplier
+    return values
+
+
+def _read_proc_memory(path: str | Path) -> dict[str, int]:
+    return _parse_proc_memory_text(Path(path).read_text(encoding="ascii"))
+
+
+def _host_memory() -> dict[str, Any]:
+    """Read host and live-process memory telemetry.
+
+    On Linux, ``smaps_rollup`` supplies current RSS/PSS/private/swap values.
+    If it is unavailable, current ``VmRSS``/``VmSwap`` from ``status`` are
+    used and PSS/private remain explicitly unavailable.  In particular,
+    ``ru_maxrss`` is never treated as a live working-set measurement.
+    """
+
+    values: dict[str, Any] = {
         "available_bytes": None,
         "swap_total_bytes": None,
         "swap_free_bytes": None,
+        "swap_used_bytes": None,
+        "current_rss_bytes": None,
+        "current_pss_bytes": None,
+        "current_private_bytes": None,
+        "current_swap_bytes": None,
+        "peak_rss_diagnostic_bytes": None,
+        # Kept as a read-only compatibility alias for existing diagnostic
+        # consumers.  It is not a hard-gate input.
         "peak_rss_bytes": None,
+        "live_memory_metric": "unsupported",
+        "live_working_set_supported": False,
     }
     try:
-        meminfo: dict[str, int] = {}
-        for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
-            key, _, raw = line.partition(":")
-            number = raw.strip().split()[0] if raw.strip() else ""
-            if number.isdigit():
-                meminfo[key] = int(number) * 1024
+        meminfo = _read_proc_memory("/proc/meminfo")
         values["available_bytes"] = meminfo.get("MemAvailable")
         values["swap_total_bytes"] = meminfo.get("SwapTotal")
         values["swap_free_bytes"] = meminfo.get("SwapFree")
     except (OSError, ValueError, IndexError):
         pass
+
+    rollup: dict[str, int] = {}
     try:
-        # Linux reports KiB; macOS reports bytes.  The current runner is Linux,
-        # but keeping the conversion explicit makes the guard portable.
-        rss = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
-        values["peak_rss_bytes"] = rss * 1024 if os.name == "posix" else rss
+        rollup = _read_proc_memory("/proc/self/smaps_rollup")
+    except (OSError, ValueError, IndexError):
+        pass
+    if rollup:
+        values["current_rss_bytes"] = rollup.get("Rss")
+        values["current_pss_bytes"] = rollup.get("Pss")
+        private_components = [
+            rollup.get("Private_Clean"),
+            rollup.get("Private_Dirty"),
+        ]
+        present_private = [value for value in private_components if value is not None]
+        if present_private:
+            values["current_private_bytes"] = sum(present_private)
+        values["current_swap_bytes"] = rollup.get("Swap")
+        values["live_memory_metric"] = "proc_smaps_rollup"
+        values["live_working_set_supported"] = (
+            values["current_pss_bytes"] is not None
+            or values["current_private_bytes"] is not None
+        )
+    else:
+        # VmRSS is a current measurement and is a documented fallback, not a
+        # reinterpretation of the historical ru_maxrss value.
+        try:
+            status = _read_proc_memory("/proc/self/status")
+        except (OSError, ValueError, IndexError):
+            status = {}
+        values["current_rss_bytes"] = status.get("VmRSS")
+        values["current_swap_bytes"] = status.get("VmSwap")
+        if values["current_rss_bytes"] is not None:
+            values["live_memory_metric"] = "proc_status_vmrss_fallback"
+            values["live_working_set_supported"] = True
+
+    try:
+        # Linux reports KiB; macOS reports bytes.  ru_maxrss remains a
+        # diagnostic high-water value on every supported platform.
+        raw_peak = int(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss)
+        peak = raw_peak if sys.platform == "darwin" else raw_peak * 1024
+        values["peak_rss_diagnostic_bytes"] = peak
+        values["peak_rss_bytes"] = peak
     except (AttributeError, OSError, ValueError):
         pass
+
     if values["swap_total_bytes"] is not None and values["swap_free_bytes"] is not None:
         values["swap_used_bytes"] = (
             values["swap_total_bytes"] - values["swap_free_bytes"]
         )
-    else:
-        values["swap_used_bytes"] = None
     return values
 
 
@@ -515,46 +661,88 @@ def _assert_initial_resource_gate(data_dir: str | Path) -> None:
     if _raw_corpus_bytes(data_dir) < LARGE_CORPUS_BYTES:
         return
     memory = _host_memory()
-    available = memory.get("available_bytes")
-    swap_free = memory.get("swap_free_bytes")
-    if available is not None and available < MIN_AVAILABLE_RAM_BYTES:
-        raise ResourceBlocked(
-            f"BLOCKED: available RAM {available} < {MIN_AVAILABLE_RAM_BYTES} bytes"
-        )
-    if (
-        memory.get("swap_total_bytes")
-        and swap_free is not None
-        and swap_free < MIN_SWAP_FREE_BYTES
-    ):
-        raise ResourceBlocked(
-            f"BLOCKED: swap free {swap_free} < {MIN_SWAP_FREE_BYTES} bytes"
-        )
+    # The initial gate keeps the original available-RAM and swap-floor checks,
+    # and also refuses a large-corpus run when no live process metric can be
+    # obtained.  A diagnostic ru_maxrss value is deliberately irrelevant here.
+    _assert_runtime_resource_gate(
+        {"swap_used_bytes": memory.get("swap_used_bytes")},
+        memory=memory,
+        phase="initial",
+    )
 
 
 def _assert_runtime_resource_gate(
-    baseline: Mapping[str, int | None],
-) -> None:
-    memory = _host_memory()
-    available = memory.get("available_bytes")
-    peak_rss = memory.get("peak_rss_bytes")
+    baseline: Mapping[str, Any],
+    *,
+    memory: Mapping[str, Any] | None = None,
+    phase: str = "runtime",
+) -> dict[str, Any]:
+    """Enforce current host/process pressure; return the sampled telemetry.
+
+    ``ru_maxrss`` is intentionally not read by any hard check.  It is a
+    lifetime diagnostic and may have been raised by an earlier phase, process,
+    or allocation that is no longer live when this gate is sampled.
+    """
+
+    observed = dict(memory) if memory is not None else _host_memory()
+    available = observed.get("available_bytes")
     if available is not None and available < MIN_AVAILABLE_RAM_BYTES:
         raise ResourceBlocked(
-            f"BLOCKED: available RAM {available} < {MIN_AVAILABLE_RAM_BYTES} bytes"
+            f"BLOCKED [{phase}]: available RAM {available} < {MIN_AVAILABLE_RAM_BYTES} bytes"
         )
-    if peak_rss is not None and peak_rss > MAX_PEAK_RSS_BYTES:
+    if available is None:
+        raise ResourceBlocked(f"BLOCKED [{phase}]: available RAM telemetry unavailable")
+
+    swap_total = observed.get("swap_total_bytes")
+    swap_free = observed.get("swap_free_bytes")
+    if swap_total and swap_free is None:
+        raise ResourceBlocked(f"BLOCKED [{phase}]: swap-free telemetry unavailable")
+    if swap_total and swap_free < MIN_SWAP_FREE_BYTES:
         raise ResourceBlocked(
-            f"BLOCKED: peak RSS {peak_rss} > {MAX_PEAK_RSS_BYTES} bytes"
+            f"BLOCKED [{phase}]: swap free {swap_free} < {MIN_SWAP_FREE_BYTES} bytes"
         )
+
+    current_pss = observed.get("current_pss_bytes")
+    current_private = observed.get("current_private_bytes")
+    current_rss = observed.get("current_rss_bytes")
+    if current_pss is not None and current_pss > MAX_LIVE_PSS_BYTES:
+        raise ResourceBlocked(
+            f"BLOCKED [{phase}]: live PSS {current_pss} > {MAX_LIVE_PSS_BYTES} bytes"
+        )
+    if current_private is not None and current_private > MAX_LIVE_PRIVATE_BYTES:
+        raise ResourceBlocked(
+            f"BLOCKED [{phase}]: live private memory {current_private} > "
+            f"{MAX_LIVE_PRIVATE_BYTES} bytes"
+        )
+    if current_pss is None and current_private is None:
+        if current_rss is None:
+            raise ResourceBlocked(f"BLOCKED [{phase}]: live memory telemetry unavailable")
+        # This is the explicit /proc/self/status VmRSS fallback.  It is a
+        # current value, never the ru_maxrss high-water value.
+        if current_rss > MAX_LIVE_PRIVATE_BYTES:
+            raise ResourceBlocked(
+                f"BLOCKED [{phase}]: live RSS fallback {current_rss} > "
+                f"{MAX_LIVE_PRIVATE_BYTES} bytes"
+            )
+
+    process_swap = observed.get("current_swap_bytes")
+    if process_swap is not None and process_swap > MAX_PROCESS_SWAP_BYTES:
+        raise ResourceBlocked(
+            f"BLOCKED [{phase}]: process swap {process_swap} > "
+            f"{MAX_PROCESS_SWAP_BYTES} bytes"
+        )
+
     baseline_swap = baseline.get("swap_used_bytes")
-    current_swap = memory.get("swap_used_bytes")
+    current_swap = observed.get("swap_used_bytes")
     if (
         baseline_swap is not None
         and current_swap is not None
-        and current_swap > baseline_swap + 256 * 1024**2
+        and current_swap > baseline_swap + MAX_SWAP_GROWTH_BYTES
     ):
         raise ResourceBlocked(
-            f"BLOCKED: swap grew from {baseline_swap} to {current_swap} bytes"
+            f"BLOCKED [{phase}]: swap grew from {baseline_swap} to {current_swap} bytes"
         )
+    return observed
 
 
 @dataclass(frozen=True, slots=True)
@@ -614,7 +802,7 @@ def select_monthly_snapshot_dates(
     *,
     anchor_day: int = DEFAULT_ANCHOR_DAY,
     exchange: str | None = "SSE",
-    today: str | date | datetime | pd.Timestamp | None = None,
+    today: str | date | datetime | pd.Timestamp | None = DEFAULT_VALIDATION_CUTOFF,
     selection_rule: str = MONTHLY_SELECTION_RULE_VERSION,
 ) -> tuple[MonthlySnapshotTarget, ...]:
     """Select one session per month without using market performance.
@@ -622,7 +810,9 @@ def select_monthly_snapshot_dates(
     The anchor day is fixed at the 15th by the versioned default rule.  The
     first open session on/after the anchor is selected *within the same
     calendar month*.  A month with no usable session is unavailable rather
-    than silently borrowing a neighboring month.
+    than silently borrowing a neighboring month.  ``today`` is an explicit
+    orchestration cutoff; omitting it uses the frozen validation cutoff rather
+    than consulting the wall clock.
     """
 
     if selection_rule not in {
@@ -637,10 +827,9 @@ def select_monthly_snapshot_dates(
     end_month = pd.Period(_month_text(end, name="end"), freq="M")
     if end_month < start_month:
         raise ValueError("end month must not be earlier than start month")
-    current_day = (
-        _normalise_timestamp(today, name="today")
-        if today is not None
-        else pd.Timestamp.now().normalize()
+    current_day = _normalise_timestamp(
+        today if today is not None else DEFAULT_VALIDATION_CUTOFF,
+        name="today",
     )
     calendar, selected_exchange = _calendar_for_selection(trade_calendar, exchange=exchange)
     if not calendar.empty and "is_open" in calendar.columns:
@@ -667,7 +856,7 @@ def select_monthly_snapshot_dates(
                     month_text,
                     anchor.strftime("%Y%m%d"),
                     None,
-                    "month is after the current date; no future substitution",
+                    "month is after the validation cutoff; no future substitution",
                     "UNAVAILABLE_FUTURE",
                     calendar_exchange=selected_exchange,
                 )
@@ -1483,11 +1672,30 @@ def _historical_replay_config(config: ReplayConfig) -> ReplayConfig:
     return replace(config, universe=universe)
 
 
+def _validation_cutoff_source(
+    frames: Mapping[str, pd.DataFrame],
+    today: str | date | datetime | pd.Timestamp | None,
+) -> str:
+    if today is not None:
+        return "explicit_validation_cutoff"
+    calendar = frames.get("trade_cal", pd.DataFrame())
+    if not calendar.empty and "cal_date" in calendar.columns:
+        dates = normalize_date_series(calendar["cal_date"]).dropna()
+        if not dates.empty:
+            return "max_supplied_trade_cal_date"
+    return "fixed_no_calendar_sentinel"
+
+
 def _effective_validation_today(
     frames: Mapping[str, pd.DataFrame],
     today: str | date | datetime | pd.Timestamp | None,
 ) -> pd.Timestamp:
-    """Freeze the selection cutoff to an explicit date or corpus boundary."""
+    """Freeze target selection to an explicit date or corpus boundary.
+
+    The fallback is the supplied calendar boundary for backwards-compatible
+    in-memory callers.  It is still deterministic and never uses the wall
+    clock; production validation defaults to ``DEFAULT_VALIDATION_CUTOFF``.
+    """
 
     if today is not None:
         return _normalise_timestamp(today, name="today")
@@ -1753,6 +1961,8 @@ class ReplayValidationResult:
             "stage": self.stage,
             "top_n": self.top_n,
             "seed": self.seed,
+            "validation_cutoff": self.configuration.get("today"),
+            "resource_gate": self.configuration.get("resource_gate", {}),
             "configuration": self.configuration,
             "input_manifest_id": self.input_manifest.get("manifest_id"),
             "financial_corpus_identity": self.input_manifest.get("financial_corpus_identity"),
@@ -1830,6 +2040,8 @@ def _run_manifest(
         "replay_config_fingerprint": result.config_fingerprint,
         "code_version": code_version,
         "seed": seed,
+        "validation_cutoff": validation_config.get("today"),
+        "resource_gate": dict(validation_config.get("resource_gate", {})),
         "warnings": list(dict.fromkeys(str(value) for value in warnings)),
         "configuration": dict(validation_config),
     }
@@ -2472,6 +2684,7 @@ def _run_validation(
         settings = replace(settings, top_n=top_n)
     settings = _historical_replay_config(settings)
     effective_today = _effective_validation_today(frames, today)
+    cutoff_source = _validation_cutoff_source(frames, today)
     targets = select_monthly_snapshot_dates(
         frames.get("trade_cal", pd.DataFrame()),
         start,
@@ -2503,6 +2716,18 @@ def _run_validation(
         "start_month": _month_text(start, name="start"),
         "end_month": _month_text(end, name="end"),
         "today": effective_today.strftime("%Y%m%d"),
+        "target_selection": {
+            "cutoff_date": effective_today.strftime("%Y%m%d"),
+            "cutoff_source": cutoff_source,
+            "calendar_input": "unprojected supplied trade_cal",
+            "incomplete_month_rule": "target month equals cutoff month",
+            "future_rule": "target month after cutoff is UNAVAILABLE_FUTURE",
+        },
+        "feature_as_of": {
+            "source": "selected_trading_date per target",
+            "rule": "feature and PIT inputs are bounded at selected as_of",
+            "selection_cutoff_is_not_feature_observation": True,
+        },
         "stage": stage,
         "top_n": top_n,
         "seed": seed,
@@ -2527,19 +2752,48 @@ def _run_validation(
             "financial_visibility_filter": "actual_available_date <= as_of",
             "raw_corpus_mutation": False,
         },
-        "resource_gate": {
-            "enabled": resource_guard,
-            "min_available_ram_bytes": MIN_AVAILABLE_RAM_BYTES,
-            "max_peak_rss_bytes": MAX_PEAK_RSS_BYTES,
-            "min_swap_free_bytes": MIN_SWAP_FREE_BYTES,
-            "large_corpus_threshold_bytes": LARGE_CORPUS_BYTES,
-        },
+        "resource_gate": _resource_gate_declaration(enabled=resource_guard),
     }
     validation_config_hash = _hash_payload(validation_configuration, length=None)
     synthetic = run_adversarial_fixtures()
     if synthetic.get("status") != "PASS":
         raise PITViolation(("synthetic_adversarial_fixture_failure",))
     resource_baseline = _host_memory() if resource_guard else {}
+    resource_samples: list[dict[str, Any]] = []
+    resource_started_at = time.monotonic()
+
+    def _record_resource_sample(stage_name: str, observed: Mapping[str, Any]) -> None:
+        if not resource_guard:
+            return
+        resource_samples.append(
+            {
+                "stage": stage_name,
+                "sampled_at_utc": datetime.now(UTC).isoformat(),
+                "elapsed_seconds": max(0.0, time.monotonic() - resource_started_at),
+                "available_bytes": observed.get("available_bytes"),
+                "swap_free_bytes": observed.get("swap_free_bytes"),
+                "swap_used_bytes": observed.get("swap_used_bytes"),
+                "current_rss_bytes": observed.get("current_rss_bytes"),
+                "current_pss_bytes": observed.get("current_pss_bytes"),
+                "current_private_bytes": observed.get("current_private_bytes"),
+                "current_swap_bytes": observed.get("current_swap_bytes"),
+                "peak_rss_diagnostic_bytes": observed.get("peak_rss_diagnostic_bytes"),
+                "live_memory_metric": observed.get("live_memory_metric"),
+            }
+        )
+
+    if resource_guard:
+        _record_resource_sample("baseline", resource_baseline)
+
+    def _sample_and_assert_resources(stage_name: str) -> dict[str, Any]:
+        observed = _host_memory()
+        _record_resource_sample(stage_name, observed)
+        return _assert_runtime_resource_gate(
+            resource_baseline,
+            memory=observed,
+            phase=stage_name,
+        )
+
     snapshots: list[ReplayValidationSnapshot] = []
     determinism_checks: list[dict[str, Any]] = []
     stopped_reason: str | None = None
@@ -2557,6 +2811,21 @@ def _run_validation(
     stream_candidate_digest_map: dict[str, str] = {}
     stream_candidate_count = 0
     candidate_flush_interval = 100
+
+    def _discard_stream_resources() -> None:
+        nonlocal candidate_spool_handle, candidate_spool_path
+        nonlocal stream_store_builder, stream_candidate_digest_map
+        if candidate_spool_handle is not None:
+            candidate_spool_handle.close()
+            candidate_spool_handle = None
+        if candidate_spool_path is not None:
+            candidate_spool_path.unlink(missing_ok=True)
+            candidate_spool_path = None
+        if stream_store_builder is not None:
+            stream_store_builder.close()
+            stream_store_builder = None
+        stream_candidate_digest_map = {}
+
     if stream_output is not None:
         stream_output.mkdir(parents=True, exist_ok=True)
         (stream_output / "snapshots").mkdir(parents=True, exist_ok=True)
@@ -2800,6 +3069,10 @@ def _run_validation(
                 # Finalization has an explicit boundary even when the last
                 # candidate completed exactly on an interval.
                 stream_store_builder.flush_chunk(force=True)
+            # run_replay_frames returns only after its worker executor has
+            # shut down.  This is a live-pressure check, not a peak-RSS check.
+            if resource_guard:
+                _sample_and_assert_resources("after_candidate_completion_worker_shutdown")
             with _diagnostic_phase(diagnostics, "pit_validation"):
                 pit_violations = validate_replay_pit(
                     replay_result,
@@ -2926,13 +3199,17 @@ def _run_validation(
                     determinism=determinism,
                 )
             )
+            # record_snapshot has completed CAS merge, gzip writing, artifact
+            # promotion, and cleanup.  Keep this sample separate from the
+            # post-worker sample so a report cannot imply ru_maxrss causality.
             if resource_guard:
-                _assert_runtime_resource_gate(resource_baseline)
+                _sample_and_assert_resources("after_artifact_promotion_and_cleanup")
             if stream_results:
                 del replay_result
                 del replay_frames
                 gc.collect()
         except ResourceBlocked:
+            _discard_stream_resources()
             raise
         except PITViolation as exc:
             stopped_reason = "P0 PIT violation"
@@ -2990,13 +3267,7 @@ def _run_validation(
                 )
             )
 
-    if candidate_spool_handle is not None:
-        candidate_spool_handle.flush()
-        candidate_spool_handle.close()
-        candidate_spool_handle = None
-        if candidate_spool_path is not None:
-            candidate_spool_path.unlink(missing_ok=True)
-            candidate_spool_path = None
+    _discard_stream_resources()
 
     snapshots_tuple = tuple(snapshots)
     summary = _build_summary(
@@ -3019,7 +3290,11 @@ def _run_validation(
     summary["revision_boundary_status"] = (
         synthetic.get("fixtures", {}).get("future_financial_revision", {}).get("status", "UNKNOWN")
     )
-    resource_final = _host_memory()
+    resource_final = (
+        _sample_and_assert_resources("validation_complete")
+        if resource_guard
+        else _host_memory()
+    )
     baseline_swap = resource_baseline.get("swap_used_bytes")
     final_swap = resource_final.get("swap_used_bytes")
     if diagnostics is not None:
@@ -3027,13 +3302,21 @@ def _run_validation(
             diagnostics,
             full_candidate_count=diagnostics.candidate_total,
         )
+    peak_rss_diagnostic = resource_final.get("peak_rss_diagnostic_bytes")
     summary["resource"] = {
+        "version": RESOURCE_GATE_CONTRACT_VERSION,
         "guard_enabled": resource_guard,
-        "peak_rss_bytes": resource_final.get("peak_rss_bytes"),
+        "live_memory_metric": resource_final.get("live_memory_metric"),
+        "current_rss_bytes": resource_final.get("current_rss_bytes"),
+        "current_pss_bytes": resource_final.get("current_pss_bytes"),
+        "current_private_bytes": resource_final.get("current_private_bytes"),
+        "current_swap_bytes": resource_final.get("current_swap_bytes"),
+        "peak_rss_diagnostic_bytes": peak_rss_diagnostic,
+        # Compatibility spelling for existing diagnostic readers.  Both names
+        # are diagnostic-only and neither participates in enforcement.
+        "peak_rss_bytes": peak_rss_diagnostic,
         "peak_rss_gib": (
-            resource_final["peak_rss_bytes"] / 1024**3
-            if resource_final.get("peak_rss_bytes") is not None
-            else None
+            peak_rss_diagnostic / 1024**3 if peak_rss_diagnostic is not None else None
         ),
         "available_bytes_at_finalize": resource_final.get("available_bytes"),
         "swap_free_bytes_at_finalize": resource_final.get("swap_free_bytes"),
@@ -3042,7 +3325,14 @@ def _run_validation(
             if final_swap is not None and baseline_swap is not None
             else None
         ),
-        "max_peak_rss_bytes": MAX_PEAK_RSS_BYTES if resource_guard else None,
+        "max_live_pss_bytes": MAX_LIVE_PSS_BYTES if resource_guard else None,
+        "max_live_private_bytes": MAX_LIVE_PRIVATE_BYTES if resource_guard else None,
+        "max_live_rss_fallback_bytes": MAX_PEAK_RSS_BYTES if resource_guard else None,
+        "max_process_swap_bytes": MAX_PROCESS_SWAP_BYTES if resource_guard else None,
+        "max_swap_growth_bytes": MAX_SWAP_GROWTH_BYTES if resource_guard else None,
+        "peak_rss_diagnostic_limit_bytes": MAX_PEAK_RSS_BYTES if resource_guard else None,
+        "peak_rss_enforcement": "diagnostic_only",
+        "samples": list(resource_samples),
     }
     run_warnings = tuple(
         dict.fromkeys(warning for snapshot in snapshots_tuple for warning in snapshot.warnings)
@@ -3095,7 +3385,7 @@ def run_replay_validation_frames(
     config: ReplayConfig | ReplayValidationConfig | None = None,
     seed: int = DEFAULT_SEED,
     stage: str = "monthly",
-    today: str | date | datetime | pd.Timestamp | None = None,
+    today: str | date | datetime | pd.Timestamp | None = DEFAULT_VALIDATION_CUTOFF,
     determinism_sample: int = 3,
     artifact_output: str | Path | None = None,
     retain_snapshot_results: bool | None = None,
@@ -3113,6 +3403,7 @@ def run_replay_validation_frames(
         top_n = validation_settings.top_n
         seed = validation_settings.seed
         stage = validation_settings.stage
+        today = validation_settings.today
         determinism_sample = validation_settings.determinism_sample
         replay_settings = validation_settings.replay or ReplayConfig(top_n=top_n)
     else:
@@ -3402,7 +3693,7 @@ def run_replay_validation(
     config: ReplayConfig | ReplayValidationConfig | None = None,
     seed: int = DEFAULT_SEED,
     stage: str = "monthly",
-    today: str | date | datetime | pd.Timestamp | None = None,
+    today: str | date | datetime | pd.Timestamp | None = DEFAULT_VALIDATION_CUTOFF,
     determinism_sample: int = 3,
     content_hash: bool = True,
     artifact_output: str | Path | None = None,
@@ -3421,6 +3712,7 @@ def run_replay_validation(
         top_n = validation_settings.top_n
         seed = validation_settings.seed
         stage = validation_settings.stage
+        today = validation_settings.today
         determinism_sample = validation_settings.determinism_sample
         replay_settings = validation_settings.replay or ReplayConfig(top_n=top_n)
     else:
@@ -3466,6 +3758,11 @@ def render_replay_validation_summary(result: ReplayValidationResult) -> str:
     """Render a safe human summary with correctness metrics only."""
 
     summary = result.summary
+    resource_summary = summary.get("resource", {})
+    current_pss = resource_summary.get("current_pss_bytes")
+    current_private = resource_summary.get("current_private_bytes")
+    current_pss_gib = current_pss / 1024**3 if current_pss is not None else None
+    current_private_gib = current_private / 1024**3 if current_private is not None else None
     lines = [
         "# Historical PIT replay validation sample",
         "",
@@ -3474,6 +3771,7 @@ def render_replay_validation_summary(result: ReplayValidationResult) -> str:
         f"- Overall status: `{result.status}`; gate: `{result.gate_status}`",
         f"- Selection rule: `{result.selection_rule}` (fixed anchor day; no return inputs)",
         f"- Range: `{result.start_month}`..`{result.end_month}`",
+        f"- Frozen target-selection cutoff: `{result.configuration.get('today')}`",
         f"- Stage: `{result.stage}`",
         f"- Top-N: `{result.top_n}`; seed: `{result.seed}`",
         f"- Input manifest: `{summary.get('input_manifest_id') or '-'}`",
@@ -3509,7 +3807,11 @@ def render_replay_validation_summary(result: ReplayValidationResult) -> str:
         f"- Missing-input snapshots: `{summary['missing_input_count']}` "
         f"(rate `{summary['missing_input_rate']}`)",
         f"- PIT violations: `{summary['pit_violation_count']}`",
-        f"- Peak RSS (GiB): `{summary.get('resource', {}).get('peak_rss_gib')}`",
+        f"- Live PSS (GiB): `{current_pss_gib}`",
+        f"- Live private memory (GiB): `{current_private_gib}`",
+        f"- Peak RSS diagnostic (ru_maxrss, GiB): `{resource_summary.get('peak_rss_gib')}` "
+        "(not enforced)",
+        f"- Resource gate: `{resource_summary.get('version')}`",
         f"- Synthetic adversarial fixtures: `{summary.get('synthetic_fixture_status')}`",
         f"- Financial revision boundary fixture: `{summary.get('revision_boundary_status')}`",
         "",
@@ -3520,7 +3822,7 @@ def render_replay_validation_summary(result: ReplayValidationResult) -> str:
         f"{summary.get('performance', {}).get('candidate_seconds_per_candidate')}`",
         f"- Full replay ETA seconds: `"
         f"{summary.get('performance', {}).get('full_replay_eta_seconds')}`",
-        f"- Peak RSS (GiB): `"
+        f"- Sampled RSS diagnostic (GiB): `"
         f"{summary.get('performance', {}).get('rss_peak_gib')}`",
         f"- Phase seconds: `"
         f"{summary.get('performance', {}).get('phase_seconds', {})}`",
@@ -3544,6 +3846,10 @@ def render_replay_validation_summary(result: ReplayValidationResult) -> str:
         "proven-safe `delist_date` boundaries and records exclusions.",
         "- Financial revisions are selected by `actual_available_date <= as_of`; "
         "market and benchmark observations are bounded by the selected session.",
+        "- Target selection uses the explicit frozen cutoff recorded in `configuration.today`; "
+        "the selected trading date remains the independent feature/PIT `as_of` cutoff.",
+        "- Resource gate v2 enforces live PSS/private/system-pressure metrics; `ru_maxrss` "
+        "is retained as a diagnostic high-water value only.",
         "- This is a PIT correctness sample, not a performance backtest: no "
         "forward-return evaluation, parameter tuning, weight changes, Score v2, "
         "ablation, or strategy claim is made.",
@@ -3584,6 +3890,8 @@ def write_replay_validation_artifacts(
         "stage": result.stage,
         "top_n": result.top_n,
         "seed": result.seed,
+        "validation_cutoff": result.configuration.get("today"),
+        "resource_gate": result.configuration.get("resource_gate", {}),
         "configuration": result.configuration,
         "input_manifest": result.input_manifest,
         "targets": [target.as_dict() for target in result.targets],
@@ -3658,6 +3966,12 @@ __all__ = [
     "MONTHLY_SELECTION_RULE_VERSION",
     "MARKET_REGIME_CONTRACT_VERSION",
     "HISTORICAL_UNIVERSE_CONTRACT_VERSION",
+    "RESOURCE_GATE_CONTRACT_VERSION",
+    "DEFAULT_VALIDATION_CUTOFF",
+    "MAX_LIVE_PSS_BYTES",
+    "MAX_LIVE_PRIVATE_BYTES",
+    "MAX_PROCESS_SWAP_BYTES",
+    "MAX_SWAP_GROWTH_BYTES",
     "ARTIFACT_LAYOUT_VERSION",
     "PIT_REPLAY_ARTIFACT_LAYOUT_VERSION",
     "ReplayValidationConfig",

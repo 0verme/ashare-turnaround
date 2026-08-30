@@ -81,6 +81,7 @@ from .scanner.replay import (
 from .scanner.replay_validation import (
     DEFAULT_END_MONTH,
     DEFAULT_START_MONTH,
+    DEFAULT_VALIDATION_CUTOFF,
     MONTHLY_SELECTION_RULE_VERSION,
     run_replay_validation,
     write_replay_validation_artifacts,
@@ -300,7 +301,11 @@ def _parser() -> argparse.ArgumentParser:
     replay_validation.add_argument("--selection-rule", default=MONTHLY_SELECTION_RULE_VERSION)
     replay_validation.add_argument("--anchor-day", type=int, default=15)
     replay_validation.add_argument("--calendar-exchange", default="SSE")
-    replay_validation.add_argument("--today", default=None)
+    replay_validation.add_argument(
+        "--today",
+        default=DEFAULT_VALIDATION_CUTOFF,
+        help="explicit target-selection cutoff (default: frozen validation campaign date)",
+    )
     replay_validation.add_argument("--top-n", type=int, default=20)
     replay_validation.add_argument(
         "--stage", choices=("smoke", "yearly", "monthly"), default="smoke"
@@ -1010,7 +1015,9 @@ def _replay_profile(args: argparse.Namespace) -> int:
             args.data_dir,
             start=month,
             end=month,
-            today=as_of,
+            # The diagnostic target is historical; do not classify its month
+            # as current merely because its as-of date is the selected date.
+            today=DEFAULT_VALIDATION_CUTOFF,
             top_n=args.top_n,
             config=ReplayConfig(top_n=args.top_n),
             stage="smoke",
@@ -1047,7 +1054,11 @@ def _replay_profile(args: argparse.Namespace) -> int:
     print(f"replay_profile_performance={destination}")
     print(f"candidate_seconds_per_candidate={performance.get('candidate_seconds_per_candidate')}")
     print(f"full_replay_eta_seconds={performance.get('full_replay_eta_seconds')}")
-    print(f"peak_rss_bytes={performance.get('rss_peak_bytes')}")
+    resource_summary = result.summary.get("resource", {})
+    print(
+        f"peak_rss_diagnostic_bytes={resource_summary.get('peak_rss_diagnostic_bytes')}"
+    )
+    print(f"sampled_rss_bytes={performance.get('rss_peak_bytes')}")
     # A bounded diagnostic is intentionally not a validation PASS.  The
     # command succeeds when the bounded run itself has no hard failure.
     return 0 if result.summary.get("failed_count", 0) == 0 else 2

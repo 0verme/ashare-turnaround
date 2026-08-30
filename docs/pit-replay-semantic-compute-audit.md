@@ -4,6 +4,12 @@ Issue #32 / PR #41, branch `research/32-pit-replay-validation-sample`.
 Artifact layout, gzip/CAS schemas, formulas, PIT/comparable semantics, evidence,
 score, and ranking contracts were frozen for this audit.
 
+**Historical status note:** the `READY_FOR_FULL_SMOKE` decision below predates
+`resource-gate-v2` and is not the current decision.  The preserved full run
+and the repaired cutoff/resource contract are documented in
+[pit-replay-resource-gate-v2.md](pit-replay-resource-gate-v2.md); the current
+static/bounded decision is `READY_FOR_FULL_SMOKE_AGAIN`.
+
 ## Structural changes
 
 - `FinancialSemanticContext` now owns candidate-local canonical income,
