@@ -35,6 +35,7 @@ from ..pit.financial import query_financial_as_of
 from ..storage.parquet import RawParquetStore
 from .artifacts import (
     ARTIFACT_LAYOUT_VERSION,
+    FINALIZATION_PROBE_INTERVAL_BYTES,
     PIT_REPLAY_ARTIFACT_LAYOUT_VERSION,
     ChunkedContentAddressedStore,
     ContentAddressedStore,
@@ -80,6 +81,7 @@ MAX_SWAP_GROWTH_BYTES = 256 * 1024**2
 MAX_PROCESS_SWAP_BYTES = 256 * 1024**2
 LARGE_CORPUS_BYTES = 512 * 1024**2
 RESOURCE_GATE_CONTRACT_VERSION = "resource-gate-v2"
+RESOURCE_SAMPLING_CONTRACT_VERSION = "resource-finalization-sampling-v1"
 DEFAULT_VALIDATION_CUTOFF = "20260830"
 
 
@@ -101,6 +103,19 @@ def _resource_gate_declaration(*, enabled: bool | None = None) -> dict[str, Any]
         "max_live_rss_fallback_bytes": MAX_PEAK_RSS_BYTES,
         "max_process_swap_bytes": MAX_PROCESS_SWAP_BYTES,
         "large_corpus_threshold_bytes": LARGE_CORPUS_BYTES,
+        "sampling_contract_version": RESOURCE_SAMPLING_CONTRACT_VERSION,
+        "finalization_sampling": {
+            "probe_interval_bytes": FINALIZATION_PROBE_INTERVAL_BYTES,
+            "phases": [
+                "replay_frame_release",
+                "cas_merge_group_boundaries",
+                "cas_finalized_store_iteration",
+                "artifact_vector_stream",
+                "artifact_score_stream",
+                "artifact_provenance_store_stream",
+            ],
+            "enforcement": "same resource-gate-v2 hard limits",
+        },
         "hard_metrics": [
             "available_bytes",
             "swap_free_bytes",
@@ -1872,6 +1887,40 @@ def _determinism_compare(
     return {**same, "status": "PASS" if all(comparison_values) else "FAIL"}
 
 
+def _streamed_replay_envelope(result: ReplayResult) -> dict[str, Any]:
+    """Build the replay envelope without materializing vectors or scores."""
+
+    return {
+        "metadata": result.metadata(),
+        "ranked": result.ranked.to_dict(orient="records"),
+        "diagnostic_ranked": (
+            result.diagnostic_ranked.to_dict(orient="records")
+            if result.diagnostic_ranked is not None
+            else result.ranked.to_dict(orient="records")
+        ),
+        # The normalized writer replaces these empty compatibility fields with
+        # one-pass streams. Their presence preserves the logical schema.
+        "vectors": [],
+        "scores": [],
+        "universe": {
+            "as_of_date": result.as_of_date,
+            "version": result.universe_version,
+            "pit_safe": result.universe_pit_safe,
+            "included": [
+                decision.ts_code
+                for decision in result.universe_decisions
+                if decision.included
+            ],
+            "decisions": [
+                decision.as_dict() for decision in result.universe_decisions
+            ],
+            "warnings": list(result.universe_warnings),
+            "source_evidence": dict(result.universe_source_evidence),
+            "limitations": list(result.universe_limitations),
+        },
+    }
+
+
 @dataclass(frozen=True, slots=True)
 class ReplayValidationSnapshot:
     target: MonthlySnapshotTarget
@@ -1901,6 +1950,30 @@ class ReplayValidationSnapshot:
             "reasons": list(self.reasons),
             "determinism": dict(self.determinism),
             "replay": self.result.artifact_dict() if self.result is not None else None,
+        }
+
+    def streamed_envelope(self) -> dict[str, Any]:
+        """Return a lightweight envelope for the production stream writer."""
+
+        return {
+            "target": self.target.as_dict(),
+            "snapshot_status": self.status,
+            "status": self.status,
+            "regime": self.regime.as_dict() if self.regime is not None else None,
+            "run_manifest": dict(self.run_manifest),
+            "warnings": list(self.warnings),
+            "missing_inputs": list(self.missing_inputs),
+            "pit": {
+                "status": "PASS" if not self.pit_violations else "FAIL",
+                "violations": list(self.pit_violations),
+            },
+            "reasons": list(self.reasons),
+            "determinism": dict(self.determinism),
+            "replay": (
+                _streamed_replay_envelope(self.result)
+                if self.result is not None
+                else None
+            ),
         }
 
     def normalized_dict(self) -> dict[str, Any]:
@@ -1989,7 +2062,7 @@ def _run_manifest(
     code_version: str,
     warnings: Iterable[str],
     candidate_vector_digests: Mapping[str, str] | None = None,
-    provenance_store: Mapping[str, Any] | None = None,
+    provenance_store: Mapping[str, Any] | Iterable[tuple[str, Any]] | None = None,
 ) -> dict[str, Any]:
     config_hash = _hash_payload(validation_config, length=None)
     digests = deterministic_replay_digests(
@@ -2758,13 +2831,11 @@ def _run_validation(
     synthetic = run_adversarial_fixtures()
     if synthetic.get("status") != "PASS":
         raise PITViolation(("synthetic_adversarial_fixture_failure",))
-    resource_baseline = _host_memory() if resource_guard else {}
+    resource_baseline = _host_memory()
     resource_samples: list[dict[str, Any]] = []
     resource_started_at = time.monotonic()
 
     def _record_resource_sample(stage_name: str, observed: Mapping[str, Any]) -> None:
-        if not resource_guard:
-            return
         resource_samples.append(
             {
                 "stage": stage_name,
@@ -2782,17 +2853,18 @@ def _run_validation(
             }
         )
 
-    if resource_guard:
-        _record_resource_sample("baseline", resource_baseline)
+    _record_resource_sample("baseline", resource_baseline)
 
     def _sample_and_assert_resources(stage_name: str) -> dict[str, Any]:
         observed = _host_memory()
         _record_resource_sample(stage_name, observed)
-        return _assert_runtime_resource_gate(
-            resource_baseline,
-            memory=observed,
-            phase=stage_name,
-        )
+        if resource_guard:
+            return _assert_runtime_resource_gate(
+                resource_baseline,
+                memory=observed,
+                phase=stage_name,
+            )
+        return observed
 
     snapshots: list[ReplayValidationSnapshot] = []
     determinism_checks: list[dict[str, Any]] = []
@@ -2803,6 +2875,7 @@ def _run_validation(
     stream_results = stream_output is not None and not retain_snapshot_results
     stream_candidates = stream_results
     snapshot_metrics: dict[str, dict[str, Any]] = {}
+    stream_cas_metrics: dict[str, dict[str, Any]] = {}
     stream_manual_records: list[dict[str, Any]] = []
     completed: list[dict[str, Any]] = []
     candidate_spool_path: Path | None = None
@@ -2884,34 +2957,51 @@ def _run_validation(
             if snapshot.regime is not None:
                 one = build_manual_review_sample((snapshot,), top_n=min(3, top_n))
                 stream_manual_records.extend(one["reviews"])
-        if stream_output is not None:
-            with _diagnostic_phase(diagnostics, "artifact_serialization"):
-                payload = snapshot.as_dict()
-                if candidate_spool_path is not None and snapshot.result is not None:
-                    if stream_store_builder is None:
-                        raise RuntimeError("normalized store is missing for streamed snapshot")
-                    write_normalized_snapshot_with_streamed_vectors(
-                        stream_output
-                        / "snapshots"
-                        / _snapshot_filename(snapshot, compressed=True),
-                        payload,
-                        candidate_spool_path,
-                        stream_store_builder.iter_entries_sorted(),
-                        canonical_spool=True,
-                        gzip_level=1,
-                    )
-                else:
-                    _write_json(
-                        stream_output / "snapshots" / _snapshot_filename(snapshot),
-                        normalize_snapshot_payload(payload),
-                    )
-            if candidate_spool_path is not None:
-                candidate_spool_path.unlink(missing_ok=True)
-                candidate_spool_path = None
-            if stream_store_builder is not None:
-                stream_store_builder.close()
-            stream_store_builder = None
-            stream_candidate_digest_map = {}
+        artifact_path: Path | None = None
+        try:
+            if stream_output is not None:
+                with _diagnostic_phase(diagnostics, "artifact_serialization"):
+                    if candidate_spool_path is not None and snapshot.result is not None:
+                        if stream_store_builder is None:
+                            raise RuntimeError(
+                                "normalized store is missing for streamed snapshot"
+                            )
+                        _sample_and_assert_resources("before_artifact_writer")
+                        artifact_path = write_normalized_snapshot_with_streamed_vectors(
+                            stream_output
+                            / "snapshots"
+                            / _snapshot_filename(snapshot, compressed=True),
+                            snapshot.streamed_envelope(),
+                            candidate_spool_path,
+                            stream_store_builder.iter_entries_sorted(
+                                resource_probe=_sample_and_assert_resources
+                            ),
+                            scores=iter(snapshot.result.scores),
+                            canonical_spool=True,
+                            gzip_level=1,
+                            resource_probe=_sample_and_assert_resources,
+                        )
+                    else:
+                        payload = snapshot.as_dict()
+                        artifact_path = _write_json(
+                            stream_output / "snapshots" / _snapshot_filename(snapshot),
+                            normalize_snapshot_payload(payload),
+                        )
+                if candidate_spool_path is not None:
+                    candidate_spool_path.unlink(missing_ok=True)
+                    candidate_spool_path = None
+                if stream_store_builder is not None:
+                    stream_store_builder.close()
+                stream_store_builder = None
+                stream_candidate_digest_map = {}
+                _sample_and_assert_resources("after_artifact_writer_and_cleanup")
+        except ResourceBlocked:
+            # The writer itself is atomic. This extra removal covers a hard
+            # post-writer sample that fires after promotion but before the
+            # snapshot is recorded as completed.
+            if artifact_path is not None:
+                artifact_path.unlink(missing_ok=True)
+            raise
         completed.append(
             {
                 "target_month": snapshot.target.target_month,
@@ -3070,9 +3160,8 @@ def _run_validation(
                 # candidate completed exactly on an interval.
                 stream_store_builder.flush_chunk(force=True)
             # run_replay_frames returns only after its worker executor has
-            # shut down.  This is a live-pressure check, not a peak-RSS check.
-            if resource_guard:
-                _sample_and_assert_resources("after_candidate_completion_worker_shutdown")
+            # shut down. This is a live-pressure sample, not a peak-RSS check.
+            _sample_and_assert_resources("after_candidate_completion_worker_shutdown")
             with _diagnostic_phase(diagnostics, "pit_validation"):
                 pit_violations = validate_replay_pit(
                     replay_result,
@@ -3103,36 +3192,26 @@ def _run_validation(
             else:
                 snapshot_status = "INCOMPLETE" if target.incomplete_month else "READY"
                 reasons = ("incomplete_current_month",) if target.incomplete_month else ()
-            run_manifest = _run_manifest(
-                replay_result,
-                target=target,
-                input_manifest=input_manifest,
-                validation_config=validation_configuration,
-                seed=seed,
-                code_version=code_version,
-                warnings=(*warnings, *replay_result.warnings, *pit_violations),
-                candidate_vector_digests=(
-                    stream_candidate_digest_map if stream_candidates else None
-                ),
-                provenance_store=(
-                    stream_store_builder
-                    if stream_candidates and stream_store_builder is not None
-                    else None
-                ),
-            )
             determinism: dict[str, Any] = {}
-            if (
+            repeated: ReplayResult | None = None
+            repeated_candidate_digests: dict[str, str] = {}
+            repeated_store: ContentAddressedStore | None = None
+            should_repeat = (
                 not pit_violations
                 and len(determinism_checks) < determinism_sample
                 and stopped_reason is None
-            ):
+            )
+            if should_repeat:
+                # A same-process repeat genuinely needs the projected frames,
+                # so it runs before their explicit release. Digest comparison
+                # and CAS finalization wait until after the release boundary.
                 saved_sink = diagnostics.candidate_sink if stream_candidates else None
                 saved_validator = diagnostics.candidate_validator if stream_candidates else None
                 saved_retain_vectors = diagnostics.retain_vectors if stream_candidates else True
-                repeated_candidate_digests: dict[str, str] = {}
                 repeated_store = ContentAddressedStore()
 
                 def repeated_sink(vector: FeatureVector, _score: Any) -> None:
+                    assert repeated_store is not None
                     normalized = normalize_feature_vector(vector, store=repeated_store)
                     repeated_candidate_digests[str(vector.ts_code)] = content_digest(normalized)
 
@@ -3152,6 +3231,53 @@ def _run_validation(
                         diagnostics.candidate_sink = saved_sink
                         diagnostics.candidate_validator = saved_validator
                         diagnostics.retain_vectors = saved_retain_vectors
+
+            # PIT and the initial snapshot status are now complete. Production
+            # determinism_sample=0 no longer keeps raw/projected DataFrames
+            # alive during the first external CAS merge or artifact writing.
+            _sample_and_assert_resources("before_replay_frames_release")
+            replay_frames = None
+            gc.collect()
+            _sample_and_assert_resources("after_replay_frames_release")
+
+            if stream_candidates and stream_store_builder is not None:
+                _sample_and_assert_resources("before_cas_finalize")
+                finalized_path = stream_store_builder.finalize(
+                    resource_probe=_sample_and_assert_resources
+                )
+                _sample_and_assert_resources("after_cas_finalize")
+                stream_cas_metrics[target.target_month] = {
+                    "finalization_count": stream_store_builder.finalization_count,
+                    "merge_group_count": stream_store_builder.merge_group_count,
+                    "merge_pass_count": stream_store_builder.merge_pass_count,
+                    "peak_open_chunk_streams": (
+                        stream_store_builder.peak_open_chunk_streams
+                    ),
+                    "configured_merge_fan_in": stream_store_builder.merge_fan_in,
+                    "unique_entry_count": stream_store_builder.entry_count,
+                    "physical_value_bytes": stream_store_builder.physical_byte_count,
+                    "finalized_runtime_file_bytes": finalized_path.stat().st_size,
+                }
+
+            run_manifest = _run_manifest(
+                replay_result,
+                target=target,
+                input_manifest=input_manifest,
+                validation_config=validation_configuration,
+                seed=seed,
+                code_version=code_version,
+                warnings=(*warnings, *replay_result.warnings, *pit_violations),
+                candidate_vector_digests=(
+                    stream_candidate_digest_map if stream_candidates else None
+                ),
+                provenance_store=(
+                    stream_store_builder
+                    if stream_candidates and stream_store_builder is not None
+                    else None
+                ),
+            )
+
+            if repeated is not None:
                 determinism = _determinism_compare(
                     replay_result,
                     repeated,
@@ -3167,7 +3293,7 @@ def _run_validation(
                         else None
                     ),
                     second_provenance_store=(
-                        repeated_store.iter_entries_sorted() if stream_candidates else None
+                        repeated_store if stream_candidates else None
                     ),
                 )
                 del repeated
@@ -3199,14 +3325,8 @@ def _run_validation(
                     determinism=determinism,
                 )
             )
-            # record_snapshot has completed CAS merge, gzip writing, artifact
-            # promotion, and cleanup.  Keep this sample separate from the
-            # post-worker sample so a report cannot imply ru_maxrss causality.
-            if resource_guard:
-                _sample_and_assert_resources("after_artifact_promotion_and_cleanup")
             if stream_results:
                 del replay_result
-                del replay_frames
                 gc.collect()
         except ResourceBlocked:
             _discard_stream_resources()
@@ -3290,11 +3410,7 @@ def _run_validation(
     summary["revision_boundary_status"] = (
         synthetic.get("fixtures", {}).get("future_financial_revision", {}).get("status", "UNKNOWN")
     )
-    resource_final = (
-        _sample_and_assert_resources("validation_complete")
-        if resource_guard
-        else _host_memory()
-    )
+    resource_final = _sample_and_assert_resources("validation_complete")
     baseline_swap = resource_baseline.get("swap_used_bytes")
     final_swap = resource_final.get("swap_used_bytes")
     if diagnostics is not None:
@@ -3305,6 +3421,7 @@ def _run_validation(
     peak_rss_diagnostic = resource_final.get("peak_rss_diagnostic_bytes")
     summary["resource"] = {
         "version": RESOURCE_GATE_CONTRACT_VERSION,
+        "sampling_contract_version": RESOURCE_SAMPLING_CONTRACT_VERSION,
         "guard_enabled": resource_guard,
         "live_memory_metric": resource_final.get("live_memory_metric"),
         "current_rss_bytes": resource_final.get("current_rss_bytes"),
@@ -3332,6 +3449,7 @@ def _run_validation(
         "max_swap_growth_bytes": MAX_SWAP_GROWTH_BYTES if resource_guard else None,
         "peak_rss_diagnostic_limit_bytes": MAX_PEAK_RSS_BYTES if resource_guard else None,
         "peak_rss_enforcement": "diagnostic_only",
+        "cas_finalization": dict(stream_cas_metrics),
         "samples": list(resource_samples),
     }
     run_warnings = tuple(
@@ -3967,6 +4085,7 @@ __all__ = [
     "MARKET_REGIME_CONTRACT_VERSION",
     "HISTORICAL_UNIVERSE_CONTRACT_VERSION",
     "RESOURCE_GATE_CONTRACT_VERSION",
+    "RESOURCE_SAMPLING_CONTRACT_VERSION",
     "DEFAULT_VALIDATION_CUTOFF",
     "MAX_LIVE_PSS_BYTES",
     "MAX_LIVE_PRIVATE_BYTES",

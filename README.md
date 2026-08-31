@@ -63,11 +63,12 @@ redownload is implied by this hand-off.
 The #32 validation path is read-only and must remain separate from Evaluation
 and Ablation. The planned post-calibration sequence is `#32 → calibrated
 Evaluation (#17) → Ablation / Stability (#18) → Score v2 decision`. The
-post-#41 normalized artifact audit and preserved pre-resource-gate-v2
-full-run evidence are in
+post-#41 normalized artifact audit is in
 [docs/pit-replay-artifact-normalization.md](docs/pit-replay-artifact-normalization.md);
-the repaired resource/cutoff contract is in
-[docs/pit-replay-resource-gate-v2.md](docs/pit-replay-resource-gate-v2.md).
+the resource/cutoff contract is in
+[docs/pit-replay-resource-gate-v2.md](docs/pit-replay-resource-gate-v2.md), and
+the preserved resource-failed baseline plus bounded finalization repair are in
+[docs/pit-replay-finalization-working-set.md](docs/pit-replay-finalization-working-set.md).
 
 ## Architecture
 

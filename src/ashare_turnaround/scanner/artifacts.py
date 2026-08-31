@@ -27,7 +27,7 @@ import math
 import os
 import tempfile
 import zlib
-from collections.abc import Iterable, Iterator, Mapping, MutableMapping
+from collections.abc import Callable, Iterable, Iterator, Mapping, MutableMapping
 from contextlib import ExitStack
 from datetime import date, datetime
 from pathlib import Path
@@ -41,6 +41,9 @@ NORMALIZED_ARTIFACT_LAYOUT_VERSION = "pit-replay-artifact-normalized-v1"
 ARTIFACT_LAYOUT_VERSION = NORMALIZED_ARTIFACT_LAYOUT_VERSION
 PIT_REPLAY_ARTIFACT_LAYOUT_VERSION = NORMALIZED_ARTIFACT_LAYOUT_VERSION
 DIGEST_CONTRACT_VERSION = "pit-replay-digests-v2"
+FINALIZATION_PROBE_INTERVAL_BYTES = 256 * 1024**2
+
+ResourceProbe = Callable[[str], None]
 
 _REF_KEY = "$ref"
 _REF_PREFIX = "sha256:"
@@ -484,50 +487,89 @@ class ContentAddressedStore:
 
 
 class ChunkedContentAddressedStore(ContentAddressedStore):
-    """A bounded-memory CAS backed by sorted temporary chunk files.
+    """A bounded-memory CAS with one reusable external-merge finalization.
 
-    The active chunk has the same implementation and byte contract as the
-    in-memory store.  Flushing moves its physical bytes to a private binary
-    file; final iteration performs a k-way merge and verifies duplicate refs.
+    Active entries are flushed to sorted private chunks. :meth:`finalize`
+    merges those chunks exactly once into an immutable runtime file while it
+    computes the logical mapping digest and verifies duplicate refs. All later
+    digest and iteration calls reuse that file instead of rebuilding a merge
+    tree.
     """
 
     MERGE_FAN_IN = 32
 
-    def __init__(self, directory: str | Path | None = None, *, chunk_entries: int = 100_000,
-                 max_active_entries: int = 100_000,
-                 max_active_physical_bytes: int = 64 * 1024 * 1024,
-                 merge_fan_in: int = MERGE_FAN_IN) -> None:
+    def __init__(
+        self,
+        directory: str | Path | None = None,
+        *,
+        chunk_entries: int = 100_000,
+        max_active_entries: int = 100_000,
+        max_active_physical_bytes: int = 64 * 1024 * 1024,
+        merge_fan_in: int = MERGE_FAN_IN,
+    ) -> None:
         if min(chunk_entries, max_active_entries, max_active_physical_bytes) <= 0:
             raise ValueError("chunk and active safety limits must be positive")
         if not 2 <= merge_fan_in <= 64:
             raise ValueError("merge_fan_in must be between 2 and 64")
         super().__init__()
-        # This is a physical-entry safety limit, not a candidate-count policy.
+        # These are physical safety settings, not candidate-count policies.
         self.chunk_entries = int(chunk_entries)
         self.max_active_entries = int(max_active_entries)
         self.max_active_physical_bytes = int(max_active_physical_bytes)
         self.merge_fan_in = int(merge_fan_in)
         self.peak_open_chunk_streams = 0
+        self.merge_group_count = 0
+        self.merge_pass_count = 0
+        self.finalization_count = 0
         self._temporary_merges: list[Path] = []
         self._chunk_dir = Path(directory) if directory is not None else Path(
             tempfile.mkdtemp(prefix="ashare-cas-")
         )
         self._chunk_dir.mkdir(parents=True, exist_ok=True)
         self._chunks: list[Path] = []
+        self._chunk_sequence = 0
+        self._finalized_path: Path | None = None
+        self._finalized_digest: str | None = None
+        self._finalized_entry_count: int | None = None
+        self._finalized_physical_bytes: int | None = None
+        self._finalization_failed = False
 
     @property
     def chunk_count(self) -> int:
         return len(self._chunks)
 
+    @property
+    def finalized_path(self) -> Path | None:
+        return self._finalized_path
+
+    @property
+    def is_finalized(self) -> bool:
+        return self._finalized_path is not None
+
+    def intern(self, value: Any) -> str:
+        if self.is_finalized or self._finalization_failed:
+            raise RuntimeError("cannot add entries after CAS finalization")
+        return super().intern(value)
+
     def flush_chunk(self, *, force: bool = False) -> Path | None:
         """Persist the active physical chunk; ``force`` documents the boundary."""
+
         del force
+        if self.is_finalized or self._finalization_failed:
+            raise RuntimeError("cannot flush entries after CAS finalization")
         if not self._entries:
             return None
-        path = self._chunk_dir / f"chunk-{len(self._chunks):08d}.cas"
-        with path.open("wb") as handle:
-            for ref, value in super().iter_entries_sorted():
-                handle.write(ref.encode("ascii") + b"\t" + base64.b64encode(value) + b"\n")
+        path = self._chunk_dir / f"chunk-{self._chunk_sequence:08d}.cas"
+        self._chunk_sequence += 1
+        try:
+            with path.open("xb") as handle:
+                for ref, value in super().iter_entries_sorted():
+                    handle.write(
+                        ref.encode("ascii") + b"\t" + base64.b64encode(value) + b"\n"
+                    )
+        except BaseException:
+            path.unlink(missing_ok=True)
+            raise
         self._chunks.append(path)
         self._entries.clear()
         self._physical_bytes = 0
@@ -536,20 +578,20 @@ class ChunkedContentAddressedStore(ContentAddressedStore):
 
     def flush_chunk_if_needed(self, *, force: bool = False) -> Path | None:
         """Apply physical safety limits; callers explicitly own candidate batches."""
-        if (force or len(self._entries) >= self.chunk_entries
-                or len(self._entries) >= self.max_active_entries
-                or self._physical_bytes >= self.max_active_physical_bytes):
+
+        if (
+            force
+            or len(self._entries) >= self.chunk_entries
+            or len(self._entries) >= self.max_active_entries
+            or self._physical_bytes >= self.max_active_physical_bytes
+        ):
             return self.flush_chunk()
         return None
 
-    def _chunk_entries(self, path: Path) -> Iterator[tuple[str, bytes]]:
-        with path.open("rb") as handle:
-            for line in handle:
-                ref, encoded = line.rstrip(b"\n").split(b"\t", 1)
-                yield ref.decode("ascii"), base64.b64decode(encoded)
-
     @staticmethod
-    def _merge_streams(streams: list[Iterator[tuple[str, bytes]]]) -> Iterator[tuple[str, bytes]]:
+    def _merge_streams(
+        streams: list[Iterator[tuple[str, bytes]]],
+    ) -> Iterator[tuple[str, bytes]]:
         heap: list[tuple[str, int, bytes]] = []
         for index, stream in enumerate(streams):
             try:
@@ -573,76 +615,216 @@ class ChunkedContentAddressedStore(ContentAddressedStore):
                     continue
                 heapq.heappush(heap, (next_ref, stream_index, next_value))
 
-    def _merge_group(self, paths: list[Path], output: Path) -> None:
-        try:
-            with ExitStack() as stack:
-                handles = [stack.enter_context(path.open("rb")) for path in paths]
-                self.peak_open_chunk_streams = max(self.peak_open_chunk_streams, len(handles))
-                streams = [self._chunk_entries_from_handle(handle) for handle in handles]
-                with output.open("wb") as target:
-                    for ref, value in self._merge_streams(streams):
-                        target.write(
-                            ref.encode("ascii") + b"\t" + base64.b64encode(value) + b"\n"
-                        )
-        except BaseException:
-            output.unlink(missing_ok=True)
-            raise
-
     @staticmethod
     def _chunk_entries_from_handle(handle: Any) -> Iterator[tuple[str, bytes]]:
         for line in handle:
             ref, encoded = line.rstrip(b"\n").split(b"\t", 1)
             yield ref.decode("ascii"), base64.b64decode(encoded)
 
-    def iter_entries_sorted(self) -> Iterator[tuple[str, bytes]]:
-        if self._entries:
-            self.flush_chunk(force=True)
-        paths = list(self._chunks)
-        created: list[Path] = []
+    def _merge_group(
+        self,
+        paths: list[Path],
+        output: Path,
+        *,
+        resource_probe: ResourceProbe | None,
+        probe_interval_bytes: int,
+        final: bool = False,
+    ) -> tuple[str | None, int, int]:
+        phase = "cas_final_merge" if final else "cas_intermediate_merge_group"
+        if resource_probe is not None:
+            resource_probe(f"{phase}_start")
+        digest = hashlib.sha256() if final else None
+        if digest is not None:
+            digest.update(b"{")
+        entry_count = 0
+        physical_bytes = 0
+        bytes_since_probe = 0
+        output.unlink(missing_ok=True)
         try:
-            level = 0
-            while len(paths) > self.merge_fan_in:
-                next_paths: list[Path] = []
-                for start in range(0, len(paths), self.merge_fan_in):
-                    output = self._chunk_dir / (
-                        f"merge-{level:04d}-{start // self.merge_fan_in:08d}.cas"
-                    )
-                    self._merge_group(paths[start:start + self.merge_fan_in], output)
-                    created.append(output)
-                    next_paths.append(output)
-                for path in paths:
-                    if path not in self._chunks:
-                        path.unlink(missing_ok=True)
-                paths, level = next_paths, level + 1
             with ExitStack() as stack:
                 handles = [stack.enter_context(path.open("rb")) for path in paths]
-                self.peak_open_chunk_streams = max(self.peak_open_chunk_streams, len(handles))
-                yield from self._merge_streams([
-                    self._chunk_entries_from_handle(handle) for handle in handles
-                ])
-        finally:
-            for path in created:
+                self.peak_open_chunk_streams = max(
+                    self.peak_open_chunk_streams, len(handles)
+                )
+                streams = [self._chunk_entries_from_handle(handle) for handle in handles]
+                with output.open("xb") as target:
+                    for ref, value in self._merge_streams(streams):
+                        line = (
+                            ref.encode("ascii")
+                            + b"\t"
+                            + base64.b64encode(value)
+                            + b"\n"
+                        )
+                        target.write(line)
+                        if digest is not None:
+                            if entry_count:
+                                digest.update(b",")
+                            digest.update(_canonical_safe_bytes(ref))
+                            digest.update(b":")
+                            digest.update(_physical_store_value_bytes(value))
+                        entry_count += 1
+                        physical_bytes += len(value)
+                        bytes_since_probe += len(line)
+                        if (
+                            resource_probe is not None
+                            and bytes_since_probe >= probe_interval_bytes
+                        ):
+                            resource_probe(f"{phase}_output_interval")
+                            bytes_since_probe = 0
+                    target.flush()
+            if digest is not None:
+                digest.update(b"}")
+            if resource_probe is not None:
+                resource_probe(f"{phase}_complete")
+        except BaseException:
+            output.unlink(missing_ok=True)
+            raise
+        self.merge_group_count += 1
+        return digest.hexdigest() if digest is not None else None, entry_count, physical_bytes
+
+    def finalize(
+        self,
+        *,
+        resource_probe: ResourceProbe | None = None,
+        probe_interval_bytes: int = FINALIZATION_PROBE_INTERVAL_BYTES,
+    ) -> Path:
+        """Create and cache the sole sorted runtime store and its digest.
+
+        Duplicate refs with equal bytes are deduplicated by the merge. A
+        conflicting duplicate fails closed. Intermediate files are removed as
+        soon as a complete successor exists; a failed finalization removes all
+        partial/intermediate output and leaves cleanup of surviving source
+        chunks to :meth:`close`.
+        """
+
+        if probe_interval_bytes <= 0:
+            raise ValueError("probe_interval_bytes must be positive")
+        if self._finalized_path is not None:
+            return self._finalized_path
+        if self._finalization_failed:
+            raise RuntimeError("CAS finalization previously failed")
+        self.flush_chunk(force=True)
+        paths = list(self._chunks)
+        partial = self._chunk_dir / "finalized.cas.partial"
+        final_path = self._chunk_dir / "finalized.cas"
+        partial.unlink(missing_ok=True)
+        final_path.unlink(missing_ok=True)
+        level = 0
+        try:
+            if resource_probe is not None:
+                resource_probe("cas_finalize_start")
+            while len(paths) > self.merge_fan_in:
+                self.merge_pass_count += 1
+                next_paths: list[Path] = []
+                for group_index, start in enumerate(
+                    range(0, len(paths), self.merge_fan_in)
+                ):
+                    group = paths[start : start + self.merge_fan_in]
+                    output = self._chunk_dir / (
+                        f"merge-{level:04d}-{group_index:08d}.cas"
+                    )
+                    self._merge_group(
+                        group,
+                        output,
+                        resource_probe=resource_probe,
+                        probe_interval_bytes=probe_interval_bytes,
+                    )
+                    self._temporary_merges.append(output)
+                    next_paths.append(output)
+                    # Each completed group is a durable sorted replacement for
+                    # its inputs; releasing them bounds temporary disk growth.
+                    for path in group:
+                        path.unlink(missing_ok=True)
+                        if path in self._chunks:
+                            self._chunks.remove(path)
+                        if path in self._temporary_merges:
+                            self._temporary_merges.remove(path)
+                paths = next_paths
+                level += 1
+            self.merge_pass_count += 1
+            digest, entry_count, physical_bytes = self._merge_group(
+                paths,
+                partial,
+                resource_probe=resource_probe,
+                probe_interval_bytes=probe_interval_bytes,
+                final=True,
+            )
+            assert digest is not None
+            if resource_probe is not None:
+                # This is deliberately before promotion. A hard resource gate
+                # therefore cannot leave a finalized file behind.
+                resource_probe("cas_finalized_store_completion")
+            os.replace(partial, final_path)
+            for path in paths:
+                path.unlink(missing_ok=True)
+            self._chunks.clear()
+            self._temporary_merges.clear()
+            self._finalized_path = final_path
+            self._finalized_digest = digest
+            self._finalized_entry_count = entry_count
+            self._finalized_physical_bytes = physical_bytes
+            self.finalization_count += 1
+            return final_path
+        except BaseException:
+            partial.unlink(missing_ok=True)
+            final_path.unlink(missing_ok=True)
+            for path in self._temporary_merges:
                 path.unlink(missing_ok=True)
             self._temporary_merges.clear()
+            self._finalization_failed = True
+            raise
 
-    def digest(self) -> str:
-        digest = hashlib.sha256()
-        digest.update(b"{")
-        for index, (ref, value) in enumerate(self.iter_entries_sorted()):
-            if index:
-                digest.update(b",")
-            digest.update(_canonical_safe_bytes(ref))
-            digest.update(b":")
-            digest.update(_physical_store_value_bytes(value))
-        digest.update(b"}")
-        return digest.hexdigest()
+    def iter_entries_sorted(
+        self,
+        *,
+        resource_probe: ResourceProbe | None = None,
+        probe_interval_bytes: int = FINALIZATION_PROBE_INTERVAL_BYTES,
+    ) -> Iterator[tuple[str, bytes]]:
+        """Read the finalized sorted file directly without another merge."""
+
+        if probe_interval_bytes <= 0:
+            raise ValueError("probe_interval_bytes must be positive")
+        path = self.finalize(
+            resource_probe=resource_probe,
+            probe_interval_bytes=probe_interval_bytes,
+        )
+        if resource_probe is not None:
+            resource_probe("cas_finalized_store_iteration_start")
+        bytes_since_probe = 0
+        with path.open("rb") as handle:
+            for ref, value in self._chunk_entries_from_handle(handle):
+                yield ref, value
+                bytes_since_probe += len(value)
+                if (
+                    resource_probe is not None
+                    and bytes_since_probe >= probe_interval_bytes
+                ):
+                    resource_probe("cas_finalized_store_iteration_interval")
+                    bytes_since_probe = 0
+        if resource_probe is not None:
+            resource_probe("cas_finalized_store_iteration_complete")
+
+    def digest(
+        self,
+        *,
+        resource_probe: ResourceProbe | None = None,
+        probe_interval_bytes: int = FINALIZATION_PROBE_INTERVAL_BYTES,
+    ) -> str:
+        self.finalize(
+            resource_probe=resource_probe,
+            probe_interval_bytes=probe_interval_bytes,
+        )
+        assert self._finalized_digest is not None
+        return self._finalized_digest
 
     def __len__(self) -> int:
         return self.entry_count
 
     @property
     def entry_count(self) -> int:
-        return sum(1 for _ in self.iter_entries_sorted())
+        self.finalize()
+        assert self._finalized_entry_count is not None
+        return self._finalized_entry_count
 
     @property
     def active_entry_count(self) -> int:
@@ -654,11 +836,21 @@ class ChunkedContentAddressedStore(ContentAddressedStore):
 
     @property
     def physical_byte_count(self) -> int:
-        return sum(len(value) for _, value in self.iter_entries_sorted())
+        self.finalize()
+        assert self._finalized_physical_bytes is not None
+        return self._finalized_physical_bytes
 
     def close(self, *, cleanup: bool = True) -> None:
         if cleanup:
-            for path in (*self._chunks, *self._temporary_merges):
+            owned_paths = {
+                *self._chunks,
+                *self._temporary_merges,
+                self._chunk_dir / "finalized.cas",
+                self._chunk_dir / "finalized.cas.partial",
+            }
+            for pattern in ("merge-*.cas",):
+                owned_paths.update(self._chunk_dir.glob(pattern))
+            for path in owned_paths:
                 path.unlink(missing_ok=True)
             self._chunks.clear()
             self._temporary_merges.clear()
@@ -668,6 +860,11 @@ class ChunkedContentAddressedStore(ContentAddressedStore):
                 pass
         self._entries.clear()
         self._physical_bytes = 0
+        self._finalized_path = None
+        self._finalized_digest = None
+        self._finalized_entry_count = None
+        self._finalized_physical_bytes = None
+        self._finalization_failed = False
         self.clear_identity_cache()
 
 
@@ -1166,6 +1363,25 @@ def semantic_digest(value: Any) -> str:
     return content_digest(semantic_payload(value))
 
 
+def semantic_sequence_digest(values: Iterable[Any]) -> str:
+    """Hash a semantic JSON array with only one expanded item in memory.
+
+    The emitted canonical bytes are exactly those used by
+    ``semantic_digest([item1, item2, ...])``: an opening bracket, canonical
+    semantic items in iteration order separated by commas, and a closing
+    bracket. Objects with ``as_dict()`` are expanded one at a time.
+    """
+
+    digest = hashlib.sha256()
+    digest.update(b"[")
+    for index, value in enumerate(values):
+        if index:
+            digest.update(b",")
+        digest.update(canonical_json_bytes(semantic_payload(value)))
+    digest.update(b"]")
+    return digest.hexdigest()
+
+
 def _frame_records(frame: Any) -> list[dict[str, Any]]:
     if frame is None:
         return []
@@ -1208,7 +1424,6 @@ def deterministic_replay_digests(
             str(code): str(digest) for code, digest in candidate_vector_digests.items()
         }
     scores = component("scores", ())
-    score_payload = [score.as_dict() if hasattr(score, "as_dict") else score for score in scores]
     formal = _frame_records(component("ranked", []))
     diagnostic = _frame_records(component("diagnostic_ranked", []))
     if provenance_store is None:
@@ -1227,16 +1442,13 @@ def deterministic_replay_digests(
         "digest_contract_version": DIGEST_CONTRACT_VERSION,
         "input_manifest_digest": str(manifest.get("manifest_id") or content_digest(manifest)),
         "config_digest": semantic_digest(component("configuration", {})),
-        "universe_decision_digest": semantic_digest(
-            [
-                item.as_dict() if hasattr(item, "as_dict") else item
-                for item in component("universe_decisions", ())
-            ]
+        "universe_decision_digest": semantic_sequence_digest(
+            component("universe_decisions", ())
         ),
         "per_candidate_normalized_vector_digest": dict(
             sorted(candidate_vector_digests.items())
         ),
-        "score_digest": semantic_digest(score_payload),
+        "score_digest": semantic_sequence_digest(scores),
         "formal_ranking_digest": semantic_digest(formal),
         "diagnostic_ranking_digest": semantic_digest(diagnostic),
         "warnings_digest": semantic_digest(list(component("warnings", ()))),
@@ -1690,30 +1902,46 @@ def write_normalized_snapshot_with_streamed_vectors(
     spool_path: str | Path,
     provenance_store: Mapping[str, Any] | Iterable[tuple[str, Any]],
     *,
+    scores: Iterable[Any] | None = None,
     canonical_spool: bool = False,
     gzip_level: int | None = None,
+    resource_probe: ResourceProbe | None = None,
+    probe_interval_bytes: int = FINALIZATION_PROBE_INTERVAL_BYTES,
 ) -> Path:
-    """Write a normalized snapshot while reading vectors line-by-line.
+    """Write vectors, scores, and provenance without a full envelope copy.
 
-    ``canonical_spool`` is reserved for the private spool produced from a
-    successful canonical ``json.dumps`` call.  Such records are copied
-    verbatim; externally supplied spools retain the fail-closed parse and
-    canonicalization path.  ``gzip_level`` enables deterministic whole-stream
-    compression (mtime=0 and no original filename).
+    The caller supplies a lightweight snapshot envelope. ``scores`` enables
+    one-pass score serialization; omitting it preserves the compatibility path
+    for small envelopes that already contain their score array.
+    ``canonical_spool`` is reserved for the private vector spool produced from
+    a successful canonical ``json.dumps`` call. ``gzip_level`` enables
+    deterministic whole-stream compression (mtime=0, no original filename).
     """
 
-    payload = copy.deepcopy(dict(snapshot))
-    replay = payload.get("replay")
-    if not isinstance(replay, Mapping) or "vectors" not in replay:
+    if probe_interval_bytes <= 0:
+        raise ValueError("probe_interval_bytes must be positive")
+    # Only these two top-level dictionaries are copied. Nested caller objects
+    # are never mutated, deep-copied, or JSON-normalized as one large tree.
+    payload = dict(snapshot)
+    replay_source = payload.get("replay")
+    if not isinstance(replay_source, Mapping) or "vectors" not in replay_source:
         raise ValueError("streamed snapshot payload is missing replay.vectors")
+    replay = dict(replay_source)
     payload["artifact_layout_version"] = NORMALIZED_ARTIFACT_LAYOUT_VERSION
-    replay = dict(replay)
     replay["artifact_layout_version"] = NORMALIZED_ARTIFACT_LAYOUT_VERSION
-    vector_marker = "__ASHARE_NORMALIZED_VECTOR_STREAM__"
-    store_marker = "__ASHARE_NORMALIZED_STORE_STREAM__"
-    replay["vectors"] = vector_marker
-    replay["provenance_store"] = store_marker
+    markers: dict[str, str] = {
+        "vectors": "__ASHARE_NORMALIZED_VECTOR_STREAM__",
+        "provenance_store": "__ASHARE_NORMALIZED_STORE_STREAM__",
+    }
+    replay["vectors"] = markers["vectors"]
+    replay["provenance_store"] = markers["provenance_store"]
+    if scores is not None:
+        markers["scores"] = "__ASHARE_NORMALIZED_SCORE_STREAM__"
+        replay["scores"] = markers["scores"]
     payload["replay"] = replay
+
+    # This encoded template is intentionally only the lightweight envelope;
+    # vectors, scores, and the CAS are represented by short marker strings.
     encoded = json.dumps(
         _json_safe(payload),
         ensure_ascii=False,
@@ -1721,27 +1949,19 @@ def write_normalized_snapshot_with_streamed_vectors(
         sort_keys=True,
         allow_nan=False,
     )
-    vector_marker_text = json.dumps(vector_marker, ensure_ascii=False)
-    store_marker_text = json.dumps(store_marker, ensure_ascii=False)
-    if encoded.count(vector_marker_text) != 1 or encoded.count(store_marker_text) != 1:
-        raise ValueError("normalized stream markers are not unique")
-    vector_position = encoded.find(vector_marker_text)
-    store_position = encoded.find(store_marker_text)
-    if vector_position < 0 or store_position < 0:
-        raise ValueError("normalized stream marker is missing")
-    if vector_position < store_position:
-        prefix = encoded[:vector_position]
-        middle = encoded[vector_position + len(vector_marker_text) : store_position]
-        suffix = encoded[store_position + len(store_marker_text) :]
-        store_before_vectors = False
-    else:
-        prefix = encoded[:store_position]
-        middle = encoded[store_position + len(store_marker_text) : vector_position]
-        suffix = encoded[vector_position + len(vector_marker_text) :]
-        store_before_vectors = True
+    marker_positions: list[tuple[int, str, str]] = []
+    for stream_name, marker in markers.items():
+        marker_text = json.dumps(marker, ensure_ascii=False)
+        if encoded.count(marker_text) != 1:
+            raise ValueError(f"normalized {stream_name} stream marker is not unique")
+        marker_positions.append((encoded.find(marker_text), stream_name, marker_text))
+    marker_positions.sort()
+
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary_path: Path | None = None
+    if resource_probe is not None:
+        resource_probe("artifact_writer_start")
     try:
         with tempfile.NamedTemporaryFile(
             mode="wb",
@@ -1763,85 +1983,138 @@ def write_normalized_snapshot_with_streamed_vectors(
                 else raw_temporary
             )
             temporary = io.TextIOWrapper(compressed, encoding="utf-8", newline="")
+            bytes_since_probe = 0
 
-            def write_store(handle: Any) -> None:
-                handle.write("{")
-                entries = (
-                    sorted(provenance_store.items())
-                    if isinstance(provenance_store, Mapping)
-                    else provenance_store
-                )
+            def write_text(text: str, phase: str) -> None:
+                nonlocal bytes_since_probe
+                temporary.write(text)
+                if resource_probe is None:
+                    return
+                bytes_since_probe += len(text.encode("utf-8"))
+                if bytes_since_probe >= probe_interval_bytes:
+                    resource_probe(f"{phase}_interval")
+                    bytes_since_probe = 0
+
+            def write_vectors() -> None:
+                if resource_probe is not None:
+                    resource_probe("artifact_vector_stream_start")
+                write_text("[", "artifact_vector_stream")
+                first = True
+                with Path(spool_path).open("r", encoding="utf-8") as spool:
+                    for line in spool:
+                        record = line.strip()
+                        if not record:
+                            continue
+                        if canonical_spool:
+                            if not record.startswith("{") or not record.endswith("}"):
+                                raise ValueError(
+                                    "canonical normalized vector spool is invalid"
+                                )
+                            encoded_record = record
+                        else:
+                            decoded = json.loads(record)
+                            if not isinstance(decoded, Mapping):
+                                raise ValueError(
+                                    "normalized vector spool contains a non-object"
+                                )
+                            encoded_record = json.dumps(
+                                _json_safe(decoded),
+                                ensure_ascii=False,
+                                sort_keys=True,
+                                separators=(",", ":"),
+                                allow_nan=False,
+                            )
+                        if not first:
+                            write_text(",", "artifact_vector_stream")
+                        write_text("\n", "artifact_vector_stream")
+                        write_text(encoded_record, "artifact_vector_stream")
+                        first = False
+                write_text("\n]", "artifact_vector_stream")
+                if resource_probe is not None:
+                    resource_probe("artifact_vector_stream_complete")
+
+            def write_scores() -> None:
+                assert scores is not None
+                if resource_probe is not None:
+                    resource_probe("artifact_score_stream_start")
+                write_text("[", "artifact_score_stream")
+                for index, score in enumerate(scores):
+                    candidate = getattr(score, "as_dict", None)
+                    score_payload = candidate() if callable(candidate) else score
+                    if not isinstance(score_payload, Mapping):
+                        raise TypeError("streamed score must be a mapping or expose as_dict()")
+                    encoded_score = json.dumps(
+                        _json_safe(score_payload),
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                        allow_nan=False,
+                    )
+                    if index:
+                        write_text(",", "artifact_score_stream")
+                    write_text("\n", "artifact_score_stream")
+                    write_text(encoded_score, "artifact_score_stream")
+                write_text("\n]", "artifact_score_stream")
+                if resource_probe is not None:
+                    resource_probe("artifact_score_stream_complete")
+
+            def write_store() -> None:
+                if resource_probe is not None:
+                    resource_probe("artifact_store_stream_start")
+                write_text("{", "artifact_store_stream")
+                entries: Iterable[tuple[str, Any]]
+                if isinstance(provenance_store, Mapping):
+                    entries = (
+                        (str(ref), provenance_store[ref])
+                        for ref in sorted(provenance_store, key=str)
+                    )
+                else:
+                    entries = provenance_store
                 for index, (ref, value) in enumerate(entries):
                     if index:
-                        handle.write(",")
-                    handle.write("\n  ")
-                    handle.write(json.dumps(str(ref), ensure_ascii=False))
-                    handle.write(": ")
+                        write_text(",", "artifact_store_stream")
+                    write_text("\n  ", "artifact_store_stream")
+                    write_text(
+                        json.dumps(str(ref), ensure_ascii=False),
+                        "artifact_store_stream",
+                    )
+                    write_text(": ", "artifact_store_stream")
                     if isinstance(value, bytes):
-                        if _is_compressed_bytes(value):
-                            handle.write(
-                                json.dumps(
-                                    _compressed_wrapper(value),
-                                    ensure_ascii=False,
-                                    sort_keys=True,
-                                    allow_nan=False,
-                                )
-                            )
-                        else:
-                            handle.write(value.decode("utf-8"))
-                    else:
-                        handle.write(
+                        encoded_value = (
                             json.dumps(
-                                _json_safe(value),
+                                _compressed_wrapper(value),
                                 ensure_ascii=False,
-                                indent=2,
                                 sort_keys=True,
                                 allow_nan=False,
                             )
+                            if _is_compressed_bytes(value)
+                            else value.decode("utf-8")
                         )
-                handle.write("\n}")
-
-            if store_before_vectors:
-                temporary.write(prefix)
-                write_store(temporary)
-                temporary.write(middle)
-            else:
-                temporary.write(prefix)
-            temporary.write("[")
-            first = True
-            with Path(spool_path).open("r", encoding="utf-8") as spool:
-                for line in spool:
-                    record = line.strip()
-                    if not record:
-                        continue
-                    if canonical_spool:
-                        if not record.startswith("{") or not record.endswith("}"):
-                            raise ValueError("canonical normalized vector spool is invalid")
-                        encoded_record = record
                     else:
-                        decoded = json.loads(record)
-                        if not isinstance(decoded, Mapping):
-                            raise ValueError("normalized vector spool contains a non-object")
-                        encoded_record = json.dumps(
-                            _json_safe(decoded),
+                        encoded_value = json.dumps(
+                            _json_safe(value),
                             ensure_ascii=False,
+                            indent=2,
                             sort_keys=True,
-                            separators=(",", ":"),
                             allow_nan=False,
                         )
-                    if not first:
-                        temporary.write(",")
-                    temporary.write("\n")
-                    temporary.write(encoded_record)
-                    first = False
-            temporary.write("\n]")
-            if store_before_vectors:
-                temporary.write(suffix)
-            else:
-                temporary.write(middle)
-                write_store(temporary)
-                temporary.write(suffix)
-            temporary.write("\n")
+                    write_text(encoded_value, "artifact_store_stream")
+                write_text("\n}", "artifact_store_stream")
+                if resource_probe is not None:
+                    resource_probe("artifact_store_stream_complete")
+
+            stream_writers: dict[str, Callable[[], None]] = {
+                "vectors": write_vectors,
+                "provenance_store": write_store,
+                "scores": write_scores,
+            }
+            cursor = 0
+            for position, stream_name, marker_text in marker_positions:
+                write_text(encoded[cursor:position], "artifact_envelope")
+                stream_writers[stream_name]()
+                cursor = position + len(marker_text)
+            write_text(encoded[cursor:], "artifact_envelope")
+            write_text("\n", "artifact_envelope")
             temporary.flush()
             if gzip_level is not None:
                 temporary.detach().close()
@@ -1849,6 +2122,10 @@ def write_normalized_snapshot_with_streamed_vectors(
                 temporary.detach()
             raw_temporary.flush()
             os.fsync(raw_temporary.fileno())
+            if resource_probe is not None:
+                # This probe precedes atomic promotion. A raised hard gate
+                # leaves only the temporary file, which the handler removes.
+                resource_probe("artifact_writer_complete")
         os.replace(temporary_path, destination)
     except BaseException:
         if temporary_path is not None:
@@ -1862,6 +2139,7 @@ __all__ = [
     "ARTIFACT_LAYOUT_VERSION",
     "PIT_REPLAY_ARTIFACT_LAYOUT_VERSION",
     "DIGEST_CONTRACT_VERSION",
+    "FINALIZATION_PROBE_INTERVAL_BYTES",
     "ContentAddressedStore",
     "ChunkedContentAddressedStore",
     "canonical_json",
@@ -1880,6 +2158,7 @@ __all__ = [
     "feature_vector_from_payload",
     "semantic_payload",
     "semantic_digest",
+    "semantic_sequence_digest",
     "deterministic_replay_digests",
     "attribute_feature_vector_size",
     "audit_feature_vectors",

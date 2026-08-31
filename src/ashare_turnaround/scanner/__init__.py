@@ -20,6 +20,7 @@ from .artifacts import (
     normalize_replay_artifact,
     normalize_snapshot_payload,
     semantic_digest,
+    semantic_sequence_digest,
 )
 from .contracts import FeatureEvidence, FeatureVector, flatten_feature_vectors
 from .evidence import (
@@ -64,6 +65,7 @@ __all__ = [
     "measure_feature_vector_sizes",
     "measure_replay_artifact_sizes",
     "semantic_digest",
+    "semantic_sequence_digest",
     "deterministic_replay_digests",
     "EvidenceAssessment",
     "EvidenceConfidenceConfig",

@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import copy
+import gc
 import gzip
 import json
+import weakref
+from dataclasses import replace
 
 import pytest
 
+import ashare_turnaround.scanner.artifacts as artifacts_module
 from ashare_turnaround.scanner.artifacts import (
     ARTIFACT_LAYOUT_VERSION,
     ChunkedContentAddressedStore,
@@ -16,11 +20,14 @@ from ashare_turnaround.scanner.artifacts import (
     content_ref,
     deterministic_replay_digests,
     expand_normalized_replay_artifact,
+    expand_normalized_snapshot,
     expand_normalized_vector,
     measure_feature_vector_sizes,
     normalize_feature_vector,
     normalize_replay_artifact,
+    normalize_snapshot_payload,
     semantic_digest,
+    semantic_sequence_digest,
     serialized_json_bytes,
     validate_normalized_integrity,
     write_json_artifact,
@@ -28,8 +35,10 @@ from ashare_turnaround.scanner.artifacts import (
 )
 from ashare_turnaround.scanner.contracts import FeatureVector
 from ashare_turnaround.scanner.replay_validation import (
+    ResourceBlocked,
     validate_normalized_vector_pit,
 )
+from ashare_turnaround.scanner.score import score_feature_vector
 
 CODE = "600000.SH"
 AS_OF = "20250616"
@@ -292,3 +301,243 @@ def test_determinism_digest_does_not_call_expanded_artifact(monkeypatch) -> None
     digests = deterministic_replay_digests(Result())
 
     assert digests["per_candidate_normalized_vector_digest"]
+
+
+@pytest.mark.parametrize(
+    "items",
+    [
+        [],
+        [{"one": 1}],
+        [{"index": index, "values": [index, index + 1]} for index in range(25)],
+        [
+            {
+                "started_at": "removed",
+                "kept": {"runtime_timestamp": "removed", "as_of_date": AS_OF},
+            },
+            {"diagnostics": {"elapsed_seconds": 99}, "value": 2},
+        ],
+        [
+            {
+                "input_metadata": {
+                    "nested": {
+                        "periods": ("20250331", "20241231"),
+                        "source": {"dataset": "income", "rows": [1, 2, 3]},
+                    }
+                }
+            }
+        ],
+    ],
+    ids=["empty", "one", "many", "runtime-keys", "nested-metadata"],
+)
+def test_streaming_semantic_sequence_digest_matches_materialized(items) -> None:
+    assert semantic_sequence_digest(iter(items)) == semantic_digest(items)
+
+
+def test_streaming_semantic_sequence_digest_matches_score_result_fixtures() -> None:
+    first = score_feature_vector(_vector("A.SH"))
+    second = replace(first, ts_code="B.SH", input_metadata={"nested": {"value": [1, 2]}})
+    scores = (first, second)
+
+    assert semantic_sequence_digest(iter(scores)) == semantic_digest(
+        [score.as_dict() for score in scores]
+    )
+
+
+def test_streamed_scores_and_vectors_are_exactly_equivalent_after_parsing(tmp_path) -> None:
+    vector = _vector()
+    score = score_feature_vector(vector)
+    legacy_snapshot = {
+        "status": "READY",
+        "warnings": ["controlled"],
+        "replay": {
+            "metadata": {"as_of_date": AS_OF},
+            "ranked": [{"ts_code": CODE, "rank": 1}],
+            "diagnostic_ranked": [{"ts_code": CODE, "rank": 1}],
+            "vectors": [vector.as_dict()],
+            "scores": [score.as_dict()],
+            "universe": {"decisions": [{"ts_code": CODE, "included": True}]},
+        },
+    }
+    expected = json.loads(serialized_json_bytes(normalize_snapshot_payload(legacy_snapshot)))
+    store = ContentAddressedStore()
+    normalized_vector = normalize_feature_vector(vector, store=store)
+    record = json.dumps(
+        normalized_vector,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+    spool = tmp_path / "vectors.jsonl"
+    spool.write_text(record + "\n", encoding="utf-8")
+
+    old_path = write_normalized_snapshot_with_streamed_vectors(
+        tmp_path / "old.json",
+        legacy_snapshot,
+        spool,
+        store.iter_entries_sorted(),
+        canonical_spool=True,
+    )
+    lightweight = copy.deepcopy(legacy_snapshot)
+    lightweight["replay"]["vectors"] = []
+    lightweight["replay"]["scores"] = []
+    new_path = write_normalized_snapshot_with_streamed_vectors(
+        tmp_path / "new.json",
+        lightweight,
+        spool,
+        store.iter_entries_sorted(),
+        scores=iter((score,)),
+        canonical_spool=True,
+    )
+    old_payload = json.loads(old_path.read_text(encoding="utf-8"))
+    new_payload = json.loads(new_path.read_text(encoding="utf-8"))
+
+    assert old_payload == new_payload == expected
+    assert canonical_json_bytes(expand_normalized_snapshot(new_payload)) == (
+        canonical_json_bytes(legacy_snapshot)
+    )
+    old_expanded = expand_normalized_snapshot(old_payload)
+    new_expanded = expand_normalized_snapshot(new_payload)
+    for field in ("vectors", "scores", "universe", "ranked", "diagnostic_ranked"):
+        assert semantic_digest(old_expanded["replay"][field]) == semantic_digest(
+            new_expanded["replay"][field]
+        )
+    assert semantic_digest(old_expanded["warnings"]) == semantic_digest(
+        new_expanded["warnings"]
+    )
+    assert ContentAddressedStore(
+        old_payload["replay"]["provenance_store"]
+    ).digest() == ContentAddressedStore(
+        new_payload["replay"]["provenance_store"]
+    ).digest()
+
+
+def test_large_score_stream_is_one_pass_and_not_eagerly_materialized(
+    tmp_path, monkeypatch
+) -> None:
+    live_scores: weakref.WeakSet[object] = weakref.WeakSet()
+
+    class ScoreLike:
+        def __init__(self, index: int, owner: OnePassScores) -> None:
+            self.index = index
+            self.owner = owner
+            live_scores.add(self)
+
+        def as_dict(self):
+            self.owner.converted += 1
+            return {
+                "ts_code": f"{self.index:06d}.SH",
+                "input_metadata": {
+                    "nested": {
+                        "payload": "x" * 2048,
+                        "observations": [
+                            {"period": "20250331", "value": self.index},
+                            {"period": "20241231", "value": self.index - 1},
+                        ],
+                    }
+                },
+            }
+
+    class OnePassScores:
+        def __init__(self, count: int) -> None:
+            self.count = count
+            self.iterations = 0
+            self.converted = 0
+
+        def __iter__(self):
+            self.iterations += 1
+            if self.iterations != 1:
+                raise AssertionError("score stream was consumed more than once")
+            for index in range(self.count):
+                # Direct iteration retains at most the previous loop item while
+                # requesting the next. list(scores) retains two before item 3.
+                if len(live_scores) >= 2:
+                    raise AssertionError("score stream was eagerly materialized")
+                yield ScoreLike(index, self)
+
+    def reject_deepcopy(_value, _memo=None):
+        raise AssertionError("production streamed writer used copy.deepcopy")
+
+    monkeypatch.setattr(artifacts_module.copy, "deepcopy", reject_deepcopy)
+    spool = tmp_path / "empty-vectors.jsonl"
+    spool.write_text("", encoding="utf-8")
+    scores = OnePassScores(2_000)
+    destination = write_normalized_snapshot_with_streamed_vectors(
+        tmp_path / "large-scores.json.gz",
+        {"replay": {"vectors": [], "scores": []}},
+        spool,
+        (),
+        scores=scores,
+        canonical_spool=True,
+        gzip_level=1,
+    )
+    payload = json.loads(gzip.decompress(destination.read_bytes()))
+    gc.collect()
+
+    assert scores.iterations == 1
+    assert scores.converted == scores.count
+    assert len(payload["replay"]["scores"]) == scores.count
+    assert not live_scores
+
+
+@pytest.mark.parametrize(
+    "blocked_stage",
+    [
+        "artifact_vector_stream_start",
+        "artifact_score_stream_start",
+        "artifact_writer_complete",
+    ],
+)
+def test_stream_writer_resource_failure_removes_partial_artifact(
+    tmp_path, blocked_stage
+) -> None:
+    spool = tmp_path / "vectors.jsonl"
+    spool.write_text('{"ts_code":"A.SH"}\n', encoding="utf-8")
+    destination = tmp_path / f"blocked-{blocked_stage}.json"
+
+    def probe(stage: str) -> None:
+        if stage == blocked_stage:
+            raise ResourceBlocked(stage)
+
+    with pytest.raises(ResourceBlocked, match=blocked_stage):
+        write_normalized_snapshot_with_streamed_vectors(
+            destination,
+            {"replay": {"vectors": [], "scores": []}},
+            spool,
+            (),
+            scores=iter(({"ts_code": "A.SH"},)),
+            canonical_spool=True,
+            resource_probe=probe,
+            probe_interval_bytes=1,
+        )
+
+    assert not destination.exists()
+    assert not list(tmp_path.glob(f".{destination.name}.*.tmp"))
+
+
+def test_finalized_store_iteration_failure_removes_partial_artifact(tmp_path) -> None:
+    store = ChunkedContentAddressedStore(tmp_path / "cas", chunk_entries=1)
+    store.intern({"value": 1})
+    store.flush_chunk_if_needed()
+    store.finalize()
+    spool = tmp_path / "vectors.jsonl"
+    spool.write_text("", encoding="utf-8")
+    destination = tmp_path / "blocked-store.json"
+
+    def store_probe(stage: str) -> None:
+        if stage == "cas_finalized_store_iteration_start":
+            raise ResourceBlocked(stage)
+
+    with pytest.raises(ResourceBlocked, match="finalized_store_iteration"):
+        write_normalized_snapshot_with_streamed_vectors(
+            destination,
+            {"replay": {"vectors": []}},
+            spool,
+            store.iter_entries_sorted(resource_probe=store_probe),
+            canonical_spool=True,
+            resource_probe=lambda _stage: None,
+        )
+
+    assert not destination.exists()
+    assert store.finalized_path is not None
+    store.close()

@@ -213,7 +213,9 @@ eligibility, or PIT semantics.
 
 The bounded attribution and performance measurements are recorded in
 [pit-replay-artifact-normalization.md](pit-replay-artifact-normalization.md).
-The preserved latest full run is explicitly a pre-resource-gate-v2 full
-correctness run and remains evidence, not a `FULL_SMOKE_PASS`.  After the
-static/bounded repair, the decision is `READY_FOR_FULL_SMOKE_AGAIN`; no new
-full replay is implied by this document.
+The latest full result is explicitly the **resource-gate-v2 baseline #1
+resource-failed run** at `f58e866`: correctness passed, but independent swap
+telemetry crossed three unchanged hard gates. The finalization repair is
+execution-only and restores `READY_FOR_FULL_SMOKE_AGAIN`; it does not imply a
+new full replay. See
+[pit-replay-finalization-working-set.md](pit-replay-finalization-working-set.md).

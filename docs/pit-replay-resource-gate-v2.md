@@ -4,6 +4,11 @@ Issue #32 / PR #41, branch `research/32-pit-replay-validation-sample`.
 This document records the small resource/cutoff repair only.  It does not
 change feature formulas, scores, PIT selection, ranking, or RAW data.
 
+**Status update:** the subsequent full `f58e866` run was a genuine
+`resource-gate-v2 baseline #1 resource-failed run` under independent swap
+telemetry. The bounded finalization repair and current decision are recorded
+in [pit-replay-finalization-working-set.md](pit-replay-finalization-working-set.md).
+
 ## A. Old resource-gate semantics
 
 Before this repair, `MAX_PEAK_RSS_BYTES` was `6 * 1024**3`.  `_host_memory()`
@@ -98,6 +103,8 @@ only; they are not the final same-config baseline for the repaired contract.
 A new pair is required: full run baseline #1, then (only after its
 `FULL_SMOKE_PASS`) the identical full run #2 with semantic digest comparison.
 
-The current decision after static/bounded repair is
-**READY_FOR_FULL_SMOKE_AGAIN**, not `FULL_SMOKE_PASS`.  No full 5102 rerun,
-yearly/monthly/Evaluation run, or RAW download is part of this repair.
+The decision at this historical `f58e866` repair boundary was
+**READY_FOR_FULL_SMOKE_AGAIN**, not `FULL_SMOKE_PASS`. The subsequently
+executed baseline was not promoted because its independent monitor crossed
+three swap gates. After the separate finalization-working-set repair, the next
+full run must start a new HEAD-specific baseline pair.

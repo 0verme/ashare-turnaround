@@ -10,12 +10,13 @@ from ashare_turnaround.scanner.artifacts import (
     canonical_json_bytes,
     expand_normalized_snapshot,
 )
-from ashare_turnaround.scanner.replay import ReplayDiagnostics
+from ashare_turnaround.scanner.replay import ReplayDiagnostics, ReplayResult
 from ashare_turnaround.scanner.replay_validation import (
     HISTORICAL_UNIVERSE_CONTRACT_VERSION,
     MARKET_REGIME_CONTRACT_VERSION,
     MONTHLY_SELECTION_RULE_VERSION,
     PIT_REPLAY_VALIDATION_CONTRACT_VERSION,
+    RESOURCE_SAMPLING_CONTRACT_VERSION,
     ResourceBlocked,
     build_input_manifest,
     classify_market_regime,
@@ -312,6 +313,9 @@ def test_validation_uses_production_replay_and_writes_complete_audit_artifacts(t
     assert result.summary["ready_count"] == 1
     assert result.summary["determinism_failure_count"] == 0
     assert result.configuration["resource_gate"]["version"] == "resource-gate-v2"
+    assert result.configuration["resource_gate"]["sampling_contract_version"] == (
+        RESOURCE_SAMPLING_CONTRACT_VERSION
+    )
     assert "peak_rss_diagnostic_bytes" in result.summary["resource"]
     assert "current_pss_bytes" in result.summary["resource"]
     snapshot = result.snapshots[0]
@@ -424,8 +428,15 @@ def test_bounded_diagnostics_are_not_a_validation_pass() -> None:
     assert "candidate_limit" not in snapshot.result.metadata()
 
 
-def test_streaming_validation_writes_full_snapshot_before_releasing_result(tmp_path) -> None:
+def test_streaming_validation_writes_full_snapshot_before_releasing_result(
+    tmp_path, monkeypatch
+) -> None:
     frames = _validation_frames()
+
+    def reject_expanded_artifact(_self):
+        raise AssertionError("streamed production path called ReplayResult.artifact_dict()")
+
+    monkeypatch.setattr(ReplayResult, "artifact_dict", reject_expanded_artifact)
     output = tmp_path / "streamed"
     result = run_replay_validation_frames(
         frames,
@@ -434,7 +445,7 @@ def test_streaming_validation_writes_full_snapshot_before_releasing_result(tmp_p
         today="2025-12-31",
         top_n=3,
         stage="monthly",
-        determinism_sample=0,
+        determinism_sample=1,
         artifact_output=output,
     )
 
@@ -448,6 +459,23 @@ def test_streaming_validation_writes_full_snapshot_before_releasing_result(tmp_p
     checkpoint = json.loads((output / "checkpoint.json").read_text(encoding="utf-8"))
     assert checkpoint["status"] == "COMPLETE"
     assert checkpoint["completed"][0]["status"] == "READY"
+    assert result.summary["determinism_failure_count"] == 0
+    stages = [sample["stage"] for sample in result.summary["resource"]["samples"]]
+    required_order = [
+        "before_replay_frames_release",
+        "after_replay_frames_release",
+        "before_cas_finalize",
+        "after_cas_finalize",
+        "before_artifact_writer",
+        "after_artifact_writer_and_cleanup",
+    ]
+    assert [stages.index(stage) for stage in required_order] == sorted(
+        stages.index(stage) for stage in required_order
+    )
+    cas = result.summary["resource"]["cas_finalization"]["2025-06"]
+    assert cas["finalization_count"] == 1
+    assert cas["configured_merge_fan_in"] == 32
+    assert cas["peak_open_chunk_streams"] <= 32
 
 
 def test_data_directory_validation_projects_only_as_of_inputs(tmp_path) -> None:

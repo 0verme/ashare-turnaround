@@ -42,23 +42,27 @@ JSON files. Running the documented command is therefore required before
 interpreting local snapshot counts. Missing or incomplete inputs remain
 `INCOMPLETE`/`UNAVAILABLE`; they are never represented as `READY`.
 
-Current execution disposition: `READY_FOR_FULL_SMOKE_AGAIN` after the
-static/bounded resource-gate-v2 and cutoff repair. The latest preserved real
-full-corpus artifact is labelled **pre-resource-gate-v2 full correctness run**:
-`2025-06`, `top_n=3`, `determinism_sample=0`, `content_hash=False`,
-`5102/5102` candidates, PIT/artifact/CAS cleanup PASS, runtime 6,111.120s,
-and compressed artifact about 2.609 GiB. Its sole formal failure was the old
-lifetime `ru_maxrss` gate (`6.061 GiB > 6 GiB`); it is not retroactively a
-`FULL_SMOKE_PASS`.
+Current execution disposition: `READY_FOR_FULL_SMOKE_AGAIN` after the bounded
+finalization-working-set repair. The latest preserved real full-corpus result
+is labelled **resource-gate-v2 baseline #1 resource-failed run** at `f58e866`:
+`2025-06`, `today=20260830`, `top_n=3`, `determinism_sample=0`,
+`content_hash=False`, 5,102/5,102 candidates, snapshot `READY`, PIT and
+semantic regression PASS, 6,228.981 s runtime, and a 2,801,660,875 B artifact.
+The independent monitor recorded 511,152,128 B process swap, a 377,372,672 B
+`SwapFree` minimum, and 421,625,856 B system swap growth, crossing the
+unchanged 256 MiB / 512 MiB / 256 MiB gates. It is not a `FULL_SMOKE_PASS`.
 
-The old current-month warning is also preserved as evidence: the target was
-`2025-06` / `as_of=20250616` and `incomplete_month=true`.  The old invocation
-used that historical as-of as the selection `today` cutoff.  The repaired
-campaign records explicit `today=20260830`; no new full smoke/yearly/monthly
-run is claimed here.
+The repaired implementation releases replay frames before finalization,
+streams semantic score hashing and physical scores, finalizes/reuses the CAS
+once, and enforces resource callbacks inside long merge/write operations. The
+authorized cap=100 regression passed PIT and exact vector/score/universe/
+ranking/provenance digest comparison. No new full 5,102, yearly, monthly, or
+Evaluation run is claimed. See
+[pit-replay-finalization-working-set.md](pit-replay-finalization-working-set.md).
 
-The bounded diagnostic/repair pass was intentionally not promoted to a smoke
-PASS. On the same local corpus it measured 5,102 candidates; a 100-candidate
+For historical context, the earlier normalization diagnostic was intentionally
+not promoted to a smoke PASS. On the same local corpus it measured 5,102
+candidates; a 100-candidate
 pre-normalization diagnostic completed in about 367 seconds with peak RSS about
 1.95 GiB. The post-normalization cap=100 diagnostic completed in 1,054.401
 seconds, with 1.872 GiB peak RSS, and remained `INCOMPLETE` by design. Its
@@ -66,8 +70,9 @@ normalized JSON was 220,476,606 B (about 210 MiB); the 10-candidate normalized
 file was 25,923,829 B. Recursive attribution confirmed that the original
 45--69 MiB/vector payload is 98.5886% provenance and 98.5437% trend provenance.
 The 100-candidate normalized projection is still about 10.76 GiB and the
-measured full-replay ETA is about 13.28 hours. The full single-snapshot run was
-therefore not started. Detailed tables, hashes, phase timings, and the
+measured full-replay ETA was about 13.28 hours. At that earlier boundary the
+full single-snapshot run was not started. Detailed tables, hashes, phase
+timings, and the
 lossless decoder contract are in
 [docs/pit-replay-artifact-normalization.md](pit-replay-artifact-normalization.md).
 
