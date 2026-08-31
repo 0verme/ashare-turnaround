@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gzip
 import json
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -12,23 +13,32 @@ from ashare_turnaround.scanner.artifacts import (
 )
 from ashare_turnaround.scanner.replay import ReplayConfig, ReplayDiagnostics, ReplayResult
 from ashare_turnaround.scanner.replay_validation import (
+    FROZEN_REPRESENTATIVE_SAMPLE,
     HISTORICAL_UNIVERSE_CONTRACT_VERSION,
+    MANUAL_REVIEW_SAMPLE_MONTHS,
     MARKET_REGIME_CONTRACT_VERSION,
     MONTHLY_SELECTION_RULE_VERSION,
+    MONTHLY_TARGET_SCHEDULE_CONTRACT_VERSION,
     PIT_REPLAY_VALIDATION_CONTRACT_VERSION,
+    REPRESENTATIVE_SAMPLE_CONTRACT_VERSION,
+    REPRESENTATIVE_SAMPLE_RULE_VERSION,
     RESOURCE_GATE_CONTRACT_VERSION,
     RESOURCE_PRESSURE_CONTRACT_VERSION,
     RESOURCE_SAMPLING_CONTRACT_VERSION,
     RESOURCE_WARNING_PROCESS_SWAP,
     RESOURCE_WARNING_SWAP_FREE,
     RESOURCE_WARNING_SWAP_GROWTH,
+    MonthlySnapshotTarget,
     ResourceBlocked,
     build_input_manifest,
     classify_market_regime,
+    monthly_target_schedule_digest,
+    representative_sample_contract,
     run_adversarial_fixtures,
     run_replay_validation,
     run_replay_validation_frames,
     select_monthly_snapshot_dates,
+    select_representative_snapshot_targets,
     validate_normalized_snapshot_pit,
     validate_replay_pit,
     write_replay_validation_artifacts,
@@ -206,6 +216,85 @@ def test_frozen_validation_cutoff_separates_historical_current_and_future_target
     assert future.selected_trading_date is None
 
 
+def test_target_schedule_has_explicit_data_and_incomplete_statuses() -> None:
+    calendar = pd.DataFrame(
+        {
+            "exchange": ["SSE"] * 2,
+            "cal_date": ["20260116", "20260216"],
+            "is_open": [1, 1],
+        }
+    )
+    targets = select_monthly_snapshot_dates(
+        calendar,
+        "2026-01",
+        "2026-03",
+        today="2026-02-20",
+    )
+    assert targets[0].availability_status == "AVAILABLE"
+    assert targets[0].selection_rule_version == MONTHLY_SELECTION_RULE_VERSION
+    assert targets[1].availability_status == "INCOMPLETE_CURRENT_MONTH"
+    assert targets[1].incomplete_month is True
+    assert targets[2].availability_status == "UNAVAILABLE_FUTURE"
+    assert targets[2].unavailable_reason
+
+
+def test_frozen_representative_sample_is_exact_and_never_falls_back() -> None:
+    targets = tuple(
+        MonthlySnapshotTarget(
+            target_month=month,
+            anchor_date=f"{month.replace('-', '')}15",
+            selected_trading_date=selected_date,
+            selection_reason="fixture",
+            status="AVAILABLE",
+            regime_label=regime,
+            regime_status="KNOWN",
+            representative_sample_member=True,
+        )
+        for month, selected_date, regime, _band, _reason in FROZEN_REPRESENTATIVE_SAMPLE
+    )
+    selected = select_representative_snapshot_targets(targets, strict=False)
+    assert [target.target_month for target in selected] == [
+        item[0] for item in FROZEN_REPRESENTATIVE_SAMPLE
+    ]
+    assert [target.selected_trading_date for target in selected] == [
+        item[1] for item in FROZEN_REPRESENTATIVE_SAMPLE
+    ]
+    contract = representative_sample_contract()
+    assert contract["contract_version"] == REPRESENTATIVE_SAMPLE_CONTRACT_VERSION
+    assert contract["selection_rule_version"] == REPRESENTATIVE_SAMPLE_RULE_VERSION
+    assert len(contract["frozen_members"]) == 11
+    config_file = json.loads(
+        (Path(__file__).parents[1] / "docs" / "pit-replay-validation-sample-v1.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert config_file["frozen_members"] == contract["frozen_members"]
+    assert config_file["history_bands"] == contract["history_bands"]
+    assert MANUAL_REVIEW_SAMPLE_MONTHS == ("2019-03", "2022-05", "2025-06")
+
+
+def test_schedule_layer_is_non_replaying_and_has_stable_digest() -> None:
+    result = run_replay_validation_frames(
+        _validation_frames(),
+        start="2025-06",
+        end="2025-06",
+        today="2025-12-31",
+        stage="schedule",
+        determinism_sample=0,
+    )
+    assert result.status == "SCHEDULE_READY"
+    assert result.gate_status == "SCHEDULE_READY"
+    assert result.snapshots == ()
+    assert result.summary["monthly_target_schedule_count"] == 1
+    assert result.summary["monthly_target_schedule_digest"] == monthly_target_schedule_digest(
+        result.targets
+    )
+    assert result.targets[0].regime_label_version == MARKET_REGIME_CONTRACT_VERSION
+    assert result.configuration["validation_layers"]["monthly_target_schedule"][
+        "full_artifact_required"
+    ] is False
+
+
 def test_historical_cutoff_default_is_frozen_and_feature_as_of_stays_selected_date() -> None:
     result = run_replay_validation_frames(
         _validation_frames(),
@@ -343,7 +432,20 @@ def test_validation_uses_production_replay_and_writes_complete_audit_artifacts(t
     assert result.manual_review["review_count"] == 1
 
     paths = write_replay_validation_artifacts(result, tmp_path / "artifacts")
-    assert set(paths) >= {"manifest", "summary", "manual_review", "snapshots"}
+    assert set(paths) >= {
+        "manifest",
+        "target_schedule",
+        "target_schedule_csv",
+        "summary",
+        "manual_review",
+        "snapshots",
+    }
+    schedule = json.loads(paths["target_schedule"].read_text(encoding="utf-8"))
+    assert schedule["contract_version"] == MONTHLY_TARGET_SCHEDULE_CONTRACT_VERSION
+    assert schedule["schedule_digest"] == result.summary["monthly_target_schedule_digest"]
+    assert paths["target_schedule_csv"].read_text(encoding="utf-8").splitlines()[0].startswith(
+        "target_month,anchor_date,selected_trading_date,availability_status"
+    )
     machine = json.loads(paths["summary"].read_text(encoding="utf-8"))
     manifest = json.loads(paths["manifest"].read_text(encoding="utf-8"))
     assert manifest["validation_cutoff"] == "20251231"
@@ -512,6 +614,7 @@ def test_data_directory_validation_projects_only_as_of_inputs(tmp_path) -> None:
         end="2025-06",
         today="2025-12-31",
         top_n=3,
+        stage="monthly",
         content_hash=False,
         determinism_sample=0,
     )
@@ -845,6 +948,7 @@ def test_pit_validator_detects_future_evidence_as_hard_violation() -> None:
             start="2025-06",
             end="2025-06",
             today="2025-12-31",
+            stage="monthly",
             determinism_sample=0,
         )
         .snapshots[0]

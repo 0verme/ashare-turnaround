@@ -9,6 +9,7 @@ PIT assertions before an artifact can be called ready.
 
 from __future__ import annotations
 
+import csv
 import errno
 import gc
 import hashlib
@@ -99,6 +100,50 @@ RESOURCE_WARNING_PROCESS_SWAP = "historical_process_swap_above_soft_limit"
 RESOURCE_WARNING_SWAP_FREE = "system_swap_free_below_soft_floor"
 RESOURCE_WARNING_SWAP_GROWTH = "system_swap_growth_above_soft_limit"
 DEFAULT_VALIDATION_CUTOFF = "20260830"
+
+# Issue #32 has two deliberately separate layers.  The monthly schedule is
+# exhaustive and cheap; only this frozen, return-independent member list is
+# allowed to request full evidence artifacts.  Keep the exact list in sync
+# with docs/pit-replay-validation-sample-v1.json.
+MONTHLY_TARGET_SCHEDULE_CONTRACT_VERSION = "pit-replay-monthly-target-schedule-v1"
+REPRESENTATIVE_SAMPLE_CONTRACT_VERSION = "pit-replay-validation-sample-v1"
+REPRESENTATIVE_SAMPLE_RULE_VERSION = "representative-regime-strata-v1"
+MANUAL_REVIEW_CONTRACT_VERSION = "manual-review-sample-v2"
+REPRESENTATIVE_SAMPLE_BANDS = (
+    ("early", "2017-01", "2019-12"),
+    ("middle", "2020-01", "2022-12"),
+    ("late", "2023-01", "2025-12"),
+)
+# (month, selected date, as-of regime, band, reason).  These are frozen
+# before any representative full replay is inspected.  2025-06 is retained
+# from the already validated resource-gate-v3 pair and must not be rerun.
+FROZEN_REPRESENTATIVE_SAMPLE = (
+    ("2017-01", "20170116", "range", "early", "early range data boundary"),
+    ("2018-10", "20181015", "bear", "early", "early bear stratum midpoint"),
+    ("2019-03", "20190315", "bull", "early", "early bull stratum midpoint"),
+    ("2020-01", "20200115", "range", "middle", "middle calendar-year boundary"),
+    ("2020-09", "20200915", "bull", "middle", "middle bull stratum midpoint"),
+    ("2022-05", "20220516", "bear", "middle", "middle bear stratum midpoint"),
+    ("2023-12", "20231215", "bear", "late", "late bear stratum midpoint"),
+    ("2024-05", "20240515", "range", "late", "late range stratum midpoint"),
+    ("2024-11", "20241115", "bull", "late", "late bull stratum midpoint"),
+    (
+        "2025-06",
+        "20250616",
+        "range",
+        "late",
+        "EXISTING_VALIDATED: reuse resource-gate-v3 evidence; do not rerun",
+    ),
+    (
+        "2025-12",
+        "20251215",
+        "range",
+        "late",
+        "latest complete target at the current-data coverage boundary",
+    ),
+)
+EXISTING_VALIDATED_SAMPLE_MONTH = "2025-06"
+MANUAL_REVIEW_SAMPLE_MONTHS = ("2019-03", "2022-05", "2025-06")
 
 
 def _resource_gate_declaration(*, enabled: bool | None = None) -> dict[str, Any]:
@@ -353,7 +398,7 @@ class ReplayValidationConfig:
     calendar_exchange: str | None = "SSE"
     top_n: int = 20
     seed: int = DEFAULT_SEED
-    stage: str = "monthly"
+    stage: str = "schedule"
     determinism_sample: int = 3
     replay: ReplayConfig | None = None
     # Validation target selection is orchestration metadata.  Keep it
@@ -367,8 +412,8 @@ class ReplayValidationConfig:
             raise ValueError("seed must be non-negative")
         if self.determinism_sample < 0:
             raise ValueError("determinism_sample must be non-negative")
-        if self.stage not in {"smoke", "yearly", "monthly"}:
-            raise ValueError("stage must be smoke, yearly, or monthly")
+        if self.stage not in {"schedule", "sample", "smoke", "yearly", "monthly"}:
+            raise ValueError("stage must be schedule, sample, smoke, yearly, or monthly")
 
     def declared(self) -> dict[str, Any]:
         return {
@@ -383,6 +428,15 @@ class ReplayValidationConfig:
             "today": _date_text(self.today),
             "stage": self.stage,
             "determinism_sample": self.determinism_sample,
+            "monthly_target_schedule": {
+                "contract_version": MONTHLY_TARGET_SCHEDULE_CONTRACT_VERSION,
+                "selection_rule_version": self.selection_rule,
+            },
+            "representative_sample": representative_sample_contract(),
+            "manual_review": {
+                "contract_version": MANUAL_REVIEW_CONTRACT_VERSION,
+                "target_months": list(MANUAL_REVIEW_SAMPLE_MONTHS),
+            },
             "resource_gate": _resource_gate_declaration(),
         }
 
@@ -1067,7 +1121,13 @@ def _assert_runtime_resource_gate(
 
 @dataclass(frozen=True, slots=True)
 class MonthlySnapshotTarget:
-    """One deterministic monthly target selected from ``trade_cal``."""
+    """One deterministic monthly target selected from ``trade_cal``.
+
+    ``status`` retains the execution-facing ``AVAILABLE``/``UNAVAILABLE``
+    vocabulary used by the original replay wrapper.  ``availability_status``
+    is the explicit Layer-1 schedule vocabulary and distinguishes data gaps
+    from future and incomplete-current-month targets.
+    """
 
     target_month: str
     anchor_date: str
@@ -1078,10 +1138,32 @@ class MonthlySnapshotTarget:
     calendar_version: str = "trade-cal-v1"
     calendar_exchange: str | None = "SSE"
     incomplete_month: bool = False
+    unavailable_reason: str | None = None
+    selection_rule_version: str = MONTHLY_SELECTION_RULE_VERSION
+    calendar_manifest_id: str | None = None
+    regime_label: str | None = None
+    regime_status: str = "NOT_COMPUTED"
+    regime_reason: str | None = None
+    regime_label_version: str = MARKET_REGIME_CONTRACT_VERSION
+    representative_sample_member: bool = False
+    representative_sample_band: str | None = None
+    representative_sample_reason: str | None = None
 
     @property
     def available(self) -> bool:
         return self.status == "AVAILABLE" and self.selected_trading_date is not None
+
+    @property
+    def availability_status(self) -> str:
+        if self.incomplete_month:
+            return "INCOMPLETE_CURRENT_MONTH"
+        if self.status == "UNAVAILABLE":
+            return "UNAVAILABLE_DATA"
+        return self.status
+
+    @property
+    def complete_historical(self) -> bool:
+        return self.available and not self.incomplete_month
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -1089,12 +1171,22 @@ class MonthlySnapshotTarget:
             "anchor_date": self.anchor_date,
             "selected_trading_date": self.selected_trading_date,
             "selection_reason": self.selection_reason,
+            "unavailable_reason": self.unavailable_reason,
             "status": self.status,
-            "availability_status": self.status,
+            "availability_status": self.availability_status,
             "calendar_source": self.calendar_source,
             "calendar_version": self.calendar_version,
             "calendar_exchange": self.calendar_exchange,
+            "calendar_manifest_id": self.calendar_manifest_id,
+            "selection_rule_version": self.selection_rule_version,
             "incomplete_month": self.incomplete_month,
+            "regime_label": self.regime_label,
+            "regime_status": self.regime_status,
+            "regime_reason": self.regime_reason,
+            "regime_label_version": self.regime_label_version,
+            "representative_sample_member": self.representative_sample_member,
+            "representative_sample_band": self.representative_sample_band,
+            "representative_sample_reason": self.representative_sample_reason,
         }
 
 
@@ -1179,6 +1271,10 @@ def select_monthly_snapshot_dates(
                     "month is after the validation cutoff; no future substitution",
                     "UNAVAILABLE_FUTURE",
                     calendar_exchange=selected_exchange,
+                    unavailable_reason=(
+                        "month is after the validation cutoff; no future substitution"
+                    ),
+                    selection_rule_version=selection_rule,
                 )
             )
             continue
@@ -1194,6 +1290,13 @@ def select_monthly_snapshot_dates(
                     "no valid open trade_cal session on/after anchor within target month",
                     "UNAVAILABLE",
                     calendar_exchange=selected_exchange,
+                    incomplete_month=(
+                        month.year == current_day.year and month.month == current_day.month
+                    ),
+                    unavailable_reason=(
+                        "no valid open trade_cal session on/after anchor within target month"
+                    ),
+                    selection_rule_version=selection_rule,
                 )
             )
             continue
@@ -1208,6 +1311,7 @@ def select_monthly_snapshot_dates(
                 calendar_exchange=selected_exchange,
                 incomplete_month=month.year == current_day.year
                 and month.month == current_day.month,
+                selection_rule_version=selection_rule,
             )
         )
     return tuple(targets)
@@ -1561,6 +1665,246 @@ def classify_market_regime(
 
 # Alias with the noun used in some downstream notebooks.
 market_regime = classify_market_regime
+
+
+def representative_sample_contract() -> dict[str, Any]:
+    """Return the frozen Layer-2 sample declaration without runtime outcomes."""
+
+    members = [
+        {
+            "target_month": month,
+            "selected_trading_date": selected_date,
+            "regime_label": regime,
+            "history_band": band,
+            "selection_reason": reason,
+            "execution_status": (
+                "EXISTING_VALIDATED"
+                if month == EXISTING_VALIDATED_SAMPLE_MONTH
+                else "FULL_EVIDENCE_REQUIRED"
+            ),
+        }
+        for month, selected_date, regime, band, reason in FROZEN_REPRESENTATIVE_SAMPLE
+    ]
+    return {
+        "contract_version": REPRESENTATIVE_SAMPLE_CONTRACT_VERSION,
+        "selection_rule_version": REPRESENTATIVE_SAMPLE_RULE_VERSION,
+        "target_range": {"start": DEFAULT_START_MONTH, "end": DEFAULT_END_MONTH},
+        "history_bands": [
+            {"name": name, "start": start, "end": end}
+            for name, start, end in REPRESENTATIVE_SAMPLE_BANDS
+        ],
+        "selection_inputs": [
+            "calendar_position",
+            "as_of_market_regime",
+            "data_availability",
+            "declared_boundary_coverage",
+        ],
+        "forbidden_inputs": [
+            "forward_returns",
+            "scanner_scores",
+            "Top-N_membership",
+            "post_as_of_observations",
+        ],
+        "stratum_rule": (
+            "one midpoint per available (history_band, regime) stratum; the first "
+            "member is used for the early-range and middle-range boundary strata; "
+            "append the fixed existing validation member and latest complete target"
+        ),
+        "frozen_members": members,
+        "existing_validated_member": {
+            "target_month": EXISTING_VALIDATED_SAMPLE_MONTH,
+            "execution_status": "EXISTING_VALIDATED",
+            "rerun": False,
+            "evidence_reference": (
+                "data/reports/issue32-resource-v3-full-baseline1/"
+                "snapshots/20250616-ready.json.gz"
+            ),
+            "determinism_reference": (
+                "data/reports/issue32-resource-v3-full-determinism2/"
+                "snapshots/20250616-ready.json.gz"
+            ),
+        },
+        "manual_review": {
+            "contract_version": MANUAL_REVIEW_CONTRACT_VERSION,
+            "target_months": list(MANUAL_REVIEW_SAMPLE_MONTHS),
+            "selection_rule": "fixed before replay; one bull, one bear, one range member",
+        },
+    }
+
+
+def _representative_sample_band(month: str) -> str | None:
+    for name, start, end in REPRESENTATIVE_SAMPLE_BANDS:
+        if start <= month <= end:
+            return name
+    return None
+
+
+def propose_representative_sample_targets(
+    targets: Iterable[MonthlySnapshotTarget],
+) -> tuple[MonthlySnapshotTarget, ...]:
+    """Derive the frozen sample from schedule metadata, without outcomes."""
+
+    available = [
+        target
+        for target in targets
+        if target.complete_historical
+        and target.regime_label in {"bull", "bear", "range"}
+    ]
+    selected: dict[str, MonthlySnapshotTarget] = {}
+    boundary_strata = {("early", "range"), ("middle", "range")}
+    for band, _start, _end in REPRESENTATIVE_SAMPLE_BANDS:
+        for regime in ("bull", "bear", "range"):
+            stratum = sorted(
+                (
+                    target
+                    for target in available
+                    if _representative_sample_band(target.target_month) == band
+                    and target.regime_label == regime
+                ),
+                key=lambda target: target.target_month,
+            )
+            if not stratum:
+                continue
+            position = 0 if (band, regime) in boundary_strata else (len(stratum) - 1) // 2
+            selected[stratum[position].target_month] = stratum[position]
+
+    by_month = {target.target_month: target for target in available}
+    existing = by_month.get(EXISTING_VALIDATED_SAMPLE_MONTH)
+    if existing is not None:
+        selected[existing.target_month] = existing
+    frozen_history_end = REPRESENTATIVE_SAMPLE_BANDS[-1][2]
+    latest_candidates = [
+        target for target in available if target.target_month <= frozen_history_end
+    ]
+    if latest_candidates:
+        latest = max(latest_candidates, key=lambda target: target.target_month)
+        selected[latest.target_month] = latest
+    return tuple(sorted(selected.values(), key=lambda target: target.target_month))
+
+
+def select_representative_snapshot_targets(
+    targets: Iterable[MonthlySnapshotTarget],
+    *,
+    strict: bool = True,
+) -> tuple[MonthlySnapshotTarget, ...]:
+    """Select the exact frozen Layer-2 targets, never a runtime fallback."""
+
+    values = tuple(targets)
+    by_month = {target.target_month: target for target in values}
+    expected = {
+        month: {
+            "selected_trading_date": selected_date,
+            "regime_label": regime,
+            "history_band": band,
+            "selection_reason": reason,
+        }
+        for month, selected_date, regime, band, reason in FROZEN_REPRESENTATIVE_SAMPLE
+    }
+    missing = sorted(set(expected).difference(by_month))
+    if missing:
+        raise ValueError(
+            "frozen representative sample is outside the target schedule: "
+            + ",".join(missing)
+        )
+    for month, declaration in expected.items():
+        target = by_month[month]
+        if not target.available:
+            # Preserve an explicit data gap/incomplete status.  The caller will
+            # record it; it must not replace the month with another target.
+            continue
+        if target.incomplete_month:
+            raise ValueError(f"frozen representative target is incomplete: {month}")
+        mismatches = []
+        if target.selected_trading_date != declaration["selected_trading_date"]:
+            mismatches.append("selected_trading_date")
+        if target.regime_label != declaration["regime_label"]:
+            mismatches.append("regime_label")
+        if strict and mismatches:
+            raise ValueError(
+                f"frozen representative target mismatch for {month}: "
+                + ",".join(mismatches)
+            )
+    proposed = propose_representative_sample_targets(values)
+    expected_available = {
+        month
+        for month, target in by_month.items()
+        if month in expected and target.complete_historical
+    }
+    if strict and len(expected_available) == len(expected):
+        if {target.target_month for target in proposed} != expected_available:
+            raise ValueError(
+                "representative sample rule does not reproduce the frozen member set"
+            )
+    return tuple(by_month[month] for month in expected)
+
+
+def build_monthly_target_schedule(
+    trade_calendar: pd.DataFrame,
+    index_daily: pd.DataFrame | None = None,
+    start: str | date | datetime | pd.Timestamp = DEFAULT_START_MONTH,
+    end: str | date | datetime | pd.Timestamp = DEFAULT_END_MONTH,
+    *,
+    anchor_day: int = DEFAULT_ANCHOR_DAY,
+    exchange: str | None = "SSE",
+    today: str | date | datetime | pd.Timestamp | None = DEFAULT_VALIDATION_CUTOFF,
+    selection_rule: str = MONTHLY_SELECTION_RULE_VERSION,
+    benchmark_id: str = DEFAULT_BENCHMARK_ID,
+    calendar_manifest_id: str | None = None,
+) -> tuple[MonthlySnapshotTarget, ...]:
+    """Build Layer-1 schedule records, including as-of regime metadata."""
+
+    selected = select_monthly_snapshot_dates(
+        trade_calendar,
+        start,
+        end,
+        anchor_day=anchor_day,
+        exchange=exchange,
+        today=today,
+        selection_rule=selection_rule,
+    )
+    sample_by_month = {
+        month: (band, reason)
+        for month, _date_value, _regime, band, reason in FROZEN_REPRESENTATIVE_SAMPLE
+    }
+    benchmark = index_daily if index_daily is not None else pd.DataFrame()
+    annotated: list[MonthlySnapshotTarget] = []
+    for target in selected:
+        if target.available:
+            regime = classify_market_regime(
+                benchmark,
+                target.selected_trading_date,
+                trade_calendar=trade_calendar,
+                benchmark_id=benchmark_id,
+            )
+            target = replace(
+                target,
+                regime_label=regime.label,
+                regime_status=regime.status,
+                regime_reason=regime.reason,
+                regime_label_version=regime.contract_version,
+            )
+        else:
+            target = replace(
+                target,
+                regime_status="NOT_APPLICABLE",
+                regime_reason=target.unavailable_reason or target.selection_reason,
+            )
+        sample = sample_by_month.get(target.target_month)
+        target = replace(
+            target,
+            calendar_manifest_id=calendar_manifest_id,
+            representative_sample_member=sample is not None,
+            representative_sample_band=sample[0] if sample else None,
+            representative_sample_reason=sample[1] if sample else None,
+        )
+        annotated.append(target)
+    return tuple(annotated)
+
+
+def monthly_target_schedule_digest(targets: Iterable[MonthlySnapshotTarget]) -> str:
+    """Hash the complete deterministic Layer-1 schedule record list."""
+
+    return _hash_payload([target.as_dict() for target in targets], length=None)
 
 
 def _parse_possible_date(value: Any) -> pd.Timestamp | None:
@@ -2068,9 +2412,22 @@ def _stage_available_targets(
     targets: tuple[MonthlySnapshotTarget, ...],
     stage: str,
 ) -> tuple[MonthlySnapshotTarget, ...]:
-    if stage not in {"smoke", "yearly", "monthly"}:
-        raise ValueError("stage must be smoke, yearly, or monthly")
+    if stage not in {"schedule", "sample", "smoke", "yearly", "monthly"}:
+        raise ValueError("stage must be schedule, sample, smoke, yearly, or monthly")
+    if stage == "schedule":
+        # Layer 1 is a schedule artifact only.  Its complete target list is
+        # retained in ``targets`` and no full replay is started.
+        return ()
     available = [target for target in targets if target.available]
+    if stage == "sample":
+        # This is the only production stage that requests the frozen Layer-2
+        # full evidence set.  Existing 2025-06 evidence is reused, not rerun.
+        selected = [
+            target
+            for target in select_representative_snapshot_targets(targets)
+            if target.target_month != EXISTING_VALIDATED_SAMPLE_MONTH
+        ]
+        return tuple(selected)
     if stage == "monthly":
         selected = available
     elif stage == "yearly":
@@ -2085,8 +2442,9 @@ def _stage_available_targets(
             positions = (0, (len(available) - 1) // 2, len(available) - 1)
             selected = [available[position] for position in positions]
     selected_keys = {target.target_month for target in selected}
-    # Unavailable months remain visible in every stage; only runnable months are
-    # bounded by the stage selection.
+    # Legacy diagnostic stages keep unavailable months visible.  The explicit
+    # representative stage only runs its frozen members; Layer 1 owns all
+    # other monthly statuses.
     return tuple(
         target for target in targets if not target.available or target.target_month in selected_keys
     )
@@ -2317,7 +2675,16 @@ class ReplayValidationResult:
             or self.synthetic_fixtures.get("status") != "PASS"
         ):
             return "FAILED"
-        if self.summary.get("incomplete_count", 0):
+        if self.stage == "schedule":
+            return "SCHEDULE_READY"
+        if (
+            self.summary.get("incomplete_count", 0)
+            or (
+                self.stage == "sample"
+                and self.summary.get("representative_sample_coverage_count", 0)
+                < self.summary.get("representative_sample_target_count", 0)
+            )
+        ):
             return "INCOMPLETE"
         if self.summary.get("ready_count", 0):
             return "READY"
@@ -2333,6 +2700,8 @@ class ReplayValidationResult:
 
     @property
     def gate_status(self) -> str:
+        if self.status == "SCHEDULE_READY":
+            return "SCHEDULE_READY"
         return "READY" if self.status == "READY" else "NOT_READY"
 
     def as_dict(self, *, include_snapshots: bool = True) -> dict[str, Any]:
@@ -2355,6 +2724,10 @@ class ReplayValidationResult:
             "input_manifest_id": self.input_manifest.get("manifest_id"),
             "financial_corpus_identity": self.input_manifest.get("financial_corpus_identity"),
             "market_corpus_identity": self.input_manifest.get("market_corpus_identity"),
+            "monthly_target_schedule": _target_schedule_payload(self),
+            "representative_sample": self.configuration.get(
+                "representative_sample", representative_sample_contract()
+            ),
             "targets": [target.as_dict() for target in self.targets],
             "summary": self.summary,
             "manual_review": self.manual_review,
@@ -2365,6 +2738,32 @@ class ReplayValidationResult:
         if include_snapshots:
             payload["snapshots"] = [snapshot.as_dict() for snapshot in self.snapshots]
         return payload
+
+
+def _target_schedule_payload(result: ReplayValidationResult) -> dict[str, Any]:
+    """Return the complete, small Layer-1 schedule envelope."""
+
+    targets = [target.as_dict() for target in result.targets]
+    return {
+        "contract_version": MONTHLY_TARGET_SCHEDULE_CONTRACT_VERSION,
+        "selection_rule_version": result.selection_rule,
+        "start_month": result.start_month,
+        "end_month": result.end_month,
+        "validation_cutoff": result.configuration.get("today"),
+        "calendar_source": "trade_cal",
+        "calendar_manifest_id": result.input_manifest.get("dataset_manifest_ids", {}).get(
+            "trade_cal"
+        ),
+        "input_manifest_id": result.input_manifest.get("manifest_id"),
+        "target_count": len(targets),
+        "targets": targets,
+        "schedule_digest": monthly_target_schedule_digest(result.targets),
+        "full_artifact_required": False,
+        "scope": (
+            "one deterministic target/status per requested month; full evidence is "
+            "limited to the frozen representative sample"
+        ),
+    }
 
 
 def _run_manifest(
@@ -2410,6 +2809,18 @@ def _run_manifest(
         "target_month": target.target_month,
         "anchor_date": target.anchor_date,
         "selected_trading_date": target.selected_trading_date,
+        "availability_status": target.availability_status,
+        "incomplete_month": target.incomplete_month,
+        "selection_rule_version": target.selection_rule_version,
+        "calendar_source": target.calendar_source,
+        "calendar_version": target.calendar_version,
+        "calendar_exchange": target.calendar_exchange,
+        "calendar_manifest_id": target.calendar_manifest_id,
+        "regime_label": target.regime_label,
+        "regime_label_version": target.regime_label_version,
+        "representative_sample_member": target.representative_sample_member,
+        "representative_sample_band": target.representative_sample_band,
+        "representative_sample_reason": target.representative_sample_reason,
         "input_manifest_ids": [input_manifest.get("manifest_id")],
         "dataset_manifest_ids": dict(input_manifest.get("dataset_manifest_ids", {})),
         "financial_corpus_identity": input_manifest.get("financial_corpus_identity"),
@@ -2482,27 +2893,77 @@ def _manual_review_from_records(
     *,
     months_per_regime: int = 2,
     top_n: int = 3,
+    target_months: Iterable[str] | None = None,
 ) -> dict[str, Any]:
     """Select fixed manual-review rows after per-snapshot streaming."""
 
-    by_regime: dict[str, list[dict[str, Any]]] = {}
-    for record in records:
-        by_regime.setdefault(str(record.get("regime", "unknown")), []).append(record)
-    reviews: list[dict[str, Any]] = []
-    for regime in ("bull", "bear", "range", "unknown"):
-        values = sorted(
-            by_regime.get(regime, []),
-            key=lambda item: str(item.get("target_month", "")),
-        )
-        for position in _manual_positions(len(values), months_per_regime):
-            reviews.append(values[position])
-    return {
-        "version": "manual-review-sample-v1",
-        "selection_rule": (
+    values = list(records)
+    required_months = tuple(dict.fromkeys(str(month) for month in (target_months or ())))
+    if required_months:
+        wanted = set(required_months)
+        reviews = [record for record in values if str(record.get("target_month")) in wanted]
+        selection_rule = "fixed target months declared before replay; no return inputs"
+    else:
+        by_regime: dict[str, list[dict[str, Any]]] = {}
+        for record in values:
+            by_regime.setdefault(str(record.get("regime", "unknown")), []).append(record)
+        reviews = []
+        for regime in ("bull", "bear", "range", "unknown"):
+            regime_values = sorted(
+                by_regime.get(regime, []),
+                key=lambda item: str(item.get("target_month", "")),
+            )
+            for position in _manual_positions(len(regime_values), months_per_regime):
+                reviews.append(regime_values[position])
+        selection_rule = (
             "first/middle/last deterministic months within each regime; no return inputs"
-        ),
+        )
+    if required_months and EXISTING_VALIDATED_SAMPLE_MONTH not in {
+        str(record.get("target_month")) for record in reviews
+    }:
+        reviews.append(
+            {
+                "review_id": f"{EXISTING_VALIDATED_SAMPLE_MONTH}-existing-validated",
+                "target_month": EXISTING_VALIDATED_SAMPLE_MONTH,
+                "as_of_date": "20250616",
+                "regime": "range",
+                "execution_status": "EXISTING_VALIDATED",
+                "artifact_reference": representative_sample_contract()[
+                    "existing_validated_member"
+                ],
+                "top_n": [],
+                "high_score_ineligible": [],
+                "unknown_heavy_candidate": [],
+                "excluded_boundary_case": [],
+                "checklist": {
+                    "existing_artifact_available": {
+                        "status": "PASS",
+                        "reason": "reuse the recorded resource-gate-v3 full evidence artifact",
+                    },
+                    "rerun_for_manual_review": {
+                        "status": "NOT_RUN",
+                        "reason": "the validated pair is intentionally not rerun",
+                    },
+                },
+                "review_status": "MACHINE_PRECHECK_PENDING_HUMAN_SIGNOFF",
+                "findings": [
+                    "inspect the retained full artifact for Top-3, exclusions, "
+                    "evidence, and PIT fields"
+                ],
+            }
+        )
+    missing = [
+        month
+        for month in required_months
+        if month not in {str(record.get("target_month")) for record in reviews}
+    ]
+    return {
+        "version": MANUAL_REVIEW_CONTRACT_VERSION,
+        "selection_rule": selection_rule,
+        "target_months": list(required_months),
         "months_per_regime": months_per_regime,
         "top_n_per_snapshot": top_n,
+        "required_months_missing_from_execution": missing,
         "review_count": len(reviews),
         "reviews": reviews,
     }
@@ -2513,6 +2974,7 @@ def _build_summary(
     snapshots: tuple[ReplayValidationSnapshot, ...],
     *,
     execution_targets: tuple[MonthlySnapshotTarget, ...] | None = None,
+    stage: str | None = None,
     input_manifest: Mapping[str, Any],
     determinism_checks: tuple[dict[str, Any], ...],
     snapshot_metrics: Mapping[str, Mapping[str, Any]] | None = None,
@@ -2524,6 +2986,11 @@ def _build_summary(
         for snapshot in snapshots
         if snapshot.result is not None
         or metrics.get(snapshot.target.target_month, {}).get("executed", False)
+    )
+    schedule_regime_counts = Counter(
+        target.regime_label or "unknown"
+        for target in targets
+        if target.available and not target.incomplete_month
     )
     warnings = Counter(warning for snapshot in snapshots for warning in snapshot.warnings)
     coverages: list[float] = []
@@ -2555,8 +3022,27 @@ def _build_summary(
         diagnostic_ineligible += int(metric.get("diagnostic_ineligible", 0))
         formal_count += int(metric.get("formal_count", 0))
     target_status_counts = Counter(target.status for target in targets)
-    requested_targets = execution_targets or targets
+    availability_status_counts = Counter(target.availability_status for target in targets)
+    requested_targets = targets if execution_targets is None else execution_targets
     requested_keys = {target.target_month for target in requested_targets}
+    representative_months = {
+        month for month, _date_value, _regime, _band, _reason in FROZEN_REPRESENTATIVE_SAMPLE
+    }
+    executed_months = {
+        snapshot.target.target_month
+        for snapshot in snapshots
+        if snapshot.status in {"READY", "INCOMPLETE"}
+    }
+    representative_reused_count = (
+        1
+        if stage == "sample"
+        and any(
+            target.target_month == EXISTING_VALIDATED_SAMPLE_MONTH
+            and target.complete_historical
+            for target in targets
+        )
+        else 0
+    )
     determinism_failures = sum(check.get("status") != "PASS" for check in determinism_checks)
     missing_input_count = sum(len(snapshot.missing_inputs) for snapshot in snapshots)
     executed_count = sum(
@@ -2570,6 +3056,46 @@ def _build_summary(
         "full_month_target_count": len(targets),
         "available_target_count": sum(target.available for target in requested_targets),
         "full_available_target_count": sum(target.available for target in targets),
+        "monthly_target_schedule_count": len(targets),
+        "monthly_target_schedule_digest": monthly_target_schedule_digest(targets),
+        "monthly_target_schedule_status_counts": dict(sorted(availability_status_counts.items())),
+        "monthly_available_complete_count": sum(
+            target.complete_historical for target in targets
+        ),
+        "monthly_incomplete_current_count": sum(
+            target.availability_status == "INCOMPLETE_CURRENT_MONTH" for target in targets
+        ),
+        "monthly_unavailable_data_count": sum(
+            target.availability_status == "UNAVAILABLE_DATA" for target in targets
+        ),
+        "monthly_unavailable_future_count": sum(
+            target.availability_status == "UNAVAILABLE_FUTURE" for target in targets
+        ),
+        "representative_sample_target_count": len(representative_months),
+        "representative_sample_months": [
+            month for month, _date_value, _regime, _band, _reason in FROZEN_REPRESENTATIVE_SAMPLE
+        ],
+        "representative_sample_executed_count": len(
+            executed_months.intersection(representative_months)
+        ),
+        "representative_sample_reused_count": representative_reused_count,
+        "representative_sample_coverage_count": (
+            len(executed_months.intersection(representative_months))
+            + representative_reused_count
+        ),
+        "full_evidence_artifact_count": (
+            len(executed_months.intersection(representative_months))
+            + representative_reused_count
+            if stage == "sample"
+            else 0
+        ),
+        "representative_sample_missing_months": [
+            month
+            for month, _date_value, _regime, _band, _reason in FROZEN_REPRESENTATIVE_SAMPLE
+            if month
+            not in executed_months.intersection(representative_months)
+            and not (stage == "sample" and month == EXISTING_VALIDATED_SAMPLE_MONTH)
+        ],
         "stage_skipped_available_count": sum(
             target.available and target.target_month not in requested_keys for target in targets
         ),
@@ -2594,6 +3120,7 @@ def _build_summary(
         "unavailable_count": int(status_counts.get("UNAVAILABLE", 0)),
         "snapshot_status_counts": dict(sorted(status_counts.items())),
         "target_status_counts": dict(sorted(target_status_counts.items())),
+        "availability_status_counts": dict(sorted(availability_status_counts.items())),
         "available_months": [target.target_month for target in targets if target.available],
         "unavailable_future_months": [
             target.target_month for target in targets if target.status == "UNAVAILABLE_FUTURE"
@@ -2604,6 +3131,10 @@ def _build_summary(
         "incomplete_months": [target.target_month for target in targets if target.incomplete_month],
         "regime_counts": {
             label: int(regime_counts.get(label, 0))
+            for label in ("bull", "bear", "range", "unknown")
+        },
+        "monthly_regime_counts": {
+            label: int(schedule_regime_counts.get(label, 0))
             for label in ("bull", "bear", "range", "unknown")
         },
         "warning_count": sum(warnings.values()),
@@ -2658,15 +3189,21 @@ def build_manual_review_sample(
     *,
     months_per_regime: int = 2,
     top_n: int = 3,
+    target_months: Iterable[str] | None = None,
+    include_existing_reference: bool = True,
 ) -> dict[str, Any]:
     """Build a fixed, return-independent manual review subset."""
 
     if months_per_regime <= 0 or top_n <= 0:
         raise ValueError("manual review counts must be positive")
+    required_months = tuple(dict.fromkeys(str(month) for month in (target_months or ())))
+    required = set(required_months)
     usable = [
         snapshot
         for snapshot in snapshots
-        if snapshot.result is not None and snapshot.regime is not None
+        if snapshot.result is not None
+        and snapshot.regime is not None
+        and (not required or snapshot.target.target_month in required)
     ]
     by_regime: dict[str, list[ReplayValidationSnapshot]] = {}
     for snapshot in usable:
@@ -2800,13 +3337,57 @@ def build_manual_review_sample(
                     ],
                 }
             )
+    if (
+        include_existing_reference
+        and required_months
+        and EXISTING_VALIDATED_SAMPLE_MONTH
+        not in {str(review.get("target_month")) for review in reviews}
+    ):
+        reviews.append(
+            {
+                "review_id": f"{EXISTING_VALIDATED_SAMPLE_MONTH}-existing-validated",
+                "target_month": EXISTING_VALIDATED_SAMPLE_MONTH,
+                "as_of_date": "20250616",
+                "regime": "range",
+                "execution_status": "EXISTING_VALIDATED",
+                "artifact_reference": representative_sample_contract()[
+                    "existing_validated_member"
+                ],
+                "top_n": [],
+                "high_score_ineligible": [],
+                "unknown_heavy_candidate": [],
+                "excluded_boundary_case": [],
+                "checklist": {
+                    "existing_artifact_available": {
+                        "status": "PASS",
+                        "reason": "reuse the recorded resource-gate-v3 full evidence artifact",
+                    },
+                    "rerun_for_manual_review": {
+                        "status": "NOT_RUN",
+                        "reason": "the validated pair is intentionally not rerun",
+                    },
+                },
+                "review_status": "MACHINE_PRECHECK_PENDING_HUMAN_SIGNOFF",
+                "findings": [
+                    "inspect the retained full artifact for Top-3, exclusions, "
+                    "evidence, and PIT fields"
+                ],
+            }
+        )
+    reviewed_months = {str(review.get("target_month")) for review in reviews}
     return {
-        "version": "manual-review-sample-v1",
+        "version": MANUAL_REVIEW_CONTRACT_VERSION,
         "selection_rule": (
-            "first/middle/last deterministic months within each regime; no return inputs"
+            "fixed target months declared before replay; no return inputs"
+            if required_months
+            else "first/middle/last deterministic months within each regime; no return inputs"
         ),
+        "target_months": list(required_months),
         "months_per_regime": months_per_regime,
         "top_n_per_snapshot": top_n,
+        "required_months_missing_from_execution": [
+            month for month in required_months if month not in reviewed_months
+        ],
         "review_count": len(reviews),
         "reviews": reviews,
     }
@@ -3079,14 +3660,17 @@ def _run_validation(
     settings = _historical_replay_config(settings)
     effective_today = _effective_validation_today(frames, today)
     cutoff_source = _validation_cutoff_source(frames, today)
-    targets = select_monthly_snapshot_dates(
+    targets = build_monthly_target_schedule(
         frames.get("trade_cal", pd.DataFrame()),
+        frames.get("index_daily", pd.DataFrame()),
         start,
         end,
         anchor_day=anchor_day,
         exchange=calendar_exchange,
         today=effective_today,
         selection_rule=selection_rule,
+        benchmark_id=settings.crowding.benchmark.benchmark_id,
+        calendar_manifest_id=input_manifest.get("dataset_manifest_ids", {}).get("trade_cal"),
     )
     execution_targets = _stage_available_targets(targets, stage)
     code_version = _git_commit()
@@ -3123,6 +3707,28 @@ def _run_validation(
             "selection_cutoff_is_not_feature_observation": True,
         },
         "stage": stage,
+        "validation_layers": {
+            "monthly_target_schedule": {
+                "contract_version": MONTHLY_TARGET_SCHEDULE_CONTRACT_VERSION,
+                "coverage": "every requested month, including unavailable/future/incomplete",
+                "full_artifact_required": False,
+                "schedule_digest": monthly_target_schedule_digest(targets),
+            },
+            "full_evidence_sample": {
+                "contract_version": REPRESENTATIVE_SAMPLE_CONTRACT_VERSION,
+                "selection_rule_version": REPRESENTATIVE_SAMPLE_RULE_VERSION,
+                "target_count": len(FROZEN_REPRESENTATIVE_SAMPLE),
+                "artifact_required": True,
+                "existing_validated_month": EXISTING_VALIDATED_SAMPLE_MONTH,
+                "existing_validated_rerun": False,
+            },
+        },
+        "representative_sample": representative_sample_contract(),
+        "manual_review": {
+            "contract_version": MANUAL_REVIEW_CONTRACT_VERSION,
+            "target_months": list(MANUAL_REVIEW_SAMPLE_MONTHS),
+            "human_signoff_required": True,
+        },
         "top_n": top_n,
         "seed": seed,
         "replay_config": settings.declared(),
@@ -3253,6 +3859,9 @@ def _run_validation(
     snapshot_metrics: dict[str, dict[str, Any]] = {}
     stream_cas_metrics: dict[str, dict[str, Any]] = {}
     stream_manual_records: list[dict[str, Any]] = []
+    manual_review_months = (
+        MANUAL_REVIEW_SAMPLE_MONTHS if stage in {"schedule", "sample"} else None
+    )
     completed: list[dict[str, Any]] = []
     candidate_spool_path: Path | None = None
     candidate_spool_handle = None
@@ -3331,7 +3940,12 @@ def _run_validation(
         if snapshot.result is not None and stream_results:
             snapshot_metrics[snapshot.target.target_month] = _snapshot_metrics(snapshot.result)
             if snapshot.regime is not None:
-                one = build_manual_review_sample((snapshot,), top_n=min(3, top_n))
+                one = build_manual_review_sample(
+                    (snapshot,),
+                    top_n=min(3, top_n),
+                    target_months=manual_review_months,
+                    include_existing_reference=False,
+                )
                 stream_manual_records.extend(one["reviews"])
         artifact_path: Path | None = None
         try:
@@ -3820,6 +4434,7 @@ def _run_validation(
         targets,
         snapshots_tuple,
         execution_targets=execution_targets,
+        stage=stage,
         input_manifest=input_manifest,
         determinism_checks=tuple(determinism_checks),
         snapshot_metrics=snapshot_metrics if stream_results else None,
@@ -3828,9 +4443,14 @@ def _run_validation(
         _manual_review_from_records(
             stream_manual_records,
             top_n=min(3, top_n),
+            target_months=manual_review_months,
         )
         if stream_results
-        else build_manual_review_sample(snapshots_tuple, top_n=min(3, top_n))
+        else build_manual_review_sample(
+            snapshots_tuple,
+            top_n=min(3, top_n),
+            target_months=manual_review_months,
+        )
     )
     summary["synthetic_fixture_status"] = synthetic.get("status")
     summary["revision_boundary_status"] = (
@@ -3992,7 +4612,7 @@ def run_replay_validation_frames(
     top_n: int = 20,
     config: ReplayConfig | ReplayValidationConfig | None = None,
     seed: int = DEFAULT_SEED,
-    stage: str = "monthly",
+    stage: str = "schedule",
     today: str | date | datetime | pd.Timestamp | None = DEFAULT_VALIDATION_CUTOFF,
     determinism_sample: int = 3,
     artifact_output: str | Path | None = None,
@@ -4275,7 +4895,11 @@ def _validation_frames(
     base_only: bool = False,
     diagnostics: ReplayDiagnostics | None = None,
 ) -> dict[str, pd.DataFrame]:
-    datasets = ("trade_cal", "stock_basic", "index_basic") if base_only else MANIFEST_DATASETS
+    datasets = (
+        ("trade_cal", "stock_basic", "index_basic", "index_daily")
+        if base_only
+        else MANIFEST_DATASETS
+    )
     return {
         dataset: _read_projected_dataset(
             data_dir,
@@ -4300,7 +4924,7 @@ def run_replay_validation(
     top_n: int = 20,
     config: ReplayConfig | ReplayValidationConfig | None = None,
     seed: int = DEFAULT_SEED,
-    stage: str = "monthly",
+    stage: str = "schedule",
     today: str | date | datetime | pd.Timestamp | None = DEFAULT_VALIDATION_CUTOFF,
     determinism_sample: int = 3,
     content_hash: bool = True,
@@ -4388,6 +5012,23 @@ def render_replay_validation_summary(result: ReplayValidationResult) -> str:
         f"- Top-N: `{result.top_n}`; seed: `{result.seed}`",
         f"- Input manifest: `{summary.get('input_manifest_id') or '-'}`",
         "",
+        "## Validation layers",
+        "",
+        "- Layer 1 monthly target schedule: `"
+        f"{summary['monthly_target_schedule_count']}` targets; full artifact required: `no`",
+        f"- Schedule digest: `{summary['monthly_target_schedule_digest']}`",
+        f"- Schedule availability statuses: `{summary['monthly_target_schedule_status_counts']}`",
+        f"- Layer 2 frozen representative sample: `"
+        f"{summary['representative_sample_target_count']}` targets",
+        f"- Sample executed: `{summary['representative_sample_executed_count']}`; "
+        f"reused existing: `{summary['representative_sample_reused_count']}`; "
+        f"covered: `{summary['representative_sample_coverage_count']}`",
+        f"- Frozen sample months: `{summary['representative_sample_months']}`",
+        f"- Full evidence artifacts covered: `{summary['full_evidence_artifact_count']}`",
+        f"- Missing frozen sample members: `{summary['representative_sample_missing_months']}`",
+        "- Monthly targets are not full evidence artifacts; only the frozen sample "
+        "uses the complete production replay writer.",
+        "",
         "## Snapshot status",
         "",
         "| Requested | READY | INCOMPLETE | FAILED | UNAVAILABLE |",
@@ -4397,15 +5038,22 @@ def render_replay_validation_summary(result: ReplayValidationResult) -> str:
         f"{summary['unavailable_count']} |",
         "",
         f"- Available months in range: `{len(summary['available_months'])}`",
+        f"- Complete historical monthly targets: `{summary['monthly_available_complete_count']}`",
+        f"- Data-unavailable months: `{summary['monthly_unavailable_data_count']}`",
+        f"- Future months unavailable: `{summary['monthly_unavailable_future_count']}`",
+        f"- Incomplete current-month targets: `{summary['monthly_incomplete_current_count']}`",
         f"- Stage-skipped available months: `{summary['stage_skipped_available_count']}`",
-        f"- Future months unavailable: `{len(summary['unavailable_future_months'])}`",
-        f"- Incomplete months: `{len(summary['incomplete_months'])}`",
         "",
         "## Regime coverage",
         "",
-        "| Bull | Bear | Range | Unknown |",
-        "| ---: | ---: | ---: | ---: |",
-        "| {bull} | {bear} | {range} | {unknown} |".format(**summary["regime_counts"]),
+        "| Source | Bull | Bear | Range | Unknown |",
+        "| --- | ---: | ---: | ---: | ---: |",
+        "| Executed full snapshots | {bull} | {bear} | {range} | {unknown} |".format(
+            **summary["regime_counts"]
+        ),
+        "| Monthly target schedule | {bull} | {bear} | {range} | {unknown} |".format(
+            **summary["monthly_regime_counts"]
+        ),
         "",
         "## Evidence and ranking audit",
         "",
@@ -4455,6 +5103,7 @@ def render_replay_validation_summary(result: ReplayValidationResult) -> str:
         "## Manual review",
         "",
         f"- Fixed review snapshots: `{result.manual_review['review_count']}`",
+        f"- Declared manual-review months: `{result.manual_review.get('target_months', [])}`",
         "- Each review contains Top-3, a high-score ineligible diagnostic, an "
         "unknown-heavy candidate, and a universe exclusion boundary case when available.",
         "- Status is machine pre-check pending human sign-off; no performance label is used.",
@@ -4475,6 +5124,8 @@ def render_replay_validation_summary(result: ReplayValidationResult) -> str:
         "- This is a PIT correctness sample, not a performance backtest: no "
         "forward-return evaluation, parameter tuning, weight changes, Score v2, "
         "ablation, or strategy claim is made.",
+        "- Layer 1 covers every requested month with a target/status record; Layer 2 "
+        "is the only layer that requires complete full evidence artifacts.",
         "- Large real artifacts remain local/ignored; source RAW files are read-only.",
         "",
     ]
@@ -4488,18 +5139,78 @@ def write_replay_validation_summary(result: ReplayValidationResult, path: str | 
     return destination
 
 
+_TARGET_SCHEDULE_CSV_FIELDS = (
+    "target_month",
+    "anchor_date",
+    "selected_trading_date",
+    "availability_status",
+    "incomplete_month",
+    "unavailable_reason",
+    "regime_label",
+    "regime_status",
+    "regime_label_version",
+    "selection_rule_version",
+    "calendar_source",
+    "calendar_version",
+    "calendar_exchange",
+    "calendar_manifest_id",
+    "representative_sample_member",
+    "representative_sample_band",
+    "representative_sample_reason",
+)
+
+
+def _write_target_schedule_csv(
+    destination: str | Path, targets: Iterable[MonthlySnapshotTarget]
+) -> Path:
+    """Write the small Layer-1 schedule in a stable tabular form."""
+
+    path = Path(destination)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="",
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            dir=path.parent,
+            delete=False,
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+            writer = csv.DictWriter(temporary, fieldnames=_TARGET_SCHEDULE_CSV_FIELDS)
+            writer.writeheader()
+            for target in targets:
+                record = target.as_dict()
+                writer.writerow(
+                    {
+                        key: "" if record.get(key) is None else record.get(key)
+                        for key in _TARGET_SCHEDULE_CSV_FIELDS
+                    }
+                )
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        os.replace(temporary_path, path)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+    return path
+
+
 def write_replay_validation_artifacts(
     result: ReplayValidationResult,
     output: str | Path,
     *,
     summary_path: str | Path | None = None,
 ) -> dict[str, Path]:
-    """Write small manifests plus per-snapshot full evidence artifacts."""
+    """Write the small Layer-1 schedule plus Layer-2 evidence artifacts."""
 
     destination = Path(output)
     destination.mkdir(parents=True, exist_ok=True)
     snapshots_dir = destination / "snapshots"
     snapshots_dir.mkdir(parents=True, exist_ok=True)
+    schedule_payload = _target_schedule_payload(result)
     manifest_payload = {
         "artifact_schema_version": "pit-replay-validation-artifact-v1",
         "artifact_layout_version": ARTIFACT_LAYOUT_VERSION,
@@ -4518,6 +5229,10 @@ def write_replay_validation_artifacts(
         "resource_gate": result.configuration.get("resource_gate", {}),
         "configuration": result.configuration,
         "input_manifest": result.input_manifest,
+        "monthly_target_schedule": schedule_payload,
+        "representative_sample": result.configuration.get(
+            "representative_sample", representative_sample_contract()
+        ),
         "targets": [target.as_dict() for target in result.targets],
         "run_manifests": [snapshot.run_manifest for snapshot in result.snapshots],
         "determinism_checks": list(result.determinism_checks),
@@ -4527,6 +5242,12 @@ def write_replay_validation_artifacts(
     }
     paths: dict[str, Path] = {
         "manifest": _write_json(destination / "manifest.json", manifest_payload),
+        "target_schedule": _write_json(
+            destination / "validation-targets.json", schedule_payload
+        ),
+        "target_schedule_csv": _write_target_schedule_csv(
+            destination / "validation-targets.csv", result.targets
+        ),
         "summary": _write_json(
             destination / "summary.json",
             {
@@ -4538,6 +5259,10 @@ def write_replay_validation_artifacts(
                 "resource_status": result.resource_status,
                 "resource_warnings": list(result.resource_warnings),
                 "configuration": result.configuration,
+                "monthly_target_schedule": schedule_payload,
+                "representative_sample": result.configuration.get(
+                    "representative_sample", representative_sample_contract()
+                ),
                 "summary": result.summary,
                 "warnings": list(result.warnings),
             },
@@ -4549,10 +5274,15 @@ def write_replay_validation_artifacts(
     }
     for snapshot in result.snapshots:
         snapshot_path = snapshots_dir / _snapshot_filename(snapshot)
-        # Streaming runs have already committed complete snapshot payloads and
-        # intentionally retain no ReplayResult in RAM.  Do not replace those
-        # files with a null ``replay`` placeholder during finalization.
-        if snapshot.result is not None or not snapshot_path.exists():
+        compressed_snapshot_path = snapshots_dir / _snapshot_filename(
+            snapshot, compressed=True
+        )
+        # Streaming runs have already committed complete compressed snapshot
+        # payloads and intentionally retain no ReplayResult in RAM.  Do not
+        # create a misleading null ``replay`` placeholder beside that artifact.
+        if snapshot.result is not None or (
+            not snapshot_path.exists() and not compressed_snapshot_path.exists()
+        ):
             _write_json(snapshot_path, snapshot.normalized_dict())
     paths["snapshots"] = snapshots_dir
     completed = [
@@ -4574,6 +5304,10 @@ def write_replay_validation_artifacts(
             "input_manifest_id": result.input_manifest.get("manifest_id"),
             "target_count": len(result.targets),
             "targets": [target.as_dict() for target in result.targets],
+            "monthly_target_schedule_digest": schedule_payload["schedule_digest"],
+            "representative_sample": result.configuration.get(
+                "representative_sample", representative_sample_contract()
+            ),
             "completed": completed,
             "summary": result.summary,
         },
@@ -4590,6 +5324,12 @@ __all__ = [
     "PIT_REPLAY_VALIDATION_CONTRACT_VERSION",
     "REPLAY_VALIDATION_CONTRACT_VERSION",
     "MONTHLY_SELECTION_RULE_VERSION",
+    "MONTHLY_TARGET_SCHEDULE_CONTRACT_VERSION",
+    "REPRESENTATIVE_SAMPLE_CONTRACT_VERSION",
+    "REPRESENTATIVE_SAMPLE_RULE_VERSION",
+    "MANUAL_REVIEW_CONTRACT_VERSION",
+    "FROZEN_REPRESENTATIVE_SAMPLE",
+    "MANUAL_REVIEW_SAMPLE_MONTHS",
     "MARKET_REGIME_CONTRACT_VERSION",
     "HISTORICAL_UNIVERSE_CONTRACT_VERSION",
     "RESOURCE_GATE_CONTRACT_VERSION",
@@ -4621,6 +5361,11 @@ __all__ = [
     "select_monthly_snapshot_dates",
     "select_monthly_targets",
     "monthly_snapshot_targets",
+    "representative_sample_contract",
+    "propose_representative_sample_targets",
+    "select_representative_snapshot_targets",
+    "build_monthly_target_schedule",
+    "monthly_target_schedule_digest",
     "build_input_manifest",
     "RegimeResult",
     "classify_market_regime",

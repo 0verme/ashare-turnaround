@@ -209,12 +209,14 @@ probability of positive return.  See [docs/evidence-confidence-v1.md](evidence-c
   diagnostic ordering in JSON).
 - `replay-variants --as-of YYYYMMDD` writes the four versioned score variants
   from one verified PIT snapshot.
-- `replay-validate --start YYYY-MM --end YYYY-MM --today YYYYMMDD` selects
-  fixed monthly sessions from the unprojected `trade_cal` using an explicit
-  orchestration cutoff, runs the existing replay path with the
-  historical-universe gate, and writes per-snapshot PIT/evidence/manifest
-  artifacts. Feature/PIT frames remain bounded by each selected date. It
-  performs no forward-return evaluation; see
+- `replay-validate --stage schedule --start YYYY-MM --end YYYY-MM --today YYYYMMDD`
+  selects fixed monthly sessions from the unprojected `trade_cal` and writes
+  the exhaustive Layer-1 target/status schedule without starting full replay.
+  `replay-validate --stage sample` runs only the frozen Layer-2 representative
+  full-evidence members (the retained 2025-06 pair is reused, not rerun) through
+  the existing replay path with the historical-universe gate. Feature/PIT
+  frames remain bounded by each selected date. It performs no forward-return
+  evaluation; see
   [docs/pit-replay-validation.md](pit-replay-validation.md),
   [docs/pit-replay-resource-gate-v3.md](pit-replay-resource-gate-v3.md), and
   [docs/pit-replay-finalization-working-set.md](pit-replay-finalization-working-set.md).

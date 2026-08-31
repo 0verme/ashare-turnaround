@@ -7,6 +7,14 @@ ranked, or gated.  It does not consume any observation after the selected
 session and it does not use forward outcomes to choose a date, threshold,
 configuration, regime, or ranking rule.
 
+The final scope is explicitly two-layered: the monthly target schedule covers
+all requested months, while complete evidence artifacts are limited to the
+frozen representative sample. See
+[`pit-replay-validation-scope-closure.md`](pit-replay-validation-scope-closure.md)
+and the machine-readable
+[`pit-replay-validation-sample-v1.json`](pit-replay-validation-sample-v1.json)
+for the acceptance audit and exact sample list.
+
 ## Existing replay audit
 
 Before implementation, the existing replay path was classified as follows:
@@ -36,15 +44,20 @@ The default `monthly-anchor-15-v1` rule is:
    session on or after the anchor, without crossing into another month;
 4. emit `target_month`, `anchor_date`, `selected_trading_date`, and
    `selection_reason`;
-5. mark a month `UNAVAILABLE` when no session can be proven and
-   `UNAVAILABLE_FUTURE` when it is after the explicit selection cutoff.
+5. mark a month `UNAVAILABLE_DATA` (exposed as the legacy execution status
+   `UNAVAILABLE`) when no session can be proven, `UNAVAILABLE_FUTURE` when it
+   is after the explicit selection cutoff, and
+   `INCOMPLETE_CURRENT_MONTH` when the cutoff month cannot be proven complete.
 
 A selected date is never a natural-calendar date.  The target-selection
 cutoff is explicit orchestration metadata, not a feature observation cutoff.
-The current month is marked `incomplete_month` when the target month equals
-that cutoff month and its fixed anchor has already been reached.  No
-neighboring month is substituted.  The validation campaign freezes this
-cutoff at `20260830`; it is recorded in each configuration/manifest.
+The current month is marked `incomplete_month` and exposed as
+`INCOMPLETE_CURRENT_MONTH` when the target month equals that cutoff month and
+its fixed anchor has already been reached (including when no current-month
+session is yet provable). No neighboring month is substituted. The validation
+campaign freezes this cutoff at `20260830`; it is recorded in each
+configuration/manifest. The schedule also records the selection-rule version,
+calendar manifest ID, and as-of regime label/version for every month.
 
 ## Historical universe boundary
 
@@ -157,42 +170,51 @@ hard stop; it cannot be hidden by marking a historical snapshot incomplete.
 `replay-validate` writes the following under the requested output directory:
 
 ```text
+validation-targets.json       # Layer 1: every requested month/status
+validation-targets.csv
 manifest.json
 summary.json
-snapshots/<selected-date>-<status>.json
+snapshots/<selected-date>-<status>.json.gz  # Layer 2 only
 manual-review.json
 synthetic-fixtures.json
 checkpoint.json
 summary.md
 ```
 
-Every snapshot JSON retains the complete `FeatureVector` evidence and
+Every full sample artifact retains the complete `FeatureVector` evidence and
 `ScoreResult` coverage/confidence/ranking gate, in addition to formal and
-diagnostic rankings and universe inclusion/exclusion decisions.  The fixed
-manual-review sample chooses the first/middle/last available months per
-regime (two by default) and records Top-3, a high-score ineligible candidate,
-an unknown-heavy candidate, and an exclusion boundary case when present.  Its
-checklist covers session validity, universe provenance, financial revision
-visibility, benchmark/attention/crowding cutoffs, current-field leakage, and
-warnings.  Human sign-off is represented separately from the machine precheck.
+diagnostic rankings and universe inclusion/exclusion decisions. The monthly
+schedule is not a full artifact and never substitutes for one. The manual
+review subset is frozen at `2019-03` (bull), `2022-05` (bear), and `2025-06`
+(range; existing validated artifact). Each review records Top-3, a high-score
+ineligible candidate, an unknown-heavy candidate, and an exclusion boundary
+case when present. Its checklist covers session validity, universe provenance,
+financial revision visibility, benchmark/attention/crowding cutoffs,
+current-field leakage, and warnings. Human sign-off is represented separately
+from the machine precheck.
 
 The staged commands are:
 
 ```bash
-# synthetic adversarial contracts, via the test suite / synthetic-fixtures output
-ashare-turnaround replay-validate --stage smoke --start 2017-01 --end 2026-12 \
-  --today 20260830 --data-dir data --output data/reports/replay-validation
+# Layer 1: enumerate every monthly target/status without a full replay
+ashare-turnaround replay-validate --stage schedule --start 2017-01 --end 2026-12 \
+  --today 20260830 --data-dir data \
+  --output data/reports/issue32-target-schedule --no-content-hash
 
-# one explicit bounded target; this is diagnostic and cannot be a validation PASS
+# Layer 2: execute only the frozen representative full-evidence sample.
+# The retained 2025-06 v3 pair is reused and is not rerun.
+ashare-turnaround replay-validate --stage sample --start 2017-01 --end 2026-12 \
+  --today 20260830 --data-dir data \
+  --output data/reports/issue32-representative-sample
+
+# One explicit bounded target; diagnostic only, never a validation PASS.
 ashare-turnaround replay-profile --as-of 20250616 --candidate-cap 100 \
   --data-dir data --output data/reports/replay-profile
 
-# one deterministic available month per year
-ashare-turnaround replay-validate --stage yearly --start 2017-01 --end 2026-12 \
+# Legacy diagnostic slices (not the final Issue #32 scope command).
+ashare-turnaround replay-validate --stage smoke --start 2017-01 --end 2026-12 \
   --today 20260830
-
-# all available monthly targets; future months remain UNAVAILABLE_FUTURE
-ashare-turnaround replay-validate --stage monthly --start 2017-01 --end 2026-12 \
+ashare-turnaround replay-validate --stage yearly --start 2017-01 --end 2026-12 \
   --today 20260830
 ```
 
@@ -223,9 +245,13 @@ The final v3 full validation pair is preserved in the ignored local outputs
 status `READY`, resource status `PASS`, 5,102/5,102 candidates, zero failed
 snapshots, zero PIT violations, and equal semantic/artifact digests. The
 2,781,058,369 B gzip-1 artifact passes `gzip -t` and is byte-identical across
-the pair. The earlier **resource-gate-v2 baseline #1 resource-failed run** at
-`f58e866` remains historical evidence only and is not a member of this pair.
-The v3 calibration and bounded synthetic contract are documented in
+the pair. It is formally reused as the `2025-06` member of the Layer-2 sample,
+not evidence that the other frozen members have run. The complete scope and
+acceptance state are tracked in
+[pit-replay-validation-scope-closure.md](pit-replay-validation-scope-closure.md).
+The earlier **resource-gate-v2 baseline #1 resource-failed run** at `f58e866`
+remains historical evidence only and is not a member of this pair. The v3
+calibration and bounded synthetic contract are documented in
 [pit-replay-resource-gate-v3.md](pit-replay-resource-gate-v3.md); the
 finalization measurements remain in
 [pit-replay-finalization-working-set.md](pit-replay-finalization-working-set.md).

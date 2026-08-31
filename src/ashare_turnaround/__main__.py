@@ -308,7 +308,13 @@ def _parser() -> argparse.ArgumentParser:
     )
     replay_validation.add_argument("--top-n", type=int, default=20)
     replay_validation.add_argument(
-        "--stage", choices=("smoke", "yearly", "monthly"), default="smoke"
+        "--stage",
+        choices=("schedule", "sample", "smoke", "yearly", "monthly"),
+        default="schedule",
+        help=(
+            "schedule writes Layer-1 targets only; sample runs the frozen Layer-2 "
+            "representative full-evidence set"
+        ),
     )
     replay_validation.add_argument("--seed", type=int, default=0)
     replay_validation.add_argument("--determinism-sample", type=int, default=3)
@@ -1101,6 +1107,12 @@ def _replay_validate(args: argparse.Namespace) -> int:
         print(f"replay_validation_{name}={path}")
     print(f"pit_violations={summary['pit_violation_count']}")
     print(f"determinism_failures={summary['determinism_failure_count']}")
+    print(f"monthly_target_schedule_digest={summary['monthly_target_schedule_digest']}")
+    print(
+        "representative_sample_coverage="
+        f"{summary['representative_sample_coverage_count']}/"
+        f"{summary['representative_sample_target_count']}"
+    )
     print(f"resource_status={result.resource_status}")
     print(f"resource_warnings={','.join(result.resource_warnings)}")
     if (
@@ -1115,7 +1127,7 @@ def _replay_validate(args: argparse.Namespace) -> int:
         print("synthetic_fixture_status=FAIL", file=sys.stderr)
     return (
         0
-        if result.status == "READY"
+        if result.status in {"READY", "SCHEDULE_READY"}
         and summary["failed_count"] == 0
         and summary["pit_violation_count"] == 0
         and summary["determinism_failure_count"] == 0
