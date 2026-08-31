@@ -9,7 +9,7 @@ separate from RAW data.
 ## Contract
 
 - Contract version: `pit-replay-validation-v1`
-- Resource gate: `resource-gate-v2` (live working-set/system pressure; peak RSS diagnostic only)
+- Resource gate: `resource-gate-v3` (present working-set pressure; historical swap occupancy warning; peak RSS diagnostic only)
 - Frozen target-selection cutoff for the next validation pair: `20260830`
 - Monthly rule: `monthly-anchor-15-v1`
 - Requested target range: `2017-01` through `2026-12`
@@ -42,8 +42,16 @@ JSON files. Running the documented command is therefore required before
 interpreting local snapshot counts. Missing or incomplete inputs remain
 `INCOMPLETE`/`UNAVAILABLE`; they are never represented as `READY`.
 
-Current execution disposition: `READY_FOR_FULL_SMOKE_AGAIN` after the bounded
-finalization-working-set repair. The latest preserved real full-corpus result
+Current execution disposition: `READY_FOR_FULL_SMOKE` after resource-gate-v3
+calibration and the bounded semantic regression; no new full run is claimed.
+The v3 bounded run is recorded under the ignored local output
+`data/reports/issue32-resource-v3-cap100/`: 100/5,102 candidates, 231.101 s
+wall, PIT violations 0, failed snapshots 0, exact candidate-vector/score/
+universe/formal/diagnostic/warning/provenance digests, and artifact logical
+component equivalence `PASS`. Resource status was `PASS` (no soft warnings),
+with minimum MemAvailable 10,727,854,080 B, minimum SwapFree 1,001,267,200 B,
+peak live PSS 1,436,367,872 B, peak live private 1,435,246,592 B, process
+swap 0, and no active pressure window. The latest preserved real full-corpus result
 is labelled **resource-gate-v2 baseline #1 resource-failed run** at `f58e866`:
 `2025-06`, `today=20260830`, `top_n=3`, `determinism_sample=0`,
 `content_hash=False`, 5,102/5,102 candidates, snapshot `READY`, PIT and
@@ -54,10 +62,12 @@ unchanged 256 MiB / 512 MiB / 256 MiB gates. It is not a `FULL_SMOKE_PASS`.
 
 The repaired implementation releases replay frames before finalization,
 streams semantic score hashing and physical scores, finalizes/reuses the CAS
-once, and enforces resource callbacks inside long merge/write operations. The
-authorized cap=100 regression passed PIT and exact vector/score/universe/
-ranking/provenance digest comparison. No new full 5,102, yearly, monthly, or
-Evaluation run is claimed. See
+once, and enforces resource callbacks inside long merge/write operations.
+Resource-gate-v3 adds `/proc/vmstat` swap-I/O deltas and records soft swap
+warnings without changing logical replay values. The authorized cap=100
+regression passed PIT and exact vector/score/universe/ranking/provenance digest
+comparison. No new full 5,102, yearly, monthly, or Evaluation run is claimed.
+See [pit-replay-resource-gate-v3.md](pit-replay-resource-gate-v3.md) and
 [pit-replay-finalization-working-set.md](pit-replay-finalization-working-set.md).
 
 For historical context, the earlier normalization diagnostic was intentionally
@@ -81,9 +91,10 @@ lossless decoder contract are in
 - Target selection and feature/PIT cutoffs are separate: `trade_cal` is read
   unprojected for target selection, while each target's feature frames remain
   bounded at its selected trading date (`2025-06` remains `20250616`).
-- `ru_maxrss` is retained as `peak_rss_diagnostic_bytes`; live PSS/private,
-  current process swap, MemAvailable, and system swap growth are the hard
-  resource metrics under `resource-gate-v2`.
+- `ru_maxrss` is retained as `peak_rss_diagnostic_bytes`; live PSS/private and
+  MemAvailable are hard resource metrics. Process swap, `SwapFree`, and net
+  system swap growth are v3 soft warnings; only sustained vmstat swap I/O under
+  low MemAvailable is a hard swap-pressure signal.
 
 - Financial visibility is bounded by `actual_available_date <= as_of`, including
   the original/revised version boundary fixture.

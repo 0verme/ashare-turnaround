@@ -5,6 +5,10 @@ Issue #32 / PR #41, branch
 feature formulas, PIT/score/ranking semantics, universe, Top-N, workers, logical
 CAS refs, artifact schema, and RAW are unchanged.
 
+This file preserves the execution-only v2 finalization evidence. The current
+resource decision contract is `resource-gate-v3`, which supersedes the v2 swap
+hard gates; see [pit-replay-resource-gate-v3.md](pit-replay-resource-gate-v3.md).
+
 ## A. Preserved baseline
 
 The latest real full run remains labelled **resource-gate-v2 baseline #1
@@ -128,9 +132,9 @@ physical value bytes, a 331,429,892 B finalized runtime file, and peak four
 open streams. The >=225-chunk tests exercise true multipass reuse and keep peak
 open streams within configured fan-in.
 
-## H. Resource sampling
+## H. Resource sampling (historical v2 implementation)
 
-The unchanged hard thresholds remain:
+At this repair boundary the thresholds were still v2 hard thresholds:
 
 - live PSS/private/RSS fallback <= 6 GiB;
 - `SwapFree` >= 512 MiB;
@@ -139,9 +143,11 @@ The unchanged hard thresholds remain:
 
 The declared resource surface now includes
 `sampling_contract_version=resource-finalization-sampling-v1` and a 256 MiB
-interval. The orchestration callback enforces the same `resource-gate-v2`
-limits at frame release, merge-group boundaries, finalized-store completion,
-final store iteration, and vector/score/store artifact streams. The artifact
+interval. The orchestration callback enforced the v2 limits at frame release,
+merge-group boundaries, finalized-store completion, final store iteration, and
+vector/score/store artifact streams. Resource-gate-v3 keeps those sampling
+points but classifies swap occupancy/history as warnings and uses a vmstat
+pressure window for hard swap-thrashing detection. The artifact
 module has no dependency on `ResourceBlocked`; any callback exception is
 cleaned up and propagated.
 

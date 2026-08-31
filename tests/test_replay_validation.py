@@ -10,13 +10,18 @@ from ashare_turnaround.scanner.artifacts import (
     canonical_json_bytes,
     expand_normalized_snapshot,
 )
-from ashare_turnaround.scanner.replay import ReplayDiagnostics, ReplayResult
+from ashare_turnaround.scanner.replay import ReplayConfig, ReplayDiagnostics, ReplayResult
 from ashare_turnaround.scanner.replay_validation import (
     HISTORICAL_UNIVERSE_CONTRACT_VERSION,
     MARKET_REGIME_CONTRACT_VERSION,
     MONTHLY_SELECTION_RULE_VERSION,
     PIT_REPLAY_VALIDATION_CONTRACT_VERSION,
+    RESOURCE_GATE_CONTRACT_VERSION,
+    RESOURCE_PRESSURE_CONTRACT_VERSION,
     RESOURCE_SAMPLING_CONTRACT_VERSION,
+    RESOURCE_WARNING_PROCESS_SWAP,
+    RESOURCE_WARNING_SWAP_FREE,
+    RESOURCE_WARNING_SWAP_GROWTH,
     ResourceBlocked,
     build_input_manifest,
     classify_market_regime,
@@ -312,7 +317,10 @@ def test_validation_uses_production_replay_and_writes_complete_audit_artifacts(t
     assert result.summary["failed_count"] == 0
     assert result.summary["ready_count"] == 1
     assert result.summary["determinism_failure_count"] == 0
-    assert result.configuration["resource_gate"]["version"] == "resource-gate-v2"
+    assert result.configuration["resource_gate"]["version"] == RESOURCE_GATE_CONTRACT_VERSION
+    assert result.configuration["resource_gate"]["pressure_contract_version"] == (
+        RESOURCE_PRESSURE_CONTRACT_VERSION
+    )
     assert result.configuration["resource_gate"]["sampling_contract_version"] == (
         RESOURCE_SAMPLING_CONTRACT_VERSION
     )
@@ -324,7 +332,11 @@ def test_validation_uses_production_replay_and_writes_complete_audit_artifacts(t
     assert snapshot.result.universe_version == HISTORICAL_UNIVERSE_CONTRACT_VERSION
     assert snapshot.result.universe_decisions
     assert snapshot.run_manifest["validation_cutoff"] == "20251231"
-    assert snapshot.run_manifest["resource_gate"]["version"] == "resource-gate-v2"
+    assert snapshot.run_manifest["resource_gate"]["version"] == RESOURCE_GATE_CONTRACT_VERSION
+    assert snapshot.run_manifest["resource_status"] == "PASS"
+    assert snapshot.run_manifest["resource_warnings"] == []
+    assert result.resource_status == "NOT_ENFORCED"
+    assert result.resource_warnings == ()
     assert snapshot.result.vectors
     assert snapshot.result.scores
     assert snapshot.result.full_ranked is snapshot.result.diagnostic_ranked
@@ -335,7 +347,9 @@ def test_validation_uses_production_replay_and_writes_complete_audit_artifacts(t
     machine = json.loads(paths["summary"].read_text(encoding="utf-8"))
     manifest = json.loads(paths["manifest"].read_text(encoding="utf-8"))
     assert manifest["validation_cutoff"] == "20251231"
-    assert manifest["resource_gate"]["version"] == "resource-gate-v2"
+    assert manifest["resource_gate"]["version"] == RESOURCE_GATE_CONTRACT_VERSION
+    assert manifest["resource_status"] == "NOT_ENFORCED"
+    assert manifest["resource_warnings"] == []
     assert machine["summary"]["ranking_eligible_count"] >= 0
     snapshot_files = list((tmp_path / "artifacts" / "snapshots").glob("*.json"))
     assert len(snapshot_files) == 1
@@ -541,7 +555,7 @@ def test_large_corpus_resource_gate_blocks_low_available_ram(monkeypatch, tmp_pa
         validation,
         "_host_memory",
         lambda: {
-            "available_bytes": 3 * 1024**3,
+            "available_bytes": 1 * 1024**3,
             "swap_total_bytes": 4 * 1024**3,
             "swap_free_bytes": 3 * 1024**3,
             "swap_used_bytes": 1 * 1024**3,
@@ -575,6 +589,44 @@ def _healthy_resource_sample(**overrides):
     return sample
 
 
+def test_resource_gate_healthy_no_swap_is_pass() -> None:
+    import ashare_turnaround.scanner.replay_validation as validation
+
+    checked = validation._assert_runtime_resource_gate(
+        {"swap_used_bytes": 0},
+        memory=_healthy_resource_sample(
+            swap_total_bytes=0,
+            swap_free_bytes=0,
+            swap_used_bytes=0,
+            current_swap_bytes=0,
+        ),
+    )
+
+    assert checked["resource_status"] == "PASS"
+    assert checked["resource_warnings"] == []
+
+
+def test_resource_gate_treats_cold_swapped_pages_as_warning() -> None:
+    import ashare_turnaround.scanner.replay_validation as validation
+
+    checked = validation._assert_runtime_resource_gate(
+        {"swap_used_bytes": 1 * 1024**3},
+        memory=_healthy_resource_sample(
+            swap_free_bytes=400 * 1024**2,
+            swap_used_bytes=1 * 1024**3 + validation.MAX_SWAP_GROWTH_BYTES + 1,
+            current_swap_bytes=validation.MAX_PROCESS_SWAP_BYTES + 1,
+        ),
+    )
+
+    assert checked["resource_status"] == "PASS_WITH_WARNING"
+    assert checked["resource_warnings"] == [
+        RESOURCE_WARNING_PROCESS_SWAP,
+        RESOURCE_WARNING_SWAP_FREE,
+        RESOURCE_WARNING_SWAP_GROWTH,
+    ]
+    assert checked["swap_pressure_active"] is False
+
+
 def test_resource_gate_ignores_ru_maxrss_when_live_working_set_is_healthy(monkeypatch) -> None:
     import ashare_turnaround.scanner.replay_validation as validation
 
@@ -597,32 +649,132 @@ def test_resource_gate_blocks_live_pss_over_six_gib(monkeypatch) -> None:
         validation._assert_runtime_resource_gate({"swap_used_bytes": 1 * 1024**3})
 
 
-def test_resource_gate_blocks_swap_growth_over_contract(monkeypatch) -> None:
+def test_resource_gate_blocks_active_swap_thrashing() -> None:
     import ashare_turnaround.scanner.replay_validation as validation
 
-    monkeypatch.setattr(
-        validation,
-        "_host_memory",
-        lambda: _healthy_resource_sample(
-            swap_used_bytes=1 * 1024**3 + validation.MAX_SWAP_GROWTH_BYTES + 1,
-        ),
+    baseline = _healthy_resource_sample(
+        sampled_monotonic=0.0,
+        pswpin_pages=100,
+        pswpout_pages=100,
+        swap_page_size_bytes=4096,
     )
-    with pytest.raises(ResourceBlocked, match="swap grew"):
-        validation._assert_runtime_resource_gate({"swap_used_bytes": 1 * 1024**3})
+    observed = _healthy_resource_sample(
+        available_bytes=3 * 1024**3,
+        sampled_monotonic=30.0,
+        pswpin_pages=12_100,
+        pswpout_pages=12_100,
+        swap_page_size_bytes=4096,
+    )
+
+    with pytest.raises(ResourceBlocked, match="active swap thrashing"):
+        validation._assert_runtime_resource_gate(
+            baseline,
+            memory=observed,
+            phase="synthetic-thrashing",
+            sample_history=[baseline, observed],
+            require_complete_telemetry=True,
+        )
 
 
-def test_resource_gate_blocks_process_swap_pressure(monkeypatch) -> None:
+def test_resource_gate_fails_closed_when_large_run_telemetry_is_unavailable() -> None:
     import ashare_turnaround.scanner.replay_validation as validation
 
-    monkeypatch.setattr(
-        validation,
-        "_host_memory",
-        lambda: _healthy_resource_sample(
+    with pytest.raises(ResourceBlocked, match="resource sampler unavailable"):
+        validation._assert_runtime_resource_gate(
+            {},
+            memory=_healthy_resource_sample(
+                pswpin_pages=None,
+                pswpout_pages=None,
+                swap_io_supported=False,
+            ),
+            require_complete_telemetry=True,
+        )
+
+
+def test_resource_gate_warns_system_swap_growth_over_soft_limit() -> None:
+    import ashare_turnaround.scanner.replay_validation as validation
+
+    observed = _healthy_resource_sample(
+        swap_used_bytes=1 * 1024**3 + validation.MAX_SWAP_GROWTH_BYTES + 1,
+    )
+    checked = validation._assert_runtime_resource_gate(
+        {"swap_used_bytes": 1 * 1024**3},
+        memory=observed,
+    )
+
+    assert checked["resource_status"] == "PASS_WITH_WARNING"
+    assert checked["resource_warnings"] == [RESOURCE_WARNING_SWAP_GROWTH]
+
+
+def test_resource_gate_warns_process_swap_over_soft_limit() -> None:
+    import ashare_turnaround.scanner.replay_validation as validation
+
+    checked = validation._assert_runtime_resource_gate(
+        {"swap_used_bytes": 1 * 1024**3},
+        memory=_healthy_resource_sample(
             current_swap_bytes=validation.MAX_PROCESS_SWAP_BYTES + 1,
         ),
     )
-    with pytest.raises(ResourceBlocked, match="process swap"):
-        validation._assert_runtime_resource_gate({"swap_used_bytes": 1 * 1024**3})
+
+    assert checked["resource_status"] == "PASS_WITH_WARNING"
+    assert checked["resource_warnings"] == [RESOURCE_WARNING_PROCESS_SWAP]
+
+
+def test_resource_warnings_are_persisted_in_decision_manifest_and_report(
+    tmp_path, monkeypatch
+) -> None:
+    import ashare_turnaround.scanner.replay_validation as validation
+
+    resource_sample = _healthy_resource_sample(
+        swap_free_bytes=400 * 1024**2,
+        current_swap_bytes=validation.MAX_PROCESS_SWAP_BYTES + 1,
+        pswpin_pages=100,
+        pswpout_pages=100,
+        swap_io_supported=True,
+        swap_page_size_bytes=4096,
+        sampled_monotonic=0.0,
+    )
+    monkeypatch.setattr(validation, "_host_memory", lambda: dict(resource_sample))
+    frames = _validation_frames()
+    result = validation._run_validation(
+        frames,
+        data_dir="<in-memory>",
+        input_manifest=validation._frame_manifest(frames),
+        start="2025-06",
+        end="2025-06",
+        selection_rule=validation.MONTHLY_SELECTION_RULE_VERSION,
+        anchor_day=15,
+        calendar_exchange="SSE",
+        top_n=3,
+        replay_config=ReplayConfig(top_n=3),
+        seed=0,
+        stage="monthly",
+        today="2025-12-31",
+        determinism_sample=0,
+        resource_guard=True,
+    )
+
+    assert result.status == "READY"
+    assert result.resource_status == "PASS_WITH_WARNING"
+    assert result.resource_warnings == (
+        RESOURCE_WARNING_PROCESS_SWAP,
+        RESOURCE_WARNING_SWAP_FREE,
+    )
+    assert result.summary["resource"]["warnings"] == list(result.resource_warnings)
+    assert result.summary["resource"]["samples"]
+    assert result.snapshots[0].run_manifest["resource_warnings"] == list(result.resource_warnings)
+
+    paths = validation.write_replay_validation_artifacts(result, tmp_path / "artifacts")
+    manifest = json.loads(paths["manifest"].read_text(encoding="utf-8"))
+    summary = json.loads(paths["summary"].read_text(encoding="utf-8"))
+    markdown = paths["summary_markdown"].read_text(encoding="utf-8")
+    assert manifest["resource_status"] == "PASS_WITH_WARNING"
+    assert manifest["resource_warnings"] == list(result.resource_warnings)
+    assert summary["summary"]["resource"]["warnings"] == list(result.resource_warnings)
+    assert all(
+        sample["resource_warnings"] for sample in summary["summary"]["resource"]["samples"]
+    )
+    assert "historical_process_swap_above_soft_limit" in markdown
 
 
 def test_resource_parser_and_report_keep_peak_rss_as_diagnostic() -> None:
@@ -639,6 +791,10 @@ VmSwap: 3 kB"""
         "Pss": 8 * 1024,
         "Private_Clean": 2 * 1024,
         "VmSwap": 3 * 1024,
+    }
+    assert validation._parse_proc_vmstat_text("pswpin 12\npswpout 34\nbad value") == {
+        "pswpin": 12,
+        "pswpout": 34,
     }
     telemetry = validation._host_memory()
     assert "peak_rss_diagnostic_bytes" in telemetry

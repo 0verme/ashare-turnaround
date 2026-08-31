@@ -9,6 +9,7 @@ PIT assertions before an artifact can be called ready.
 
 from __future__ import annotations
 
+import errno
 import gc
 import hashlib
 import json
@@ -70,40 +71,53 @@ DEFAULT_END_MONTH = "2026-12"
 DEFAULT_ANCHOR_DAY = 15
 DEFAULT_BENCHMARK_ID = "000300.SH"
 DEFAULT_SEED = 0
-MIN_AVAILABLE_RAM_BYTES = 4 * 1024**3
+# Keep the resource gate focused on present pressure.  Two GiB is a hard
+# emergency floor, while the former four-GiB boundary is retained as the
+# context threshold for proving active swap thrashing.
+MIN_AVAILABLE_RAM_BYTES = 2 * 1024**3
+SWAP_PRESSURE_AVAILABLE_BYTES = 4 * 1024**3
 # Keep the existing six-GiB budget, but enforce it against live working-set
 # telemetry rather than the lifetime ru_maxrss high-water mark.
 MAX_PEAK_RSS_BYTES = 6 * 1024**3
 MAX_LIVE_PSS_BYTES = MAX_PEAK_RSS_BYTES
 MAX_LIVE_PRIVATE_BYTES = MAX_PEAK_RSS_BYTES
+# These are deliberately soft limits.  They describe swap occupancy/history,
+# not pressure, unless the vmstat window also proves active thrashing.
 MIN_SWAP_FREE_BYTES = 512 * 1024**2
 MAX_SWAP_GROWTH_BYTES = 256 * 1024**2
 MAX_PROCESS_SWAP_BYTES = 256 * 1024**2
+SWAP_PRESSURE_MIN_WINDOW_SECONDS = 30.0
+SWAP_PRESSURE_MIN_IO_BYTES = 64 * 1024**2
+SWAP_PRESSURE_MIN_IO_RATE_BYTES_PER_SECOND = (
+    SWAP_PRESSURE_MIN_IO_BYTES / SWAP_PRESSURE_MIN_WINDOW_SECONDS
+)
 LARGE_CORPUS_BYTES = 512 * 1024**2
-RESOURCE_GATE_CONTRACT_VERSION = "resource-gate-v2"
+RESOURCE_GATE_CONTRACT_VERSION = "resource-gate-v3"
+RESOURCE_PRESSURE_CONTRACT_VERSION = "resource-pressure-v1"
 RESOURCE_SAMPLING_CONTRACT_VERSION = "resource-finalization-sampling-v1"
+RESOURCE_WARNING_PROCESS_SWAP = "historical_process_swap_above_soft_limit"
+RESOURCE_WARNING_SWAP_FREE = "system_swap_free_below_soft_floor"
+RESOURCE_WARNING_SWAP_GROWTH = "system_swap_growth_above_soft_limit"
 DEFAULT_VALIDATION_CUTOFF = "20260830"
 
 
 def _resource_gate_declaration(*, enabled: bool | None = None) -> dict[str, Any]:
-    """Return the versioned hard/diagnostic resource contract.
+    """Return the versioned hard/soft/diagnostic resource contract.
 
-    ``ru_maxrss`` is intentionally declared only as a diagnostic.  It is a
-    lifetime high-water value and cannot identify which replay phase caused a
-    large allocation.  The live limits retain the old six-GiB budget.
+    ``ru_maxrss`` and swap occupancy are intentionally diagnostic/soft
+    measurements.  Current available RAM, live PSS/private memory, and a
+    sampled vmstat swap-I/O pressure window are the fail-closed signals.
     """
 
     declaration: dict[str, Any] = {
         "version": RESOURCE_GATE_CONTRACT_VERSION,
         "min_available_ram_bytes": MIN_AVAILABLE_RAM_BYTES,
-        "min_swap_free_bytes": MIN_SWAP_FREE_BYTES,
-        "max_swap_growth_bytes": MAX_SWAP_GROWTH_BYTES,
         "max_live_pss_bytes": MAX_LIVE_PSS_BYTES,
         "max_live_private_bytes": MAX_LIVE_PRIVATE_BYTES,
         "max_live_rss_fallback_bytes": MAX_PEAK_RSS_BYTES,
-        "max_process_swap_bytes": MAX_PROCESS_SWAP_BYTES,
         "large_corpus_threshold_bytes": LARGE_CORPUS_BYTES,
         "sampling_contract_version": RESOURCE_SAMPLING_CONTRACT_VERSION,
+        "pressure_contract_version": RESOURCE_PRESSURE_CONTRACT_VERSION,
         "finalization_sampling": {
             "probe_interval_bytes": FINALIZATION_PROBE_INTERVAL_BYTES,
             "phases": [
@@ -114,16 +128,41 @@ def _resource_gate_declaration(*, enabled: bool | None = None) -> dict[str, Any]
                 "artifact_score_stream",
                 "artifact_provenance_store_stream",
             ],
-            "enforcement": "same resource-gate-v2 hard limits",
+            "enforcement": "same resource-gate-v3 hard limits",
         },
         "hard_metrics": [
             "available_bytes",
-            "swap_free_bytes",
-            "swap_used_growth_bytes",
             "current_pss_bytes",
             "current_private_bytes",
+            "current_rss_bytes_fallback",
+            "active_swap_pressure",
+            "resource_sampler_available",
+        ],
+        "soft_metrics": [
+            "swap_free_bytes",
+            "swap_used_growth_bytes",
             "current_swap_bytes",
         ],
+        "soft_limits": {
+            "min_swap_free_bytes": MIN_SWAP_FREE_BYTES,
+            "max_swap_growth_bytes": MAX_SWAP_GROWTH_BYTES,
+            "max_process_swap_bytes": MAX_PROCESS_SWAP_BYTES,
+        },
+        "swap_pressure": {
+            "source": "/proc/vmstat",
+            "counters": ["pswpin", "pswpout"],
+            "counter_unit": "pages",
+            "min_available_bytes": SWAP_PRESSURE_AVAILABLE_BYTES,
+            "min_window_seconds": SWAP_PRESSURE_MIN_WINDOW_SECONDS,
+            "min_io_bytes": SWAP_PRESSURE_MIN_IO_BYTES,
+            "min_io_rate_bytes_per_second": SWAP_PRESSURE_MIN_IO_RATE_BYTES_PER_SECOND,
+            "requires_both_directions": True,
+            "rule": (
+                "fail only when both pswpin and pswpout grow across the minimum "
+                "window at the declared rate while MemAvailable is below the "
+                "pressure context threshold"
+            ),
+        },
         "diagnostic_metrics": {
             "peak_rss": {
                 "metric": "ru_maxrss",
@@ -131,6 +170,13 @@ def _resource_gate_declaration(*, enabled: bool | None = None) -> dict[str, Any]
                 "threshold_bytes": MAX_PEAK_RSS_BYTES,
                 "enforcement": "diagnostic_only",
             }
+        },
+        "resource_status_semantics": {
+            "PASS": "hard signals healthy and no soft warning observed",
+            "PASS_WITH_WARNING": (
+                "hard signals healthy; swap occupancy/history crossed a soft limit"
+            ),
+            "FAIL": "hard pressure, allocator failure, or unavailable production telemetry",
         },
         "live_metric_fallback": (
             "current VmRSS from /proc/self/status when smaps_rollup is unavailable; "
@@ -348,7 +394,9 @@ class ReplayValidationConfig:
 class ResourceBlocked(RuntimeError):
     """Raised before/within a real replay when host memory is unsafe."""
 
-    pass
+    def __init__(self, message: str, *, failures: Iterable[str] = ()) -> None:
+        self.failures = tuple(dict.fromkeys(str(value) for value in failures))
+        super().__init__(message)
 
 
 class PITViolation(RuntimeError):
@@ -579,13 +627,34 @@ def _read_proc_memory(path: str | Path) -> dict[str, int]:
     return _parse_proc_memory_text(Path(path).read_text(encoding="ascii"))
 
 
+def _parse_proc_vmstat_text(text: str) -> dict[str, int]:
+    """Parse the counter/value format used by Linux ``/proc/vmstat``."""
+
+    values: dict[str, int] = {}
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) != 2:
+            continue
+        try:
+            values[parts[0]] = int(parts[1])
+        except ValueError:
+            continue
+    return values
+
+
+def _read_proc_vmstat(path: str | Path = "/proc/vmstat") -> dict[str, int]:
+    return _parse_proc_vmstat_text(Path(path).read_text(encoding="ascii"))
+
+
 def _host_memory() -> dict[str, Any]:
-    """Read host and live-process memory telemetry.
+    """Read host, live-process, and swap-I/O telemetry.
 
     On Linux, ``smaps_rollup`` supplies current RSS/PSS/private/swap values.
     If it is unavailable, current ``VmRSS``/``VmSwap`` from ``status`` are
-    used and PSS/private remain explicitly unavailable.  In particular,
-    ``ru_maxrss`` is never treated as a live working-set measurement.
+    used and PSS/private remain explicitly unavailable.  ``pswpin`` and
+    ``pswpout`` are sampled from ``/proc/vmstat`` as system-wide counters;
+    unlike swap occupancy, their deltas describe I/O during the observed
+    interval.  ``ru_maxrss`` is never treated as a live working-set value.
     """
 
     values: dict[str, Any] = {
@@ -597,6 +666,11 @@ def _host_memory() -> dict[str, Any]:
         "current_pss_bytes": None,
         "current_private_bytes": None,
         "current_swap_bytes": None,
+        "pswpin_pages": None,
+        "pswpout_pages": None,
+        "swap_page_size_bytes": None,
+        "swap_io_supported": False,
+        "sampled_monotonic": time.monotonic(),
         "peak_rss_diagnostic_bytes": None,
         # Kept as a read-only compatibility alias for existing diagnostic
         # consumers.  It is not a hard-gate input.
@@ -610,6 +684,22 @@ def _host_memory() -> dict[str, Any]:
         values["swap_total_bytes"] = meminfo.get("SwapTotal")
         values["swap_free_bytes"] = meminfo.get("SwapFree")
     except (OSError, ValueError, IndexError):
+        pass
+
+    try:
+        vmstat = _read_proc_vmstat()
+        values["pswpin_pages"] = vmstat.get("pswpin")
+        values["pswpout_pages"] = vmstat.get("pswpout")
+        values["swap_io_supported"] = (
+            values["pswpin_pages"] is not None and values["pswpout_pages"] is not None
+        )
+    except (OSError, ValueError, IndexError):
+        pass
+    try:
+        page_size = int(os.sysconf("SC_PAGE_SIZE"))
+        if page_size > 0:
+            values["swap_page_size_bytes"] = page_size
+    except (AttributeError, OSError, TypeError, ValueError):
         pass
 
     rollup: dict[str, int] = {}
@@ -670,19 +760,278 @@ def _raw_corpus_bytes(data_dir: str | Path) -> int:
     return sum(path.stat().st_size for path in root.rglob("*.parquet") if path.is_file())
 
 
+def _sample_counter(sample: Mapping[str, Any], name: str) -> int | None:
+    for key in (f"{name}_pages", name):
+        value = sample.get(key)
+        if value is None:
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _counter_delta(start: int | None, end: int | None) -> int | None:
+    if start is None or end is None or end < start:
+        return None
+    return end - start
+
+
+def _sample_monotonic(sample: Mapping[str, Any]) -> float | None:
+    for key in ("sampled_monotonic", "sampled_monotonic_seconds"):
+        value = sample.get(key)
+        if value is None:
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _resource_gate_assessment(
+    baseline: Mapping[str, Any],
+    *,
+    observed: Mapping[str, Any],
+    phase: str,
+    sample_history: Iterable[Mapping[str, Any]] | None = None,
+    require_complete_telemetry: bool = False,
+) -> dict[str, Any]:
+    """Classify one sample without confusing swap occupancy with pressure."""
+
+    current = dict(observed)
+    failures: list[str] = []
+    warnings: list[str] = []
+    available = current.get("available_bytes")
+    if available is None:
+        failures.append(f"BLOCKED [{phase}]: available RAM telemetry unavailable")
+    elif available < MIN_AVAILABLE_RAM_BYTES:
+        failures.append(
+            f"BLOCKED [{phase}]: available RAM {available} < {MIN_AVAILABLE_RAM_BYTES} bytes"
+        )
+
+    swap_total = current.get("swap_total_bytes")
+    swap_free = current.get("swap_free_bytes")
+    if swap_total is None and require_complete_telemetry:
+        failures.append(f"BLOCKED [{phase}]: resource sampler unavailable (swap total)")
+    elif swap_total and swap_free is None:
+        failures.append(f"BLOCKED [{phase}]: swap-free telemetry unavailable")
+
+    current_pss = current.get("current_pss_bytes")
+    current_private = current.get("current_private_bytes")
+    current_rss = current.get("current_rss_bytes")
+    if current_pss is not None and current_pss > MAX_LIVE_PSS_BYTES:
+        failures.append(
+            f"BLOCKED [{phase}]: live PSS {current_pss} > {MAX_LIVE_PSS_BYTES} bytes"
+        )
+    if current_private is not None and current_private > MAX_LIVE_PRIVATE_BYTES:
+        failures.append(
+            f"BLOCKED [{phase}]: live private memory {current_private} > "
+            f"{MAX_LIVE_PRIVATE_BYTES} bytes"
+        )
+    if current_pss is None and current_private is None and current_rss is None:
+        failures.append(f"BLOCKED [{phase}]: live memory telemetry unavailable")
+    elif (
+        current_pss is None
+        and current_private is None
+        and current_rss is not None
+        and current_rss > MAX_LIVE_PRIVATE_BYTES
+    ):
+        failures.append(
+            f"BLOCKED [{phase}]: live RSS fallback {current_rss} > "
+            f"{MAX_LIVE_PRIVATE_BYTES} bytes"
+        )
+
+    baseline_swap = baseline.get("swap_used_bytes")
+    current_swap = current.get("swap_used_bytes")
+    swap_growth = (
+        current_swap - baseline_swap
+        if baseline_swap is not None and current_swap is not None
+        else None
+    )
+    process_swap = current.get("current_swap_bytes")
+    if process_swap is not None and process_swap > MAX_PROCESS_SWAP_BYTES:
+        warnings.append(RESOURCE_WARNING_PROCESS_SWAP)
+    if swap_total and swap_free is not None and swap_free < MIN_SWAP_FREE_BYTES:
+        warnings.append(RESOURCE_WARNING_SWAP_FREE)
+    if swap_growth is not None and swap_growth > MAX_SWAP_GROWTH_BYTES:
+        warnings.append(RESOURCE_WARNING_SWAP_GROWTH)
+
+    history = list(sample_history or ())
+    if not history or history[-1] is not observed:
+        history.append(observed)
+    if len(history) < 2:
+        history = [baseline, observed]
+    direct_in = _counter_delta(
+        _sample_counter(baseline, "pswpin"), _sample_counter(current, "pswpin")
+    )
+    direct_out = _counter_delta(
+        _sample_counter(baseline, "pswpout"), _sample_counter(current, "pswpout")
+    )
+    page_size = current.get("swap_page_size_bytes") or baseline.get("swap_page_size_bytes") or 4096
+    try:
+        page_size = max(1, int(page_size))
+    except (TypeError, ValueError):
+        page_size = 4096
+    direct_elapsed = None
+    baseline_time = _sample_monotonic(baseline)
+    current_time = _sample_monotonic(current)
+    if baseline_time is not None and current_time is not None and current_time >= baseline_time:
+        direct_elapsed = current_time - baseline_time
+
+    # Use the newest interval that spans the minimum window.  This is a small
+    # rolling test, not a lifetime swap-used test; counters are system-wide and
+    # therefore prove activity, not process causality.
+    window_start: Mapping[str, Any] | None = None
+    window_elapsed: float | None = None
+    if len(history) >= 2:
+        for candidate in reversed(history[:-1]):
+            start_time = _sample_monotonic(candidate)
+            if start_time is None or current_time is None or current_time < start_time:
+                continue
+            elapsed = current_time - start_time
+            if elapsed >= SWAP_PRESSURE_MIN_WINDOW_SECONDS:
+                window_start = candidate
+                window_elapsed = elapsed
+                break
+    if (
+        window_start is None
+        and direct_elapsed is not None
+        and direct_elapsed >= SWAP_PRESSURE_MIN_WINDOW_SECONDS
+    ):
+        window_start = baseline
+        window_elapsed = direct_elapsed
+    window_in = (
+        _counter_delta(_sample_counter(window_start, "pswpin"), _sample_counter(current, "pswpin"))
+        if window_start is not None
+        else None
+    )
+    window_out = (
+        _counter_delta(
+            _sample_counter(window_start, "pswpout"), _sample_counter(current, "pswpout")
+        )
+        if window_start is not None
+        else None
+    )
+    pressure_in = window_in if window_in is not None else direct_in
+    pressure_out = window_out if window_out is not None else direct_out
+    pressure_elapsed = window_elapsed if window_elapsed is not None else direct_elapsed
+    total_io_bytes = (
+        (pressure_in + pressure_out) * page_size
+        if pressure_in is not None and pressure_out is not None
+        else None
+    )
+    io_rate = (
+        total_io_bytes / pressure_elapsed
+        if total_io_bytes is not None and pressure_elapsed and pressure_elapsed > 0
+        else None
+    )
+    active_swap_pressure = bool(
+        swap_total
+        and available is not None
+        and available < SWAP_PRESSURE_AVAILABLE_BYTES
+        and pressure_elapsed is not None
+        and pressure_elapsed >= SWAP_PRESSURE_MIN_WINDOW_SECONDS
+        and pressure_in is not None
+        and pressure_out is not None
+        and pressure_in > 0
+        and pressure_out > 0
+        and total_io_bytes is not None
+        and total_io_bytes >= SWAP_PRESSURE_MIN_IO_BYTES
+        and io_rate is not None
+        and io_rate >= SWAP_PRESSURE_MIN_IO_RATE_BYTES_PER_SECOND
+    )
+    if active_swap_pressure:
+        failures.append(
+            f"BLOCKED [{phase}]: active swap thrashing over "
+            f"{pressure_elapsed:.1f}s ({total_io_bytes} bytes/swap I/O)"
+        )
+
+    live_supported = bool(
+        current.get("live_working_set_supported")
+        or current_pss is not None
+        or current_private is not None
+        or current_rss is not None
+    )
+    swap_io_supported = bool(
+        current.get("swap_io_supported")
+        or (
+            _sample_counter(current, "pswpin") is not None
+            and _sample_counter(current, "pswpout") is not None
+        )
+    )
+    telemetry_complete = bool(
+        available is not None
+        and live_supported
+        and swap_total is not None
+        and (not swap_total or (swap_free is not None and swap_io_supported))
+    )
+    if require_complete_telemetry and not telemetry_complete:
+        failures.append(f"BLOCKED [{phase}]: resource sampler unavailable")
+
+    unique_warnings = tuple(dict.fromkeys(warnings))
+    unique_failures = tuple(dict.fromkeys(failures))
+    status = "FAIL" if unique_failures else "PASS_WITH_WARNING" if unique_warnings else "PASS"
+    current.update(
+        {
+            "swap_used_delta_bytes": swap_growth,
+            "swap_in_delta_pages": direct_in,
+            "swap_out_delta_pages": direct_out,
+            "swap_in_window_pages": window_in,
+            "swap_out_window_pages": window_out,
+            "swap_io_bytes": total_io_bytes,
+            "swap_io_rate_bytes_per_second": io_rate,
+            "swap_pressure_window_seconds": pressure_elapsed,
+            "swap_pressure_active": active_swap_pressure,
+            "resource_sampler_complete": telemetry_complete,
+            "resource_status": status,
+            "resource_warnings": list(unique_warnings),
+            "resource_hard_failures": list(unique_failures),
+        }
+    )
+    return {
+        "observed": current,
+        "status": status,
+        "warnings": unique_warnings,
+        "failures": unique_failures,
+        "telemetry_complete": telemetry_complete,
+    }
+
+
+def evaluate_resource_gate(
+    baseline: Mapping[str, Any],
+    *,
+    memory: Mapping[str, Any] | None = None,
+    phase: str = "runtime",
+    sample_history: Iterable[Mapping[str, Any]] | None = None,
+    require_complete_telemetry: bool = False,
+) -> dict[str, Any]:
+    """Return a deterministic v3 resource decision without raising."""
+
+    observed = dict(memory) if memory is not None else _host_memory()
+    return _resource_gate_assessment(
+        baseline,
+        observed=observed,
+        phase=phase,
+        sample_history=sample_history,
+        require_complete_telemetry=require_complete_telemetry,
+    )
+
+
 def _assert_initial_resource_gate(data_dir: str | Path) -> None:
     """Refuse a large real replay when the host is already under pressure."""
 
     if _raw_corpus_bytes(data_dir) < LARGE_CORPUS_BYTES:
         return
     memory = _host_memory()
-    # The initial gate keeps the original available-RAM and swap-floor checks,
-    # and also refuses a large-corpus run when no live process metric can be
-    # obtained.  A diagnostic ru_maxrss value is deliberately irrelevant here.
+    # A large production corpus requires all pressure inputs.  Swap occupancy
+    # is soft, but an unavailable sampler remains a hard fail-closed boundary.
     _assert_runtime_resource_gate(
         {"swap_used_bytes": memory.get("swap_used_bytes")},
         memory=memory,
         phase="initial",
+        require_complete_telemetry=True,
     )
 
 
@@ -691,73 +1040,29 @@ def _assert_runtime_resource_gate(
     *,
     memory: Mapping[str, Any] | None = None,
     phase: str = "runtime",
+    sample_history: Iterable[Mapping[str, Any]] | None = None,
+    require_complete_telemetry: bool = False,
 ) -> dict[str, Any]:
-    """Enforce current host/process pressure; return the sampled telemetry.
+    """Enforce v3 hard pressure signals and return the sampled telemetry.
 
-    ``ru_maxrss`` is intentionally not read by any hard check.  It is a
-    lifetime diagnostic and may have been raised by an earlier phase, process,
-    or allocation that is no longer live when this gate is sampled.
+    Swap occupancy and process ``Swap`` are warnings when live memory is
+    healthy.  A hard swap failure requires current low ``MemAvailable`` plus a
+    sustained window in which both vmstat swap counters advance rapidly.
     """
 
-    observed = dict(memory) if memory is not None else _host_memory()
-    available = observed.get("available_bytes")
-    if available is not None and available < MIN_AVAILABLE_RAM_BYTES:
+    assessment = evaluate_resource_gate(
+        baseline,
+        memory=memory,
+        phase=phase,
+        sample_history=sample_history,
+        require_complete_telemetry=require_complete_telemetry,
+    )
+    if assessment["failures"]:
         raise ResourceBlocked(
-            f"BLOCKED [{phase}]: available RAM {available} < {MIN_AVAILABLE_RAM_BYTES} bytes"
+            "; ".join(assessment["failures"]),
+            failures=assessment["failures"],
         )
-    if available is None:
-        raise ResourceBlocked(f"BLOCKED [{phase}]: available RAM telemetry unavailable")
-
-    swap_total = observed.get("swap_total_bytes")
-    swap_free = observed.get("swap_free_bytes")
-    if swap_total and swap_free is None:
-        raise ResourceBlocked(f"BLOCKED [{phase}]: swap-free telemetry unavailable")
-    if swap_total and swap_free < MIN_SWAP_FREE_BYTES:
-        raise ResourceBlocked(
-            f"BLOCKED [{phase}]: swap free {swap_free} < {MIN_SWAP_FREE_BYTES} bytes"
-        )
-
-    current_pss = observed.get("current_pss_bytes")
-    current_private = observed.get("current_private_bytes")
-    current_rss = observed.get("current_rss_bytes")
-    if current_pss is not None and current_pss > MAX_LIVE_PSS_BYTES:
-        raise ResourceBlocked(
-            f"BLOCKED [{phase}]: live PSS {current_pss} > {MAX_LIVE_PSS_BYTES} bytes"
-        )
-    if current_private is not None and current_private > MAX_LIVE_PRIVATE_BYTES:
-        raise ResourceBlocked(
-            f"BLOCKED [{phase}]: live private memory {current_private} > "
-            f"{MAX_LIVE_PRIVATE_BYTES} bytes"
-        )
-    if current_pss is None and current_private is None:
-        if current_rss is None:
-            raise ResourceBlocked(f"BLOCKED [{phase}]: live memory telemetry unavailable")
-        # This is the explicit /proc/self/status VmRSS fallback.  It is a
-        # current value, never the ru_maxrss high-water value.
-        if current_rss > MAX_LIVE_PRIVATE_BYTES:
-            raise ResourceBlocked(
-                f"BLOCKED [{phase}]: live RSS fallback {current_rss} > "
-                f"{MAX_LIVE_PRIVATE_BYTES} bytes"
-            )
-
-    process_swap = observed.get("current_swap_bytes")
-    if process_swap is not None and process_swap > MAX_PROCESS_SWAP_BYTES:
-        raise ResourceBlocked(
-            f"BLOCKED [{phase}]: process swap {process_swap} > "
-            f"{MAX_PROCESS_SWAP_BYTES} bytes"
-        )
-
-    baseline_swap = baseline.get("swap_used_bytes")
-    current_swap = observed.get("swap_used_bytes")
-    if (
-        baseline_swap is not None
-        and current_swap is not None
-        and current_swap > baseline_swap + MAX_SWAP_GROWTH_BYTES
-    ):
-        raise ResourceBlocked(
-            f"BLOCKED [{phase}]: swap grew from {baseline_swap} to {current_swap} bytes"
-        )
-    return observed
+    return assessment["observed"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -2019,6 +2324,14 @@ class ReplayValidationResult:
         return "UNAVAILABLE"
 
     @property
+    def resource_status(self) -> str:
+        return str(self.summary.get("resource", {}).get("status", "UNKNOWN"))
+
+    @property
+    def resource_warnings(self) -> tuple[str, ...]:
+        return tuple(self.summary.get("resource", {}).get("warnings", ()))
+
+    @property
     def gate_status(self) -> str:
         return "READY" if self.status == "READY" else "NOT_READY"
 
@@ -2028,6 +2341,8 @@ class ReplayValidationResult:
             "artifact_layout_version": ARTIFACT_LAYOUT_VERSION,
             "status": self.status,
             "gate_status": self.gate_status,
+            "resource_status": self.resource_status,
+            "resource_warnings": list(self.resource_warnings),
             "selection_rule": self.selection_rule,
             "start_month": self.start_month,
             "end_month": self.end_month,
@@ -2063,8 +2378,11 @@ def _run_manifest(
     warnings: Iterable[str],
     candidate_vector_digests: Mapping[str, str] | None = None,
     provenance_store: Mapping[str, Any] | Iterable[tuple[str, Any]] | None = None,
+    resource_status: str | None = None,
+    resource_warnings: Iterable[str] = (),
 ) -> dict[str, Any]:
     config_hash = _hash_payload(validation_config, length=None)
+    resource_warning_values = tuple(dict.fromkeys(str(value) for value in resource_warnings))
     digests = deterministic_replay_digests(
         result,
         input_manifest=input_manifest,
@@ -2115,6 +2433,9 @@ def _run_manifest(
         "seed": seed,
         "validation_cutoff": validation_config.get("today"),
         "resource_gate": dict(validation_config.get("resource_gate", {})),
+        "resource_status": resource_status
+        or ("PASS_WITH_WARNING" if resource_warning_values else "PASS"),
+        "resource_warnings": list(resource_warning_values),
         "warnings": list(dict.fromkeys(str(value) for value in warnings)),
         "configuration": dict(validation_config),
     }
@@ -2832,8 +3153,18 @@ def _run_validation(
     if synthetic.get("status") != "PASS":
         raise PITViolation(("synthetic_adversarial_fixture_failure",))
     resource_baseline = _host_memory()
+    resource_history: list[Mapping[str, Any]] = [resource_baseline]
     resource_samples: list[dict[str, Any]] = []
     resource_started_at = time.monotonic()
+    resource_warning_order: list[str] = []
+    resource_warning_seen: set[str] = set()
+
+    def _remember_resource_warnings(warnings: Iterable[str]) -> None:
+        for warning in warnings:
+            text = str(warning)
+            if text not in resource_warning_seen:
+                resource_warning_seen.add(text)
+                resource_warning_order.append(text)
 
     def _record_resource_sample(stage_name: str, observed: Mapping[str, Any]) -> None:
         resource_samples.append(
@@ -2844,26 +3175,71 @@ def _run_validation(
                 "available_bytes": observed.get("available_bytes"),
                 "swap_free_bytes": observed.get("swap_free_bytes"),
                 "swap_used_bytes": observed.get("swap_used_bytes"),
+                "swap_used_delta_bytes": observed.get("swap_used_delta_bytes"),
                 "current_rss_bytes": observed.get("current_rss_bytes"),
                 "current_pss_bytes": observed.get("current_pss_bytes"),
                 "current_private_bytes": observed.get("current_private_bytes"),
                 "current_swap_bytes": observed.get("current_swap_bytes"),
+                "pswpin_pages": observed.get("pswpin_pages"),
+                "pswpout_pages": observed.get("pswpout_pages"),
+                "swap_in_delta_pages": observed.get("swap_in_delta_pages"),
+                "swap_out_delta_pages": observed.get("swap_out_delta_pages"),
+                "swap_in_window_pages": observed.get("swap_in_window_pages"),
+                "swap_out_window_pages": observed.get("swap_out_window_pages"),
+                "swap_io_bytes": observed.get("swap_io_bytes"),
+                "swap_io_rate_bytes_per_second": observed.get(
+                    "swap_io_rate_bytes_per_second"
+                ),
+                "swap_pressure_window_seconds": observed.get("swap_pressure_window_seconds"),
+                "swap_pressure_active": observed.get("swap_pressure_active"),
+                "resource_sampler_complete": observed.get("resource_sampler_complete"),
+                "resource_status": observed.get("resource_status"),
+                "resource_warnings": list(observed.get("resource_warnings", ())),
+                "resource_hard_failures": list(observed.get("resource_hard_failures", ())),
                 "peak_rss_diagnostic_bytes": observed.get("peak_rss_diagnostic_bytes"),
                 "live_memory_metric": observed.get("live_memory_metric"),
             }
         )
 
-    _record_resource_sample("baseline", resource_baseline)
+    if resource_guard:
+        baseline_assessment = evaluate_resource_gate(
+            {},
+            memory=resource_baseline,
+            phase="baseline",
+            sample_history=resource_history,
+            require_complete_telemetry=True,
+        )
+        _remember_resource_warnings(baseline_assessment["warnings"])
+        _record_resource_sample("baseline", baseline_assessment["observed"])
+        if baseline_assessment["failures"]:
+            raise ResourceBlocked(
+                "; ".join(baseline_assessment["failures"]),
+                failures=baseline_assessment["failures"],
+            )
+    else:
+        _record_resource_sample("baseline", resource_baseline)
 
     def _sample_and_assert_resources(stage_name: str) -> dict[str, Any]:
         observed = _host_memory()
-        _record_resource_sample(stage_name, observed)
+        resource_history.append(observed)
         if resource_guard:
-            return _assert_runtime_resource_gate(
+            assessment = evaluate_resource_gate(
                 resource_baseline,
                 memory=observed,
                 phase=stage_name,
+                sample_history=resource_history,
+                require_complete_telemetry=True,
             )
+            checked = assessment["observed"]
+            _remember_resource_warnings(assessment["warnings"])
+            _record_resource_sample(stage_name, checked)
+            if assessment["failures"]:
+                raise ResourceBlocked(
+                    "; ".join(assessment["failures"]),
+                    failures=assessment["failures"],
+                )
+            return checked
+        _record_resource_sample(stage_name, observed)
         return observed
 
     snapshots: list[ReplayValidationSnapshot] = []
@@ -3275,6 +3651,10 @@ def _run_validation(
                     if stream_candidates and stream_store_builder is not None
                     else None
                 ),
+                resource_status=(
+                    "PASS_WITH_WARNING" if resource_warning_order else "PASS"
+                ),
+                resource_warnings=resource_warning_order,
             )
 
             if repeated is not None:
@@ -3309,7 +3689,14 @@ def _run_validation(
                     reasons = (*reasons, "determinism_failure")
                     stopped_reason = "determinism failure"
             snapshot_warnings = tuple(
-                dict.fromkeys((*warnings, *replay_result.warnings, *pit_violations))
+                dict.fromkeys(
+                    (
+                        *warnings,
+                        *replay_result.warnings,
+                        *pit_violations,
+                        *resource_warning_order,
+                    )
+                )
             )
             record_snapshot(
                 ReplayValidationSnapshot(
@@ -3328,6 +3715,12 @@ def _run_validation(
             if stream_results:
                 del replay_result
                 gc.collect()
+        except MemoryError as exc:
+            _discard_stream_resources()
+            raise ResourceBlocked(
+                f"BLOCKED [{target.target_month}]: allocator failure (MemoryError)",
+                failures=("allocator_failure",),
+            ) from exc
         except ResourceBlocked:
             _discard_stream_resources()
             raise
@@ -3359,7 +3752,40 @@ def _run_validation(
                     reasons=exc.violations,
                 )
             )
-        except (OSError, KeyError, RuntimeError, TypeError, ValueError) as exc:
+        except OSError as exc:
+            if exc.errno == errno.ENOMEM:
+                _discard_stream_resources()
+                raise ResourceBlocked(
+                    f"BLOCKED [{target.target_month}]: allocator failure (ENOMEM)",
+                    failures=("allocator_failure",),
+                ) from exc
+            error = f"{type(exc).__name__}: {exc}"
+            record_snapshot(
+                ReplayValidationSnapshot(
+                    target,
+                    "FAILED",
+                    regime,
+                    None,
+                    {
+                        "run_id": None,
+                        "snapshot_id": None,
+                        "as_of_date": as_of,
+                        "target_month": target.target_month,
+                        "input_manifest_ids": [input_manifest.get("manifest_id")],
+                        "replay_validation_contract_version": (
+                            PIT_REPLAY_VALIDATION_CONTRACT_VERSION
+                        ),
+                        "config_hash": validation_config_hash,
+                        "code_version": code_version,
+                        "seed": seed,
+                        "warnings": [error],
+                        "configuration": validation_configuration,
+                    },
+                    warnings=(error,),
+                    reasons=(error,),
+                )
+            )
+        except (KeyError, RuntimeError, TypeError, ValueError) as exc:
             error = f"{type(exc).__name__}: {exc}"
             record_snapshot(
                 ReplayValidationSnapshot(
@@ -3419,15 +3845,41 @@ def _run_validation(
             full_candidate_count=diagnostics.candidate_total,
         )
     peak_rss_diagnostic = resource_final.get("peak_rss_diagnostic_bytes")
+    resource_sample_values = {
+        field: [sample.get(field) for sample in resource_samples if sample.get(field) is not None]
+        for field in (
+            "available_bytes",
+            "swap_free_bytes",
+            "current_pss_bytes",
+            "current_private_bytes",
+            "current_swap_bytes",
+            "swap_io_rate_bytes_per_second",
+        )
+    }
+    resource_status = (
+        "NOT_ENFORCED"
+        if not resource_guard
+        else "PASS_WITH_WARNING" if resource_warning_order else "PASS"
+    )
     summary["resource"] = {
         "version": RESOURCE_GATE_CONTRACT_VERSION,
         "sampling_contract_version": RESOURCE_SAMPLING_CONTRACT_VERSION,
+        "pressure_contract_version": RESOURCE_PRESSURE_CONTRACT_VERSION,
         "guard_enabled": resource_guard,
+        "status": resource_status,
+        "warnings": list(resource_warning_order),
+        "hard_failures": [],
+        "telemetry_complete": resource_final.get("resource_sampler_complete"),
         "live_memory_metric": resource_final.get("live_memory_metric"),
         "current_rss_bytes": resource_final.get("current_rss_bytes"),
         "current_pss_bytes": resource_final.get("current_pss_bytes"),
         "current_private_bytes": resource_final.get("current_private_bytes"),
         "current_swap_bytes": resource_final.get("current_swap_bytes"),
+        "peak_current_swap_bytes": (
+            max(resource_sample_values["current_swap_bytes"])
+            if resource_sample_values["current_swap_bytes"]
+            else None
+        ),
         "peak_rss_diagnostic_bytes": peak_rss_diagnostic,
         # Compatibility spelling for existing diagnostic readers.  Both names
         # are diagnostic-only and neither participates in enforcement.
@@ -3435,12 +3887,47 @@ def _run_validation(
         "peak_rss_gib": (
             peak_rss_diagnostic / 1024**3 if peak_rss_diagnostic is not None else None
         ),
+        "minimum_available_bytes": (
+            min(resource_sample_values["available_bytes"])
+            if resource_sample_values["available_bytes"]
+            else None
+        ),
+        "minimum_swap_free_bytes": (
+            min(resource_sample_values["swap_free_bytes"])
+            if resource_sample_values["swap_free_bytes"]
+            else None
+        ),
+        "peak_current_pss_bytes": (
+            max(resource_sample_values["current_pss_bytes"])
+            if resource_sample_values["current_pss_bytes"]
+            else None
+        ),
+        "peak_current_private_bytes": (
+            max(resource_sample_values["current_private_bytes"])
+            if resource_sample_values["current_private_bytes"]
+            else None
+        ),
+        "peak_swap_io_rate_bytes_per_second": (
+            max(resource_sample_values["swap_io_rate_bytes_per_second"])
+            if resource_sample_values["swap_io_rate_bytes_per_second"]
+            else None
+        ),
         "available_bytes_at_finalize": resource_final.get("available_bytes"),
         "swap_free_bytes_at_finalize": resource_final.get("swap_free_bytes"),
         "swap_used_delta_bytes": (
             final_swap - baseline_swap
             if final_swap is not None and baseline_swap is not None
             else None
+        ),
+        "swap_in_delta_pages": resource_final.get("swap_in_delta_pages"),
+        "swap_out_delta_pages": resource_final.get("swap_out_delta_pages"),
+        "swap_io_bytes": resource_final.get("swap_io_bytes"),
+        "swap_io_rate_bytes_per_second": resource_final.get(
+            "swap_io_rate_bytes_per_second"
+        ),
+        "swap_pressure_window_seconds": resource_final.get("swap_pressure_window_seconds"),
+        "swap_pressure_active": any(
+            bool(sample.get("swap_pressure_active")) for sample in resource_samples
         ),
         "max_live_pss_bytes": MAX_LIVE_PSS_BYTES if resource_guard else None,
         "max_live_private_bytes": MAX_LIVE_PRIVATE_BYTES if resource_guard else None,
@@ -3453,7 +3940,10 @@ def _run_validation(
         "samples": list(resource_samples),
     }
     run_warnings = tuple(
-        dict.fromkeys(warning for snapshot in snapshots_tuple for warning in snapshot.warnings)
+        dict.fromkeys(
+            [warning for snapshot in snapshots_tuple for warning in snapshot.warnings]
+            + resource_warning_order
+        )
     )
     validation_result = ReplayValidationResult(
         contract_version=PIT_REPLAY_VALIDATION_CONTRACT_VERSION,
@@ -3881,6 +4371,10 @@ def render_replay_validation_summary(result: ReplayValidationResult) -> str:
     current_private = resource_summary.get("current_private_bytes")
     current_pss_gib = current_pss / 1024**3 if current_pss is not None else None
     current_private_gib = current_private / 1024**3 if current_private is not None else None
+    minimum_available = resource_summary.get("minimum_available_bytes")
+    minimum_available_gib = minimum_available / 1024**3 if minimum_available is not None else None
+    process_swap_peak = resource_summary.get("peak_current_swap_bytes")
+    process_swap_peak_mib = process_swap_peak / 1024**2 if process_swap_peak is not None else None
     lines = [
         "# Historical PIT replay validation sample",
         "",
@@ -3930,6 +4424,14 @@ def render_replay_validation_summary(result: ReplayValidationResult) -> str:
         f"- Peak RSS diagnostic (ru_maxrss, GiB): `{resource_summary.get('peak_rss_gib')}` "
         "(not enforced)",
         f"- Resource gate: `{resource_summary.get('version')}`",
+        f"- Resource status: `{resource_summary.get('status')}`",
+        f"- Resource warnings: `{resource_summary.get('warnings', [])}`",
+        f"- Minimum MemAvailable (GiB): `{minimum_available_gib}`",
+        f"- Sampled process swap peak (MiB): `{process_swap_peak_mib}`",
+        f"- Swap I/O deltas (pages in/out): `"
+        f"{resource_summary.get('swap_in_delta_pages')}` / `"
+        f"{resource_summary.get('swap_out_delta_pages')}`; active pressure: `"
+        f"{resource_summary.get('swap_pressure_active')}`",
         f"- Synthetic adversarial fixtures: `{summary.get('synthetic_fixture_status')}`",
         f"- Financial revision boundary fixture: `{summary.get('revision_boundary_status')}`",
         "",
@@ -3966,8 +4468,10 @@ def render_replay_validation_summary(result: ReplayValidationResult) -> str:
         "market and benchmark observations are bounded by the selected session.",
         "- Target selection uses the explicit frozen cutoff recorded in `configuration.today`; "
         "the selected trading date remains the independent feature/PIT `as_of` cutoff.",
-        "- Resource gate v2 enforces live PSS/private/system-pressure metrics; `ru_maxrss` "
-        "is retained as a diagnostic high-water value only.",
+        "- Resource gate v3 hard-fails only on present memory exhaustion, live PSS/private "
+        "overflow, unavailable large-run telemetry, allocator failure, or sustained "
+        "swap I/O while MemAvailable is pressured. `ru_maxrss` and historical swap "
+        "occupancy remain diagnostic/soft signals.",
         "- This is a PIT correctness sample, not a performance backtest: no "
         "forward-return evaluation, parameter tuning, weight changes, Score v2, "
         "ablation, or strategy claim is made.",
@@ -4002,6 +4506,8 @@ def write_replay_validation_artifacts(
         "contract_version": result.contract_version,
         "status": result.status,
         "gate_status": result.gate_status,
+        "resource_status": result.resource_status,
+        "resource_warnings": list(result.resource_warnings),
         "selection_rule": result.selection_rule,
         "start_month": result.start_month,
         "end_month": result.end_month,
@@ -4029,6 +4535,8 @@ def write_replay_validation_artifacts(
                 "contract_version": result.contract_version,
                 "status": result.status,
                 "gate_status": result.gate_status,
+                "resource_status": result.resource_status,
+                "resource_warnings": list(result.resource_warnings),
                 "configuration": result.configuration,
                 "summary": result.summary,
                 "warnings": list(result.warnings),
@@ -4085,12 +4593,22 @@ __all__ = [
     "MARKET_REGIME_CONTRACT_VERSION",
     "HISTORICAL_UNIVERSE_CONTRACT_VERSION",
     "RESOURCE_GATE_CONTRACT_VERSION",
+    "RESOURCE_PRESSURE_CONTRACT_VERSION",
     "RESOURCE_SAMPLING_CONTRACT_VERSION",
+    "RESOURCE_WARNING_PROCESS_SWAP",
+    "RESOURCE_WARNING_SWAP_FREE",
+    "RESOURCE_WARNING_SWAP_GROWTH",
+    "SWAP_PRESSURE_AVAILABLE_BYTES",
+    "SWAP_PRESSURE_MIN_WINDOW_SECONDS",
+    "SWAP_PRESSURE_MIN_IO_BYTES",
+    "SWAP_PRESSURE_MIN_IO_RATE_BYTES_PER_SECOND",
+    "MIN_AVAILABLE_RAM_BYTES",
+    "MIN_SWAP_FREE_BYTES",
+    "MAX_PROCESS_SWAP_BYTES",
+    "MAX_SWAP_GROWTH_BYTES",
     "DEFAULT_VALIDATION_CUTOFF",
     "MAX_LIVE_PSS_BYTES",
     "MAX_LIVE_PRIVATE_BYTES",
-    "MAX_PROCESS_SWAP_BYTES",
-    "MAX_SWAP_GROWTH_BYTES",
     "ARTIFACT_LAYOUT_VERSION",
     "PIT_REPLAY_ARTIFACT_LAYOUT_VERSION",
     "ReplayValidationConfig",
@@ -4098,6 +4616,7 @@ __all__ = [
     "PITViolation",
     "PITValidationError",
     "ResourceBlocked",
+    "evaluate_resource_gate",
     "MonthlySnapshotTarget",
     "select_monthly_snapshot_dates",
     "select_monthly_targets",

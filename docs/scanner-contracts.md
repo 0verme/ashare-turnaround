@@ -216,7 +216,7 @@ probability of positive return.  See [docs/evidence-confidence-v1.md](evidence-c
   artifacts. Feature/PIT frames remain bounded by each selected date. It
   performs no forward-return evaluation; see
   [docs/pit-replay-validation.md](pit-replay-validation.md),
-  [docs/pit-replay-resource-gate-v2.md](pit-replay-resource-gate-v2.md), and
+  [docs/pit-replay-resource-gate-v3.md](pit-replay-resource-gate-v3.md), and
   [docs/pit-replay-finalization-working-set.md](pit-replay-finalization-working-set.md).
 - `scan` writes a daily snapshot under `data/derived/scans/`; `scan-compare`
   reports additions, removals, rank/score changes, and risk-flag changes.

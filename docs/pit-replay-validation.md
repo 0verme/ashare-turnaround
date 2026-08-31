@@ -96,13 +96,17 @@ remain enabled.  When `artifact_output` is supplied, each complete snapshot is
 written before its `ReplayResult` is released; `checkpoint.json` records
 progress without duplicating RAW data.
 
-This is a memory/disk safety boundary only. `resource-gate-v2` enforces
-current `/proc/self/smaps_rollup` working-set/system-pressure metrics while
-retaining `ru_maxrss` as `peak_rss_diagnostic_bytes` for diagnostics only.
-`summary.json` and `summary.md` record live telemetry, timestamped gate
-samples, the diagnostic peak, and swap delta. It does not alter Score v1,
-feature formulas, evidence-confidence thresholds, or ranking semantics. See
-[pit-replay-resource-gate-v2.md](pit-replay-resource-gate-v2.md) for the audit.
+This is a memory/disk safety boundary only. `resource-gate-v3` enforces
+current `/proc/self/smaps_rollup` working-set metrics and fail-closes on
+present low `MemAvailable`, live PSS/private overflow, unavailable large-run
+telemetry, allocator failure, or sustained `/proc/vmstat` swap I/O while memory
+is pressured. `ru_maxrss`, process `Swap`, low `SwapFree`, and net system
+swap-used growth are recorded as diagnostic/soft-warning signals rather than
+standalone failures. `summary.json` and `summary.md` record live telemetry,
+timestamped gate samples, warning names, vmstat deltas, and the diagnostic
+peak. This does not alter Score v1, feature formulas, evidence-confidence
+thresholds, or ranking semantics. See
+[pit-replay-resource-gate-v3.md](pit-replay-resource-gate-v3.md) for the audit.
 
 ## Versioned run manifest
 
@@ -213,9 +217,10 @@ eligibility, or PIT semantics.
 
 The bounded attribution and performance measurements are recorded in
 [pit-replay-artifact-normalization.md](pit-replay-artifact-normalization.md).
-The latest full result is explicitly the **resource-gate-v2 baseline #1
-resource-failed run** at `f58e866`: correctness passed, but independent swap
-telemetry crossed three unchanged hard gates. The finalization repair is
-execution-only and restores `READY_FOR_FULL_SMOKE_AGAIN`; it does not imply a
-new full replay. See
+The latest preserved full result remains the **resource-gate-v2 baseline #1
+resource-failed run** at `f58e866`; it is historical evidence only and is not a
+determinism baseline. The finalization repair is execution-only. The v3
+calibration and bounded synthetic contract are documented in
+[pit-replay-resource-gate-v3.md](pit-replay-resource-gate-v3.md); the prior
+finalization measurements remain in
 [pit-replay-finalization-working-set.md](pit-replay-finalization-working-set.md).

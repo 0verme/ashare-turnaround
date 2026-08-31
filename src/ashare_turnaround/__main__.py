@@ -1101,6 +1101,16 @@ def _replay_validate(args: argparse.Namespace) -> int:
         print(f"replay_validation_{name}={path}")
     print(f"pit_violations={summary['pit_violation_count']}")
     print(f"determinism_failures={summary['determinism_failure_count']}")
+    print(f"resource_status={result.resource_status}")
+    print(f"resource_warnings={','.join(result.resource_warnings)}")
+    if (
+        result.status == "READY"
+        and result.resource_status == "PASS_WITH_WARNING"
+        and summary["failed_count"] == 0
+        and summary["pit_violation_count"] == 0
+        and summary["determinism_failure_count"] == 0
+    ):
+        print("replay_validation_decision=FULL_SMOKE_PASS_WITH_RESOURCE_WARNING")
     if result.synthetic_fixtures.get("status") != "PASS":
         print("synthetic_fixture_status=FAIL", file=sys.stderr)
     return (

@@ -1,8 +1,11 @@
 # PIT replay resource-gate-v2 and cutoff audit
 
 Issue #32 / PR #41, branch `research/32-pit-replay-validation-sample`.
-This document records the small resource/cutoff repair only.  It does not
-change feature formulas, scores, PIT selection, ranking, or RAW data.
+This document records the historical resource/cutoff repair only.  It does not
+change feature formulas, scores, PIT selection, ranking, or RAW data.  The v2
+swap hard gates are superseded by the calibrated
+[resource-gate-v3 contract](pit-replay-resource-gate-v3.md); this file remains
+for audit history.
 
 **Status update:** the subsequent full `f58e866` run was a genuine
 `resource-gate-v2 baseline #1 resource-failed run` under independent swap
