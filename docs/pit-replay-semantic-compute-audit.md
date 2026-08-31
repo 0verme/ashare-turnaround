@@ -10,7 +10,8 @@ contract is documented in
 [pit-replay-resource-gate-v2.md](pit-replay-resource-gate-v2.md); the later
 resource-failed full baseline and bounded finalization repair are in
 [pit-replay-finalization-working-set.md](pit-replay-finalization-working-set.md).
-The current decision is `READY_FOR_FULL_SMOKE_AGAIN`.
+The resource-gate-v3 full baseline #1 and identical determinism #2 subsequently
+passed; the current execution disposition is `FULL_SMOKE_PASS`.
 
 ## Structural changes
 
@@ -134,6 +135,7 @@ saving and was not introduced. RAW files were neither downloaded nor modified.
 
 ## Decision
 
-**READY_FOR_FULL_SMOKE.** Semantic equivalence, PIT, determinism, artifact size,
-memory, swap-pressure, and projected-wall gates pass. Candidate caps remain
-strictly diagnostic-only. No full 2025-06 replay was run in this round.
+**FULL_SMOKE_PASS.** The semantic equivalence, PIT, determinism, artifact size,
+memory, and swap-pressure gates pass. The resource-gate-v3 full baseline #1
+and identical determinism #2 each processed all 5,102 candidates with machine
+status `READY`; candidate caps remain strictly diagnostic-only.

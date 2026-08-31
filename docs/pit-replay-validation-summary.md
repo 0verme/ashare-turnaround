@@ -42,8 +42,11 @@ JSON files. Running the documented command is therefore required before
 interpreting local snapshot counts. Missing or incomplete inputs remain
 `INCOMPLETE`/`UNAVAILABLE`; they are never represented as `READY`.
 
-Current execution disposition: `READY_FOR_FULL_SMOKE` after resource-gate-v3
-calibration and the bounded semantic regression; no new full run is claimed.
+Current execution disposition: `FULL_SMOKE_PASS` after resource-gate-v3
+calibration, the authorized cap=100 regression, and the final full determinism
+pair. Both machine-readable full results report `status=READY`,
+`gate_status=READY`, and resource status `PASS` with no warnings.
+
 The v3 bounded run is recorded under the ignored local output
 `data/reports/issue32-resource-v3-cap100/`: 100/5,102 candidates, 231.101 s
 wall, PIT violations 0, failed snapshots 0, exact candidate-vector/score/
@@ -51,23 +54,45 @@ universe/formal/diagnostic/warning/provenance digests, and artifact logical
 component equivalence `PASS`. Resource status was `PASS` (no soft warnings),
 with minimum MemAvailable 10,727,854,080 B, minimum SwapFree 1,001,267,200 B,
 peak live PSS 1,436,367,872 B, peak live private 1,435,246,592 B, process
-swap 0, and no active pressure window. The latest preserved real full-corpus result
-is labelled **resource-gate-v2 baseline #1 resource-failed run** at `f58e866`:
-`2025-06`, `today=20260830`, `top_n=3`, `determinism_sample=0`,
-`content_hash=False`, 5,102/5,102 candidates, snapshot `READY`, PIT and
-semantic regression PASS, 6,228.981 s runtime, and a 2,801,660,875 B artifact.
-The independent monitor recorded 511,152,128 B process swap, a 377,372,672 B
-`SwapFree` minimum, and 421,625,856 B system swap growth, crossing the
-unchanged 256 MiB / 512 MiB / 256 MiB gates. It is not a `FULL_SMOKE_PASS`.
+swap 0, and no active pressure window.
+
+The latest preserved real full-corpus v2 result remains labelled
+**resource-gate-v2 baseline #1 resource-failed run** at `f58e866` and is not a
+member of the final pair. The authorized v3 full baseline #1 and identical
+determinism #2 used `2025-06`, selected session `20250616`,
+`today=20260830`, `top_n=3`, `seed=0`, `workers=2`, `max_in_flight=2`,
+`candidate_limit=None`, `determinism_sample=0`, and `content_hash=False`.
+Each processed all 5,102 candidates: `READY`, failed snapshots 0, PIT
+violations 0, warnings 0, and diagnostic ranking-ineligible rows 76. Runtime
+was 6,059.104 s and 6,089.986 s respectively. Both normalized gzip-1
+artifacts are 2,781,058,369 B, pass `gzip -t`, and have SHA-256
+`142082b0649180e09e0dea946feb868f6e831d314c39324c2e69a37a154adce8`.
+
+Resource-gate-v3 recorded baseline/repeat minimum MemAvailable of
+10,414,280,704 B / 9,890,746,368 B and minimum SwapFree of
+680,230,912 B / 849,289,216 B. Peak live PSS was 2,133,456,896 B /
+2,189,577,216 B, peak live private was 2,130,722,816 B / 2,186,797,056 B,
+and current process swap was 0 B in both runs. The vmstat window observed
+43,241 in / 22,244 out pages in baseline #1 and 12,583 in / 0 out pages in
+repeat #2; active pressure was `false` in both. Thus historical swap activity
+was sampled without being misclassified as present Swap Thrashing.
+
+The two full runs have identical run/snapshot IDs, all 5,102 per-candidate
+vector digests, and the score, universe, formal-ranking, diagnostic-ranking,
+warning, and provenance digests. The formal Top-3 is `688233.SH` (91.7192465382),
+`002355.SZ` (91.3143860739), and `688615.SH` (90.4367116778). The read-only
+RAW postflight is also `PASS`: 911 files, 1,821,251,649 B, metadata digest
+`df03e77557b1bddd14de9d50177794c4b945af213efbe9dc6223d0670ddc825e`, byte
+identical to the previous postflight. Detailed local evidence is under
+`data/reports/issue32-resource-v3-full-baseline1/` and
+`data/reports/issue32-resource-v3-full-determinism2/`.
 
 The repaired implementation releases replay frames before finalization,
 streams semantic score hashing and physical scores, finalizes/reuses the CAS
 once, and enforces resource callbacks inside long merge/write operations.
 Resource-gate-v3 adds `/proc/vmstat` swap-I/O deltas and records soft swap
-warnings without changing logical replay values. The authorized cap=100
-regression passed PIT and exact vector/score/universe/ranking/provenance digest
-comparison. No new full 5,102, yearly, monthly, or Evaluation run is claimed.
-See [pit-replay-resource-gate-v3.md](pit-replay-resource-gate-v3.md) and
+warnings without changing logical replay values. See
+[pit-replay-resource-gate-v3.md](pit-replay-resource-gate-v3.md) and
 [pit-replay-finalization-working-set.md](pit-replay-finalization-working-set.md).
 
 For historical context, the earlier normalization diagnostic was intentionally

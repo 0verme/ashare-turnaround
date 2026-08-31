@@ -65,10 +65,10 @@ and Ablation. The planned post-calibration sequence is `#32 → calibrated
 Evaluation (#17) → Ablation / Stability (#18) → Score v2 decision`. The
 post-#41 normalized artifact audit is in
 [docs/pit-replay-artifact-normalization.md](docs/pit-replay-artifact-normalization.md);
-the resource/cutoff contract is in
+the resource/cutoff contract and final v3 full validation pair are in
 [docs/pit-replay-resource-gate-v3.md](docs/pit-replay-resource-gate-v3.md) (the
-v2 run is preserved as historical evidence), and
-the preserved resource-failed baseline plus bounded finalization repair are in
+v2 run is preserved as historical evidence). The execution-only finalization
+repair and its detailed evidence are in
 [docs/pit-replay-finalization-working-set.md](docs/pit-replay-finalization-working-set.md).
 
 ## Architecture

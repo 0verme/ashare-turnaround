@@ -217,10 +217,15 @@ eligibility, or PIT semantics.
 
 The bounded attribution and performance measurements are recorded in
 [pit-replay-artifact-normalization.md](pit-replay-artifact-normalization.md).
-The latest preserved full result remains the **resource-gate-v2 baseline #1
-resource-failed run** at `f58e866`; it is historical evidence only and is not a
-determinism baseline. The finalization repair is execution-only. The v3
-calibration and bounded synthetic contract are documented in
-[pit-replay-resource-gate-v3.md](pit-replay-resource-gate-v3.md); the prior
+The final v3 full validation pair is preserved in the ignored local outputs
+`data/reports/issue32-resource-v3-full-baseline1/` and
+`data/reports/issue32-resource-v3-full-determinism2/`. Both report machine
+status `READY`, resource status `PASS`, 5,102/5,102 candidates, zero failed
+snapshots, zero PIT violations, and equal semantic/artifact digests. The
+2,781,058,369 B gzip-1 artifact passes `gzip -t` and is byte-identical across
+the pair. The earlier **resource-gate-v2 baseline #1 resource-failed run** at
+`f58e866` remains historical evidence only and is not a member of this pair.
+The v3 calibration and bounded synthetic contract are documented in
+[pit-replay-resource-gate-v3.md](pit-replay-resource-gate-v3.md); the
 finalization measurements remain in
 [pit-replay-finalization-working-set.md](pit-replay-finalization-working-set.md).

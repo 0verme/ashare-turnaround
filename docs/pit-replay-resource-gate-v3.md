@@ -137,5 +137,35 @@ output `data/reports/issue32-resource-v3-cap100/`:
   1,436,367,872 B, peak live private 1,435,246,592 B, process swap 0, and no
   active pressure window.
 
-This is still only a bounded regression. No new full 5,102-candidate run is
-claimed.
+The bounded run was followed by exactly one frozen 5,102-candidate full
+baseline and, only after it completed with a valid artifact, one identical
+full determinism baseline. Both used `2025-06`, selected session `20250616`,
+`today=20260830`, `top_n=3`, `seed=0`, `workers=2`, `max_in_flight=2`,
+`candidate_limit=None`, `determinism_sample=0`, and `content_hash=False`.
+
+Full baseline #1 (`data/reports/issue32-resource-v3-full-baseline1/`) and
+repeat #2 (`data/reports/issue32-resource-v3-full-determinism2/`) each report
+`status=READY`, `gate_status=READY`, 5,102/5,102 candidates, failed snapshots
+0, PIT violations 0, warnings 0, and 76 diagnostic ranking-ineligible rows.
+Wall time was 6,059.104 s and 6,089.986 s. Resource status was `PASS` with no
+warnings in both runs. Baseline/repeat minimum MemAvailable was
+10,414,280,704 B / 9,890,746,368 B; minimum SwapFree was
+680,230,912 B / 849,289,216 B; peak live PSS was 2,133,456,896 B /
+2,189,577,216 B; peak live private was 2,130,722,816 B / 2,186,797,056 B;
+and process swap was 0 B in both. The vmstat windows observed 43,241 in /
+22,244 out pages and 12,583 in / 0 out pages respectively, with active
+pressure `False` in both. The swap counters therefore remained diagnostics,
+not a false Swap Thrashing failure.
+
+Both gzip-1 artifacts are 2,781,058,369 B, pass `gzip -t`, and have the same
+SHA-256 `142082b0649180e09e0dea946feb868f6e831d314c39324c2e69a37a154adce8`.
+The repeat comparison is `PASS`: all 5,102 candidate-vector digests and the
+score, universe, formal-ranking, diagnostic-ranking, warning, and
+provenance-store digests are byte-for-byte equal. The formal Top-3 is
+`688233.SH`, `002355.SZ`, `688615.SH` with scores 91.7192465382, 91.3143860739,
+and 90.4367116778. RAW postflight is `PASS` (911 files, 1,821,251,649 B,
+metadata digest `df03e77557b1bddd14de9d50177794c4b945af213efbe9dc6223d0670ddc825e`,
+unchanged from the previous postflight).
+
+The final disposition is **`FULL_SMOKE_PASS`**. The machine status remains
+`READY`; no merge was performed.

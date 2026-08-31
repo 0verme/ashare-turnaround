@@ -209,33 +209,58 @@ Only the authorized diagnostic was run: `2025-06`, `as_of=20250616`,
 
 This is diagnostic evidence only, not `FULL_SMOKE_PASS`.
 
-## L. Tests
+## L. v3 full validation pair
+
+After the resource-gate-v3 calibration, the authorized sequence completed with
+exactly one full baseline followed by one identical determinism baseline. Both
+used `2025-06`, selected session `20250616`, `today=20260830`, `top_n=3`,
+`seed=0`, `workers=2`, `max_in_flight=2`, `candidate_limit=None`,
+`determinism_sample=0`, and `content_hash=False`.
+
+- Baseline #1: 5,102/5,102 candidates, `READY`, 0 failed snapshots, 0 PIT
+  violations, 0 warnings, 6,059.104 s wall, and resource status `PASS`.
+- Determinism #2: 5,102/5,102 candidates, `READY`, 0 failed snapshots, 0 PIT
+  violations, 0 warnings, 6,089.986 s wall, and resource status `PASS`.
+- Both artifacts are 2,781,058,369 B gzip-1 streams, pass `gzip -t`, and share
+  SHA-256 `142082b0649180e09e0dea946feb868f6e831d314c39324c2e69a37a154adce8`.
+- All 5,102 candidate-vector digests and score, universe, formal-ranking,
+  diagnostic-ranking, warning, and provenance-store digests match exactly
+  between the pair and the established logical reference. The formal Top-3 is
+  `688233.SH`, `002355.SZ`, `688615.SH`.
+- v3 observed no active sustained bidirectional swap pressure. Baseline/repeat
+  minimum MemAvailable was 10,414,280,704 B / 9,890,746,368 B, peak live PSS
+  was 2,133,456,896 B / 2,189,577,216 B, and process swap was 0 B in both.
+- RAW postflight passed unchanged: 911 files, 1,821,251,649 B, metadata digest
+  `df03e77557b1bddd14de9d50177794c4b945af213efbe9dc6223d0670ddc825e`.
+
+The preserved v2 resource-failed run is historical evidence only and is not a
+member of this final pair.
+
+## M. Tests
 
 Final static gates:
 
-- `pytest -q`: 289 passed, 1 skipped;
+- `pytest -q`: 294 passed, 1 skipped;
 - `ruff check .`: PASS;
 - `python3 -m compileall -q src tests`: PASS;
 - `git diff --check`: PASS.
 
-## M. RAW integrity
+## N. RAW integrity
 
 No download, rewrite, or compaction occurred. Before/after metadata files are
 byte-identical: 911 files, 1,821,251,649 B, digest
 `df03e77557b1bddd14de9d50177794c4b945af213efbe9dc6223d0670ddc825e`.
 
-## N. Git / PR
+## O. Git / PR
 
-The repair uses commit subject
-`fix(research): bound replay finalization working set` on the existing branch
-and PR #41. The PR remains unmerged. No full 5,102 run was started in this
-repair round.
+The calibration is committed as
+`30068f9` (`fix(research): calibrate replay resource pressure gate`) on
+`research/32-pit-replay-validation-sample` and pushed to `origin`. PR #41
+remains unmerged; no merge was performed.
 
-## O. Decision
+## P. Decision
 
-**READY_FOR_FULL_SMOKE_AGAIN**, not `FULL_SMOKE_PASS`.
-
-The next full run, if separately authorized, is a new
-**resource-gate-v2 finalization-fixed 5102 baseline #1** because this repair
-changes HEAD. The preserved `f58e866` resource-failed run cannot be a member of
-the new deterministic pair.
+**FULL_SMOKE_PASS.** The v3 baseline #1 and identical determinism #2 both
+returned machine status `READY`, passed the PIT/Feature/Score/Ranking/Top-N and
+artifact gates, and had no resource warnings or active Swap Thrashing. The
+preserved `f58e866` v2 resource-failed run remains excluded from the pair.
