@@ -1,0 +1,8811 @@
+# RAW integrity audit
+
+- Generated at (UTC): `2026-09-03T08:17:15.739845+00:00`
+- Status: `PASS`
+- Files: `4,045`
+- Rows: `139,322,050`
+- Size: `3,917,634,870` bytes
+
+| Check | Count | Status |
+| --- | ---: | --- |
+| zero-byte files | 0 | PASS |
+| temporary files | 0 | PASS |
+| unreadable parquet | 0 | PASS |
+| schema drift datasets | 4 | WARN/FAIL |
+| duplicate identity rows | 558 | WARN/FAIL |
+| duplicate checkpoint paths | 0 | PASS |
+| checkpoint/path mismatch | 0 | PASS |
+| checkpoint/row-count mismatch | 0 | PASS |
+| suspicious small partitions | 1081 | WARN/FAIL |
+
+## Details
+
+### schema drift datasets
+
+```json
+{
+  "balancesheet": [
+    "66266a4c0cfb1169763a744c16b273ab95c91abe4c9924548f1cfc668cde7966",
+    "e809194effe67851da699ec37eda3d791821478f4032cc3f68009bf654d60e60"
+  ],
+  "cashflow": [
+    "37d92b10e8add26f98301ba94282e6d92bdbbf7ebecf7d0dfcd13e9f3da96398",
+    "ca77adbae7c295a0f54c654079bed8a5d50183e4acc190c097834cb68e236de7"
+  ],
+  "fina_indicator": [
+    "02b1dc94119c180a32d2b7a3131e04850cafc203577d8257d8725831776e87ce",
+    "67448b318c9b95735b8a35ec2c8154d178f15e5c75dfba776bc78def22b00543"
+  ],
+  "income": [
+    "2261ac8a8b76843ad9bbb3c5518013b301f03e110eeb2e082aee4900dd9b59a6",
+    "ebf1b130e9214eabc725b66ff8bc416f0ca655494bd6ca547f12895933d8db35"
+  ]
+}
+```
+
+### duplicate identity rows
+
+```json
+[
+  {
+    "path": "data/raw/block_trade_archive/year=2012/month=201201/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 32
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2012/month=201202/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 90
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2012/month=201203/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 74
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2012/month=201204/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 50
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2012/month=201205/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 119
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2012/month=201206/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 170
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2012/month=201207/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 174
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2012/month=201208/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 128
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2012/month=201209/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 125
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2012/month=201210/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 73
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2012/month=201211/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 151
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2012/month=201212/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 218
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2013/month=201301/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 143
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2013/month=201302/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 167
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2013/month=201303/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 174
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2013/month=201304/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 163
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2013/month=201305/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 235
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2013/month=201306/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 197
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2013/month=201307/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 206
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2013/month=201308/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 137
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2013/month=201309/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 120
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2013/month=201310/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 133
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2013/month=201311/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 250
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2013/month=201312/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 224
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2014/month=201401/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 221
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2014/month=201402/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 122
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2014/month=201403/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 216
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2014/month=201404/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 136
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2014/month=201405/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 129
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2014/month=201406/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 203
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2014/month=201407/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 218
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2014/month=201408/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 187
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2014/month=201409/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 210
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2014/month=201410/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 124
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2014/month=201411/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 155
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2014/month=201412/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 199
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2015/month=201501/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 135
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2015/month=201502/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 131
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2015/month=201503/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 214
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2015/month=201504/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 199
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2015/month=201505/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 359
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2015/month=201506/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 209
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2015/month=201507/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 75
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2015/month=201508/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 110
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2015/month=201509/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 64
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2015/month=201510/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 77
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2015/month=201511/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 134
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2015/month=201512/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 142
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2016/month=201601/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 147
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2016/month=201602/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 73
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2016/month=201603/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 284
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2016/month=201604/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 225
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2016/month=201605/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 343
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2016/month=201606/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 571
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2016/month=201607/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 464
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2016/month=201608/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 332
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2016/month=201609/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 436
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2016/month=201610/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 395
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2016/month=201611/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 451
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2016/month=201612/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 476
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2017/month=201701/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 405
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2017/month=201702/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 317
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2017/month=201703/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 466
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2017/month=201704/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 317
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2017/month=201705/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 429
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2017/month=201706/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 382
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2017/month=201707/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 333
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2017/month=201708/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 370
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2017/month=201709/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 434
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2017/month=201710/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 296
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2017/month=201711/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 548
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2017/month=201712/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 560
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2018/month=201801/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 806
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2018/month=201802/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 413
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2018/month=201803/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 807
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2018/month=201804/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 580
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2018/month=201805/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 748
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2018/month=201806/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 634
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2018/month=201807/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 810
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2018/month=201808/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 663
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2018/month=201809/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 684
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2018/month=201810/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 450
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2018/month=201811/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 657
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2018/month=201812/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 758
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2019/month=201901/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 894
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2019/month=201902/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 582
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2019/month=201903/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 986
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2019/month=201904/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 1147
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2019/month=201905/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 1124
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2019/month=201906/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 924
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2019/month=201907/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 1307
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2019/month=201908/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 1144
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2019/month=201909/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 1326
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2019/month=201910/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 963
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2019/month=201911/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 1190
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2019/month=201912/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 1371
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2020/month=202001/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 931
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2020/month=202002/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 899
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2020/month=202003/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 1391
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2020/month=202004/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 1240
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2020/month=202005/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 1283
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2020/month=202006/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 1713
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2020/month=202007/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 1996
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2020/month=202008/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 1754
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2020/month=202009/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 1635
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2020/month=202010/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 1223
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2020/month=202011/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 1982
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2020/month=202012/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 2383
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2021/month=202101/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 1990
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2021/month=202102/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 1227
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2021/month=202103/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 2206
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2021/month=202104/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 1992
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2021/month=202105/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 1685
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2021/month=202106/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 2095
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2021/month=202107/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 2011
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2021/month=202108/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 2370
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2021/month=202109/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 2005
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2021/month=202110/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 1792
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2021/month=202111/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 3108
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2021/month=202112/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 3567
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2022/month=202201/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 2244
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2022/month=202202/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 1851
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2022/month=202203/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 3080
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2022/month=202204/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 2262
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2022/month=202205/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 1651
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2022/month=202206/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 909
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2022/month=202207/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 747
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2022/month=202208/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 674
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2022/month=202209/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 673
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2022/month=202210/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 438
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2022/month=202211/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 811
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2022/month=202212/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 877
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2023/month=202301/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 812
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2023/month=202302/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 744
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2023/month=202303/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 782
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2023/month=202304/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 393
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2023/month=202305/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 728
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2023/month=202306/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 794
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2023/month=202307/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 899
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2023/month=202308/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 651
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2023/month=202309/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 635
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2023/month=202310/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 355
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2023/month=202311/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 689
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2023/month=202312/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 814
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2024/month=202401/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 619
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2024/month=202402/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 582
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2024/month=202403/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 613
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2024/month=202404/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 454
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2024/month=202405/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 509
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2024/month=202406/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 424
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2024/month=202407/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 275
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2024/month=202408/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 244
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2024/month=202409/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 321
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2024/month=202410/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 417
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2024/month=202411/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 440
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2024/month=202412/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 529
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2025/month=202501/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 349
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2025/month=202502/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 487
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2025/month=202503/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 645
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2025/month=202504/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 426
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2025/month=202505/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 705
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2025/month=202506/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 820
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2025/month=202507/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 1035
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2025/month=202508/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 1117
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2025/month=202509/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 1119
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2025/month=202510/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 845
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2025/month=202511/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 1167
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2025/month=202512/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 1425
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2026/month=202601/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 1488
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2026/month=202602/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 1247
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2026/month=202603/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 961
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2026/month=202604/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 1090
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2026/month=202605/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 1061
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2026/month=202606/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 1089
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2026/month=202607/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 671
+  },
+  {
+    "path": "data/raw/block_trade_archive/year=2026/month=202608/data.parquet",
+    "dataset": "block_trade",
+    "storage_dataset": "block_trade_archive",
+    "duplicate_identity_rows": 858
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2016/month=201612/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 56
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2017/month=201701/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 68
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2017/month=201702/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 92
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2017/month=201703/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 106
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2017/month=201704/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 126
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2017/month=201705/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 86
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2017/month=201706/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 180
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2017/month=201707/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 184
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2017/month=201708/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 158
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2017/month=201709/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 142
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2017/month=201710/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 140
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2017/month=201711/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 218
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2017/month=201712/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 186
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2018/month=201801/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 174
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2018/month=201802/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 112
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2018/month=201803/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 174
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2018/month=201804/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 106
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2018/month=201805/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 152
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2018/month=201806/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 150
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2018/month=201807/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 172
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2018/month=201808/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 170
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2018/month=201809/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 102
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2018/month=201810/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 120
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2018/month=201811/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 146
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2018/month=201812/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 120
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2019/month=201901/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 170
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2019/month=201902/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 118
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2019/month=201903/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 152
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2019/month=201904/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 142
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2019/month=201905/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 172
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2019/month=201906/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 176
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2019/month=201907/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 204
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2019/month=201908/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 200
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2019/month=201909/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 134
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2019/month=201910/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 142
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2019/month=201911/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 192
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2019/month=201912/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 206
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2020/month=202001/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 140
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2020/month=202002/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 232
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2020/month=202003/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 234
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2020/month=202004/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 126
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2020/month=202005/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 194
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2020/month=202006/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 176
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2020/month=202007/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 216
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2020/month=202008/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 222
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2020/month=202009/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 200
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2020/month=202010/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 150
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2020/month=202011/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 242
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2020/month=202012/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 240
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2021/month=202101/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 290
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2021/month=202102/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 182
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2021/month=202103/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 304
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2021/month=202104/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 240
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2021/month=202105/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 208
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2021/month=202106/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 258
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2021/month=202107/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 246
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2021/month=202108/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 282
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2021/month=202109/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 172
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2021/month=202110/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 146
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2021/month=202111/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 246
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2021/month=202112/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 202
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2022/month=202201/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 204
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2022/month=202202/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 194
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2022/month=202203/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 330
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2022/month=202204/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 158
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2022/month=202205/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 242
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2022/month=202206/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 246
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2022/month=202207/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 224
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2022/month=202208/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 282
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2022/month=202209/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 218
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2022/month=202210/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 200
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2022/month=202211/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 262
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2022/month=202212/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 244
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2023/month=202301/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 172
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2023/month=202302/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 212
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2023/month=202303/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 294
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2023/month=202304/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 246
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2023/month=202305/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 254
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2023/month=202306/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 238
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2023/month=202307/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 264
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2023/month=202308/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 288
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2023/month=202309/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 250
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2023/month=202310/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 240
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2023/month=202311/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 322
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2023/month=202312/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 286
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2024/month=202401/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 298
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2024/month=202402/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 214
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2024/month=202403/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 280
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2024/month=202404/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 254
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2024/month=202405/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 266
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2024/month=202406/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 282
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2024/month=202407/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 316
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2024/month=202408/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 324
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2024/month=202409/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 250
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2024/month=202410/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 262
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2024/month=202411/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 316
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2024/month=202412/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 314
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2025/month=202501/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 290
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2025/month=202502/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 292
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2025/month=202503/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 336
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2025/month=202504/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 304
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2025/month=202505/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 284
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2025/month=202506/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 288
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2025/month=202507/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 338
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2025/month=202508/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 246
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2025/month=202509/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 340
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2025/month=202510/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 262
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2025/month=202511/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 330
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2025/month=202512/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 306
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2026/month=202601/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 300
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2026/month=202602/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 214
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2026/month=202603/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 364
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2026/month=202604/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 304
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2026/month=202605/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 268
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2026/month=202606/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 356
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2026/month=202607/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 372
+  },
+  {
+    "path": "data/raw/ggt_top10/year=2026/month=202608/data.parquet",
+    "dataset": "ggt_top10",
+    "storage_dataset": "ggt_top10",
+    "duplicate_identity_rows": 346
+  },
+  {
+    "path": "data/raw/namechange/year=2012/data.parquet",
+    "dataset": "namechange",
+    "storage_dataset": "namechange",
+    "duplicate_identity_rows": 344
+  },
+  {
+    "path": "data/raw/namechange/year=2013/data.parquet",
+    "dataset": "namechange",
+    "storage_dataset": "namechange",
+    "duplicate_identity_rows": 359
+  },
+  {
+    "path": "data/raw/namechange/year=2014/data.parquet",
+    "dataset": "namechange",
+    "storage_dataset": "namechange",
+    "duplicate_identity_rows": 382
+  },
+  {
+    "path": "data/raw/namechange/year=2015/data.parquet",
+    "dataset": "namechange",
+    "storage_dataset": "namechange",
+    "duplicate_identity_rows": 473
+  },
+  {
+    "path": "data/raw/namechange/year=2016/data.parquet",
+    "dataset": "namechange",
+    "storage_dataset": "namechange",
+    "duplicate_identity_rows": 536
+  },
+  {
+    "path": "data/raw/namechange/year=2017/data.parquet",
+    "dataset": "namechange",
+    "storage_dataset": "namechange",
+    "duplicate_identity_rows": 482
+  },
+  {
+    "path": "data/raw/namechange/year=2018/data.parquet",
+    "dataset": "namechange",
+    "storage_dataset": "namechange",
+    "duplicate_identity_rows": 492
+  },
+  {
+    "path": "data/raw/namechange/year=2019/data.parquet",
+    "dataset": "namechange",
+    "storage_dataset": "namechange",
+    "duplicate_identity_rows": 565
+  },
+  {
+    "path": "data/raw/namechange/year=2020/data.parquet",
+    "dataset": "namechange",
+    "storage_dataset": "namechange",
+    "duplicate_identity_rows": 770
+  },
+  {
+    "path": "data/raw/namechange/year=2021/data.parquet",
+    "dataset": "namechange",
+    "storage_dataset": "namechange",
+    "duplicate_identity_rows": 875
+  },
+  {
+    "path": "data/raw/namechange/year=2022/data.parquet",
+    "dataset": "namechange",
+    "storage_dataset": "namechange",
+    "duplicate_identity_rows": 729
+  },
+  {
+    "path": "data/raw/namechange/year=2023/data.parquet",
+    "dataset": "namechange",
+    "storage_dataset": "namechange",
+    "duplicate_identity_rows": 581
+  },
+  {
+    "path": "data/raw/namechange/year=2024/data.parquet",
+    "dataset": "namechange",
+    "storage_dataset": "namechange",
+    "duplicate_identity_rows": 515
+  },
+  {
+    "path": "data/raw/namechange/year=2025/data.parquet",
+    "dataset": "namechange",
+    "storage_dataset": "namechange",
+    "duplicate_identity_rows": 244
+  },
+  {
+    "path": "data/raw/namechange/year=2026/data.parquet",
+    "dataset": "namechange",
+    "storage_dataset": "namechange",
+    "duplicate_identity_rows": 41
+  },
+  {
+    "path": "data/raw/pledge_detail/year=2012/data.parquet",
+    "dataset": "pledge_detail",
+    "storage_dataset": "pledge_detail",
+    "duplicate_identity_rows": 1352
+  },
+  {
+    "path": "data/raw/pledge_detail/year=2013/data.parquet",
+    "dataset": "pledge_detail",
+    "storage_dataset": "pledge_detail",
+    "duplicate_identity_rows": 2584
+  },
+  {
+    "path": "data/raw/pledge_detail/year=2014/data.parquet",
+    "dataset": "pledge_detail",
+    "storage_dataset": "pledge_detail",
+    "duplicate_identity_rows": 3839
+  },
+  {
+    "path": "data/raw/pledge_detail/year=2015/data.parquet",
+    "dataset": "pledge_detail",
+    "storage_dataset": "pledge_detail",
+    "duplicate_identity_rows": 6090
+  },
+  {
+    "path": "data/raw/pledge_detail/year=2016/data.parquet",
+    "dataset": "pledge_detail",
+    "storage_dataset": "pledge_detail",
+    "duplicate_identity_rows": 14290
+  },
+  {
+    "path": "data/raw/pledge_detail/year=2017/data.parquet",
+    "dataset": "pledge_detail",
+    "storage_dataset": "pledge_detail",
+    "duplicate_identity_rows": 20250
+  },
+  {
+    "path": "data/raw/pledge_detail/year=2018/data.parquet",
+    "dataset": "pledge_detail",
+    "storage_dataset": "pledge_detail",
+    "duplicate_identity_rows": 39001
+  },
+  {
+    "path": "data/raw/pledge_detail/year=2019/data.parquet",
+    "dataset": "pledge_detail",
+    "storage_dataset": "pledge_detail",
+    "duplicate_identity_rows": 40193
+  },
+  {
+    "path": "data/raw/pledge_detail/year=2020/data.parquet",
+    "dataset": "pledge_detail",
+    "storage_dataset": "pledge_detail",
+    "duplicate_identity_rows": 28135
+  },
+  {
+    "path": "data/raw/pledge_detail/year=2021/data.parquet",
+    "dataset": "pledge_detail",
+    "storage_dataset": "pledge_detail",
+    "duplicate_identity_rows": 21239
+  },
+  {
+    "path": "data/raw/pledge_detail/year=2022/data.parquet",
+    "dataset": "pledge_detail",
+    "storage_dataset": "pledge_detail",
+    "duplicate_identity_rows": 21348
+  },
+  {
+    "path": "data/raw/pledge_detail/year=2023/data.parquet",
+    "dataset": "pledge_detail",
+    "storage_dataset": "pledge_detail",
+    "duplicate_identity_rows": 17861
+  },
+  {
+    "path": "data/raw/pledge_detail/year=2024/data.parquet",
+    "dataset": "pledge_detail",
+    "storage_dataset": "pledge_detail",
+    "duplicate_identity_rows": 14113
+  },
+  {
+    "path": "data/raw/pledge_detail/year=2025/data.parquet",
+    "dataset": "pledge_detail",
+    "storage_dataset": "pledge_detail",
+    "duplicate_identity_rows": 10414
+  },
+  {
+    "path": "data/raw/pledge_detail/year=2026/data.parquet",
+    "dataset": "pledge_detail",
+    "storage_dataset": "pledge_detail",
+    "duplicate_identity_rows": 5545
+  },
+  {
+    "path": "data/raw/report_rc/year=2012/data.parquet",
+    "dataset": "report_rc",
+    "storage_dataset": "report_rc",
+    "duplicate_identity_rows": 101984
+  },
+  {
+    "path": "data/raw/report_rc/year=2013/data.parquet",
+    "dataset": "report_rc",
+    "storage_dataset": "report_rc",
+    "duplicate_identity_rows": 106025
+  },
+  {
+    "path": "data/raw/report_rc/year=2014/data.parquet",
+    "dataset": "report_rc",
+    "storage_dataset": "report_rc",
+    "duplicate_identity_rows": 68098
+  },
+  {
+    "path": "data/raw/report_rc/year=2015/data.parquet",
+    "dataset": "report_rc",
+    "storage_dataset": "report_rc",
+    "duplicate_identity_rows": 64294
+  },
+  {
+    "path": "data/raw/report_rc/year=2016/data.parquet",
+    "dataset": "report_rc",
+    "storage_dataset": "report_rc",
+    "duplicate_identity_rows": 43216
+  },
+  {
+    "path": "data/raw/report_rc/year=2017/data.parquet",
+    "dataset": "report_rc",
+    "storage_dataset": "report_rc",
+    "duplicate_identity_rows": 99775
+  },
+  {
+    "path": "data/raw/report_rc/year=2018/data.parquet",
+    "dataset": "report_rc",
+    "storage_dataset": "report_rc",
+    "duplicate_identity_rows": 194890
+  },
+  {
+    "path": "data/raw/report_rc/year=2019/data.parquet",
+    "dataset": "report_rc",
+    "storage_dataset": "report_rc",
+    "duplicate_identity_rows": 204509
+  },
+  {
+    "path": "data/raw/report_rc/year=2020/data.parquet",
+    "dataset": "report_rc",
+    "storage_dataset": "report_rc",
+    "duplicate_identity_rows": 215548
+  },
+  {
+    "path": "data/raw/report_rc/year=2021/data.parquet",
+    "dataset": "report_rc",
+    "storage_dataset": "report_rc",
+    "duplicate_identity_rows": 207127
+  },
+  {
+    "path": "data/raw/report_rc/year=2022/data.parquet",
+    "dataset": "report_rc",
+    "storage_dataset": "report_rc",
+    "duplicate_identity_rows": 258718
+  },
+  {
+    "path": "data/raw/report_rc/year=2023/data.parquet",
+    "dataset": "report_rc",
+    "storage_dataset": "report_rc",
+    "duplicate_identity_rows": 268782
+  },
+  {
+    "path": "data/raw/report_rc/year=2024/data.parquet",
+    "dataset": "report_rc",
+    "storage_dataset": "report_rc",
+    "duplicate_identity_rows": 246047
+  },
+  {
+    "path": "data/raw/report_rc/year=2025/data.parquet",
+    "dataset": "report_rc",
+    "storage_dataset": "report_rc",
+    "duplicate_identity_rows": 198684
+  },
+  {
+    "path": "data/raw/report_rc/year=2026/data.parquet",
+    "dataset": "report_rc",
+    "storage_dataset": "report_rc",
+    "duplicate_identity_rows": 107972
+  },
+  {
+    "path": "data/raw/repurchase/year=2012/data.parquet",
+    "dataset": "repurchase",
+    "storage_dataset": "repurchase",
+    "duplicate_identity_rows": 78
+  },
+  {
+    "path": "data/raw/repurchase/year=2013/data.parquet",
+    "dataset": "repurchase",
+    "storage_dataset": "repurchase",
+    "duplicate_identity_rows": 453
+  },
+  {
+    "path": "data/raw/repurchase/year=2014/data.parquet",
+    "dataset": "repurchase",
+    "storage_dataset": "repurchase",
+    "duplicate_identity_rows": 863
+  },
+  {
+    "path": "data/raw/repurchase/year=2015/data.parquet",
+    "dataset": "repurchase",
+    "storage_dataset": "repurchase",
+    "duplicate_identity_rows": 1243
+  },
+  {
+    "path": "data/raw/repurchase/year=2016/data.parquet",
+    "dataset": "repurchase",
+    "storage_dataset": "repurchase",
+    "duplicate_identity_rows": 1777
+  },
+  {
+    "path": "data/raw/repurchase/year=2017/data.parquet",
+    "dataset": "repurchase",
+    "storage_dataset": "repurchase",
+    "duplicate_identity_rows": 2813
+  },
+  {
+    "path": "data/raw/repurchase/year=2018/data.parquet",
+    "dataset": "repurchase",
+    "storage_dataset": "repurchase",
+    "duplicate_identity_rows": 7519
+  },
+  {
+    "path": "data/raw/repurchase/year=2019/data.parquet",
+    "dataset": "repurchase",
+    "storage_dataset": "repurchase",
+    "duplicate_identity_rows": 9138
+  },
+  {
+    "path": "data/raw/repurchase/year=2020/data.parquet",
+    "dataset": "repurchase",
+    "storage_dataset": "repurchase",
+    "duplicate_identity_rows": 7419
+  },
+  {
+    "path": "data/raw/repurchase/year=2021/data.parquet",
+    "dataset": "repurchase",
+    "storage_dataset": "repurchase",
+    "duplicate_identity_rows": 8748
+  },
+  {
+    "path": "data/raw/repurchase/year=2022/data.parquet",
+    "dataset": "repurchase",
+    "storage_dataset": "repurchase",
+    "duplicate_identity_rows": 10986
+  },
+  {
+    "path": "data/raw/repurchase/year=2023/data.parquet",
+    "dataset": "repurchase",
+    "storage_dataset": "repurchase",
+    "duplicate_identity_rows": 10906
+  },
+  {
+    "path": "data/raw/repurchase/year=2024/data.parquet",
+    "dataset": "repurchase",
+    "storage_dataset": "repurchase",
+    "duplicate_identity_rows": 3176
+  },
+  {
+    "path": "data/raw/repurchase/year=2025/data.parquet",
+    "dataset": "repurchase",
+    "storage_dataset": "repurchase",
+    "duplicate_identity_rows": 1305
+  },
+  {
+    "path": "data/raw/repurchase/year=2026/data.parquet",
+    "dataset": "repurchase",
+    "storage_dataset": "repurchase",
+    "duplicate_identity_rows": 435
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2012/month=201201/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 477
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2012/month=201202/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 361
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2012/month=201203/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 461
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2012/month=201204/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 475
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2012/month=201205/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 555
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2012/month=201206/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 549
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2012/month=201207/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 525
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2012/month=201208/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 549
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2012/month=201209/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 587
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2012/month=201210/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 398
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2012/month=201211/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 337
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2012/month=201212/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 624
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2013/month=201301/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 381
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2013/month=201302/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 396
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2013/month=201303/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 630
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2013/month=201304/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 478
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2013/month=201305/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 705
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2013/month=201306/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 338
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2013/month=201307/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 702
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2013/month=201308/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 410
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2013/month=201309/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 496
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2013/month=201310/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 282
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2013/month=201311/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 941
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2013/month=201312/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 591
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2014/month=201401/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 1287
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2014/month=201402/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 386
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2014/month=201403/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 535
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2014/month=201404/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 626
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2014/month=201405/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 380
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2014/month=201406/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 2051
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2014/month=201407/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 1722
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2014/month=201408/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 600
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2014/month=201409/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 3811
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2014/month=201410/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 2543
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2014/month=201411/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 1716
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2014/month=201412/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 1828
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2015/month=201501/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 2151
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2015/month=201502/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 2152
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2015/month=201503/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 2398
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2015/month=201504/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 3250
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2015/month=201505/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 6125
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2015/month=201506/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 7545
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2015/month=201507/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 991
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2015/month=201508/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 1132
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2015/month=201509/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 1393
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2015/month=201510/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 662
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2015/month=201511/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 1470
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2015/month=201512/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 10171
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2016/month=201601/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 1392
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2016/month=201602/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 7072
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2016/month=201603/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 14971
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2016/month=201604/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 11991
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2016/month=201605/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 15362
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2016/month=201606/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 20179
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2016/month=201607/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 22999
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2016/month=201608/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 40786
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2016/month=201609/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 42585
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2016/month=201610/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 30650
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2016/month=201611/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 67876
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2016/month=201612/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 73156
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2017/month=201701/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 117824
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2017/month=201702/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 44786
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2017/month=201703/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 92284
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2017/month=201704/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 66942
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2017/month=201705/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 76672
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2017/month=201706/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 56014
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2017/month=201707/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 74867
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2017/month=201708/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 67214
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2017/month=201709/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 78951
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2017/month=201710/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 94707
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2017/month=201711/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 79041
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2017/month=201712/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 78223
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2018/month=201801/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 62934
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2018/month=201802/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 90841
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2018/month=201803/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 71158
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2018/month=201804/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 46049
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2018/month=201805/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 54798
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2018/month=201806/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 75815
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2018/month=201807/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 27036
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2018/month=201808/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 51845
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2018/month=201809/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 64132
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2018/month=201810/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 53328
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2018/month=201811/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 33628
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2018/month=201812/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 26976
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2019/month=201901/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 98366
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2019/month=201902/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 38041
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2019/month=201903/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 79441
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2019/month=201904/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 91016
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2019/month=201905/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 96541
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2019/month=201906/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 86704
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2019/month=201907/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 123684
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2019/month=201908/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 89446
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2019/month=201909/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 48664
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2019/month=201910/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 153837
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2019/month=201911/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 229343
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2019/month=201912/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 33095
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2020/month=202001/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 16939
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2020/month=202002/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 19893
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2020/month=202003/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 40945
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2020/month=202004/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 93298
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2020/month=202005/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 124008
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2020/month=202006/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 217697
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2020/month=202007/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 484807
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2020/month=202008/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 626695
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2020/month=202010/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 310590
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2020/month=202011/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 397507
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2020/month=202012/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 691783
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2021/month=202101/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 493641
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2021/month=202103/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 628655
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2021/month=202108/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 698646
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2021/month=202111/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 535417
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2021/month=202112/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 748857
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2022/month=202201/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 412924
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2022/month=202202/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 253075
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2022/month=202203/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 591467
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2022/month=202204/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 467174
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2022/month=202205/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 201823
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2022/month=202206/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 312560
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2022/month=202207/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 344910
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2022/month=202208/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 685916
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2022/month=202209/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 625132
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2022/month=202210/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 331015
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2022/month=202211/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 401369
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2022/month=202212/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 289232
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2023/month=202301/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 195737
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2023/month=202302/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 466572
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2023/month=202303/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 486976
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2023/month=202304/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 206019
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2023/month=202305/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 382913
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2023/month=202306/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 400921
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2023/month=202307/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 332479
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2023/month=202308/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 427920
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2023/month=202309/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 180153
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2023/month=202310/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 142061
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2023/month=202311/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 121026
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2023/month=202312/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 242971
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2024/month=202401/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 148518
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2024/month=202402/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 62743
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2024/month=202403/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 104356
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2024/month=202404/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 39598
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2024/month=202405/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 13213
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2024/month=202406/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 76428
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2024/month=202407/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 78120
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2024/month=202408/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 86872
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2024/month=202409/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 38217
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2024/month=202410/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 55168
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2024/month=202411/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 56227
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2024/month=202412/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 96807
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2025/month=202501/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 101188
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2025/month=202502/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 35876
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2025/month=202503/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 133734
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2025/month=202504/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 110752
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2025/month=202505/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 87316
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2025/month=202506/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 67343
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2025/month=202507/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 86397
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2025/month=202508/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 29752
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2025/month=202509/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 107667
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2025/month=202510/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 136366
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2025/month=202511/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 69175
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2025/month=202512/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 170607
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2026/month=202601/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 79867
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2026/month=202602/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 59205
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2026/month=202603/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 116060
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2026/month=202604/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 103005
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2026/month=202605/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 90183
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2026/month=202606/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 19062
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2026/month=202607/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 54039
+  },
+  {
+    "path": "data/raw/share_float_archive/year=2026/month=202608/data.parquet",
+    "dataset": "share_float",
+    "storage_dataset": "share_float_archive",
+    "duplicate_identity_rows": 106352
+  },
+  {
+    "path": "data/raw/stk_holdernumber/year=2013/data.parquet",
+    "dataset": "stk_holdernumber",
+    "storage_dataset": "stk_holdernumber",
+    "duplicate_identity_rows": 4
+  },
+  {
+    "path": "data/raw/stk_holdernumber/year=2015/data.parquet",
+    "dataset": "stk_holdernumber",
+    "storage_dataset": "stk_holdernumber",
+    "duplicate_identity_rows": 2
+  },
+  {
+    "path": "data/raw/stk_holdernumber/year=2017/data.parquet",
+    "dataset": "stk_holdernumber",
+    "storage_dataset": "stk_holdernumber",
+    "duplicate_identity_rows": 2
+  },
+  {
+    "path": "data/raw/stk_holdernumber/year=2019/data.parquet",
+    "dataset": "stk_holdernumber",
+    "storage_dataset": "stk_holdernumber",
+    "duplicate_identity_rows": 2
+  },
+  {
+    "path": "data/raw/stk_holdernumber/year=2020/data.parquet",
+    "dataset": "stk_holdernumber",
+    "storage_dataset": "stk_holdernumber",
+    "duplicate_identity_rows": 2
+  },
+  {
+    "path": "data/raw/stk_holdernumber/year=2021/data.parquet",
+    "dataset": "stk_holdernumber",
+    "storage_dataset": "stk_holdernumber",
+    "duplicate_identity_rows": 4
+  },
+  {
+    "path": "data/raw/stk_holdernumber/year=2024/data.parquet",
+    "dataset": "stk_holdernumber",
+    "storage_dataset": "stk_holdernumber",
+    "duplicate_identity_rows": 8
+  },
+  {
+    "path": "data/raw/stk_holdernumber/year=2025/data.parquet",
+    "dataset": "stk_holdernumber",
+    "storage_dataset": "stk_holdernumber",
+    "duplicate_identity_rows": 8
+  },
+  {
+    "path": "data/raw/stk_holdernumber/year=2026/data.parquet",
+    "dataset": "stk_holdernumber",
+    "storage_dataset": "stk_holdernumber",
+    "duplicate_identity_rows": 2
+  },
+  {
+    "path": "data/raw/stk_holdertrade/year=2012/data.parquet",
+    "dataset": "stk_holdertrade",
+    "storage_dataset": "stk_holdertrade",
+    "duplicate_identity_rows": 1544
+  },
+  {
+    "path": "data/raw/stk_holdertrade/year=2013/data.parquet",
+    "dataset": "stk_holdertrade",
+    "storage_dataset": "stk_holdertrade",
+    "duplicate_identity_rows": 2626
+  },
+  {
+    "path": "data/raw/stk_holdertrade/year=2014/data.parquet",
+    "dataset": "stk_holdertrade",
+    "storage_dataset": "stk_holdertrade",
+    "duplicate_identity_rows": 3384
+  },
+  {
+    "path": "data/raw/stk_holdertrade/year=2015/data.parquet",
+    "dataset": "stk_holdertrade",
+    "storage_dataset": "stk_holdertrade",
+    "duplicate_identity_rows": 5221
+  },
+  {
+    "path": "data/raw/stk_holdertrade/year=2016/data.parquet",
+    "dataset": "stk_holdertrade",
+    "storage_dataset": "stk_holdertrade",
+    "duplicate_identity_rows": 4250
+  },
+  {
+    "path": "data/raw/stk_holdertrade/year=2017/data.parquet",
+    "dataset": "stk_holdertrade",
+    "storage_dataset": "stk_holdertrade",
+    "duplicate_identity_rows": 5123
+  },
+  {
+    "path": "data/raw/stk_holdertrade/year=2018/data.parquet",
+    "dataset": "stk_holdertrade",
+    "storage_dataset": "stk_holdertrade",
+    "duplicate_identity_rows": 10447
+  },
+  {
+    "path": "data/raw/stk_holdertrade/year=2019/data.parquet",
+    "dataset": "stk_holdertrade",
+    "storage_dataset": "stk_holdertrade",
+    "duplicate_identity_rows": 14483
+  },
+  {
+    "path": "data/raw/stk_holdertrade/year=2020/data.parquet",
+    "dataset": "stk_holdertrade",
+    "storage_dataset": "stk_holdertrade",
+    "duplicate_identity_rows": 13532
+  },
+  {
+    "path": "data/raw/stk_holdertrade/year=2021/data.parquet",
+    "dataset": "stk_holdertrade",
+    "storage_dataset": "stk_holdertrade",
+    "duplicate_identity_rows": 11064
+  },
+  {
+    "path": "data/raw/stk_holdertrade/year=2022/data.parquet",
+    "dataset": "stk_holdertrade",
+    "storage_dataset": "stk_holdertrade",
+    "duplicate_identity_rows": 7714
+  },
+  {
+    "path": "data/raw/stk_holdertrade/year=2023/data.parquet",
+    "dataset": "stk_holdertrade",
+    "storage_dataset": "stk_holdertrade",
+    "duplicate_identity_rows": 6090
+  },
+  {
+    "path": "data/raw/stk_holdertrade/year=2024/data.parquet",
+    "dataset": "stk_holdertrade",
+    "storage_dataset": "stk_holdertrade",
+    "duplicate_identity_rows": 3883
+  },
+  {
+    "path": "data/raw/stk_holdertrade/year=2025/data.parquet",
+    "dataset": "stk_holdertrade",
+    "storage_dataset": "stk_holdertrade",
+    "duplicate_identity_rows": 5983
+  },
+  {
+    "path": "data/raw/stk_holdertrade/year=2026/data.parquet",
+    "dataset": "stk_holdertrade",
+    "storage_dataset": "stk_holdertrade",
+    "duplicate_identity_rows": 4066
+  },
+  {
+    "path": "data/raw/top10_holders/year=2012/data.parquet",
+    "dataset": "top10_holders",
+    "storage_dataset": "top10_holders",
+    "duplicate_identity_rows": 986
+  },
+  {
+    "path": "data/raw/top10_holders/year=2013/data.parquet",
+    "dataset": "top10_holders",
+    "storage_dataset": "top10_holders",
+    "duplicate_identity_rows": 2558
+  },
+  {
+    "path": "data/raw/top10_holders/year=2014/data.parquet",
+    "dataset": "top10_holders",
+    "storage_dataset": "top10_holders",
+    "duplicate_identity_rows": 4178
+  },
+  {
+    "path": "data/raw/top10_holders/year=2015/data.parquet",
+    "dataset": "top10_holders",
+    "storage_dataset": "top10_holders",
+    "duplicate_identity_rows": 3840
+  },
+  {
+    "path": "data/raw/top10_holders/year=2016/data.parquet",
+    "dataset": "top10_holders",
+    "storage_dataset": "top10_holders",
+    "duplicate_identity_rows": 7912
+  },
+  {
+    "path": "data/raw/top10_holders/year=2017/data.parquet",
+    "dataset": "top10_holders",
+    "storage_dataset": "top10_holders",
+    "duplicate_identity_rows": 13246
+  },
+  {
+    "path": "data/raw/top10_holders/year=2018/data.parquet",
+    "dataset": "top10_holders",
+    "storage_dataset": "top10_holders",
+    "duplicate_identity_rows": 11503
+  },
+  {
+    "path": "data/raw/top10_holders/year=2019/data.parquet",
+    "dataset": "top10_holders",
+    "storage_dataset": "top10_holders",
+    "duplicate_identity_rows": 11486
+  },
+  {
+    "path": "data/raw/top10_holders/year=2020/data.parquet",
+    "dataset": "top10_holders",
+    "storage_dataset": "top10_holders",
+    "duplicate_identity_rows": 11551
+  },
+  {
+    "path": "data/raw/top10_holders/year=2021/data.parquet",
+    "dataset": "top10_holders",
+    "storage_dataset": "top10_holders",
+    "duplicate_identity_rows": 43552
+  },
+  {
+    "path": "data/raw/top10_holders/year=2022/data.parquet",
+    "dataset": "top10_holders",
+    "storage_dataset": "top10_holders",
+    "duplicate_identity_rows": 45736
+  },
+  {
+    "path": "data/raw/top10_holders/year=2023/data.parquet",
+    "dataset": "top10_holders",
+    "storage_dataset": "top10_holders",
+    "duplicate_identity_rows": 64539
+  },
+  {
+    "path": "data/raw/top10_holders/year=2026/data.parquet",
+    "dataset": "top10_holders",
+    "storage_dataset": "top10_holders",
+    "duplicate_identity_rows": 68181
+  }
+]
+```
+
+### suspicious small partitions
+
+```json
+[
+  {
+    "path": "data/raw/balancesheet/year=2009/data.parquet",
+    "rows": 3,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/balancesheet/year=2010/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/balancesheet/year=2011/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/balancesheet/year=2012/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/balancesheet/year=2013/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/balancesheet/year=2014/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/balancesheet/year=2015/data.parquet",
+    "rows": 15,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/balancesheet/year=2016/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/balancesheet/year=2017/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/balancesheet/year=2018/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/balancesheet/year=2019/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/balancesheet/year=2020/data.parquet",
+    "rows": 24,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/balancesheet/year=2021/data.parquet",
+    "rows": 28,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/balancesheet/year=2022/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/balancesheet/year=2023/data.parquet",
+    "rows": 26,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/balancesheet/year=2024/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/balancesheet/year=2025/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/balancesheet/year=2026/data.parquet",
+    "rows": 10,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/cashflow/year=2005/data.parquet",
+    "rows": 2,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/cashflow/year=2006/data.parquet",
+    "rows": 9,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/cashflow/year=2007/data.parquet",
+    "rows": 9,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/cashflow/year=2008/data.parquet",
+    "rows": 10,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/cashflow/year=2009/data.parquet",
+    "rows": 12,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/cashflow/year=2010/data.parquet",
+    "rows": 12,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/cashflow/year=2011/data.parquet",
+    "rows": 12,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/cashflow/year=2012/data.parquet",
+    "rows": 12,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/cashflow/year=2013/data.parquet",
+    "rows": 12,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/cashflow/year=2014/data.parquet",
+    "rows": 12,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/cashflow/year=2015/data.parquet",
+    "rows": 12,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/cashflow/year=2016/data.parquet",
+    "rows": 14,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/cashflow/year=2017/data.parquet",
+    "rows": 17,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/cashflow/year=2018/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/cashflow/year=2019/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/cashflow/year=2020/data.parquet",
+    "rows": 24,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/cashflow/year=2021/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/cashflow/year=2022/data.parquet",
+    "rows": 25,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/cashflow/year=2023/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/cashflow/year=2024/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/cashflow/year=2025/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/cashflow/year=2026/data.parquet",
+    "rows": 9,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2012/month=201201/data.parquet",
+    "rows": 15,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2012/month=201202/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2012/month=201203/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2012/month=201204/data.parquet",
+    "rows": 17,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2012/month=201205/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2012/month=201206/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2012/month=201207/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2012/month=201208/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2012/month=201209/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2012/month=201210/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2012/month=201211/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2012/month=201212/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2013/month=201301/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2013/month=201302/data.parquet",
+    "rows": 15,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2013/month=201303/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2013/month=201304/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2013/month=201305/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2013/month=201306/data.parquet",
+    "rows": 17,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2013/month=201307/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2013/month=201308/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2013/month=201309/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2013/month=201310/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2013/month=201311/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2013/month=201312/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2014/month=201401/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2014/month=201402/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2014/month=201403/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2014/month=201404/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2014/month=201405/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2014/month=201406/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2014/month=201407/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2014/month=201408/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2014/month=201409/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2014/month=201410/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2014/month=201411/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2014/month=201412/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2015/month=201501/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2015/month=201502/data.parquet",
+    "rows": 15,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2015/month=201503/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2015/month=201504/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2015/month=201505/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2015/month=201506/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2015/month=201507/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2015/month=201508/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2015/month=201509/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2015/month=201510/data.parquet",
+    "rows": 17,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2015/month=201511/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2015/month=201512/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2016/month=201601/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2016/month=201602/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2016/month=201603/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2016/month=201604/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2016/month=201605/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2016/month=201606/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2016/month=201607/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2016/month=201608/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2016/month=201609/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2016/month=201610/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2016/month=201611/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2016/month=201612/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2017/month=201701/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2017/month=201702/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2017/month=201703/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2017/month=201704/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2017/month=201705/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2017/month=201706/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2017/month=201707/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2017/month=201708/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2017/month=201709/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2017/month=201710/data.parquet",
+    "rows": 17,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2017/month=201711/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2017/month=201712/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2018/month=201801/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2018/month=201802/data.parquet",
+    "rows": 15,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2018/month=201803/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2018/month=201804/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2018/month=201805/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2018/month=201806/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2018/month=201807/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2018/month=201808/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2018/month=201809/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2018/month=201810/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2018/month=201811/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2018/month=201812/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2019/month=201901/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2019/month=201902/data.parquet",
+    "rows": 15,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2019/month=201903/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2019/month=201904/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2019/month=201905/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2019/month=201906/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2019/month=201907/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2019/month=201908/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2019/month=201909/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2019/month=201910/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2019/month=201911/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2019/month=201912/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2020/month=202001/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2020/month=202002/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2020/month=202003/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2020/month=202004/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2020/month=202005/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2020/month=202006/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2020/month=202007/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2020/month=202008/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2020/month=202009/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2020/month=202010/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2020/month=202011/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2020/month=202012/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2021/month=202101/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2021/month=202102/data.parquet",
+    "rows": 15,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2021/month=202103/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2021/month=202104/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2021/month=202105/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2021/month=202106/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2021/month=202107/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2021/month=202108/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2021/month=202109/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2021/month=202110/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2021/month=202111/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2021/month=202112/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2022/month=202201/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2022/month=202202/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2022/month=202203/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2022/month=202204/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2022/month=202205/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2022/month=202206/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2022/month=202207/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2022/month=202208/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2022/month=202209/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2022/month=202210/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2022/month=202211/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2022/month=202212/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2023/month=202301/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2023/month=202302/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2023/month=202303/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2023/month=202304/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2023/month=202305/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2023/month=202306/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2023/month=202307/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2023/month=202308/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2023/month=202309/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2023/month=202310/data.parquet",
+    "rows": 17,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2023/month=202311/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2023/month=202312/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2024/month=202401/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2024/month=202402/data.parquet",
+    "rows": 15,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2024/month=202403/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2024/month=202404/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2024/month=202405/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2024/month=202406/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2024/month=202407/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2024/month=202408/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2024/month=202409/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2024/month=202410/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2024/month=202411/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2024/month=202412/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2025/month=202501/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2025/month=202502/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2025/month=202503/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2025/month=202504/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2025/month=202505/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2025/month=202506/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2025/month=202507/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2025/month=202508/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2025/month=202509/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2025/month=202510/data.parquet",
+    "rows": 17,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2025/month=202511/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2025/month=202512/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2026/month=202601/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2026/month=202602/data.parquet",
+    "rows": 14,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2026/month=202603/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2026/month=202604/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2026/month=202605/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2026/month=202606/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2026/month=202607/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ci_daily/year=2026/month=202608/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/disclosure_date/year=2001/data.parquet",
+    "rows": 4,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/disclosure_date/year=2002/data.parquet",
+    "rows": 8,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/disclosure_date/year=2003/data.parquet",
+    "rows": 8,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/disclosure_date/year=2004/data.parquet",
+    "rows": 8,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/disclosure_date/year=2005/data.parquet",
+    "rows": 8,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/disclosure_date/year=2006/data.parquet",
+    "rows": 8,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/disclosure_date/year=2007/data.parquet",
+    "rows": 8,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/disclosure_date/year=2008/data.parquet",
+    "rows": 8,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/disclosure_date/year=2009/data.parquet",
+    "rows": 9,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/disclosure_date/year=2010/data.parquet",
+    "rows": 12,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/disclosure_date/year=2011/data.parquet",
+    "rows": 12,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/disclosure_date/year=2012/data.parquet",
+    "rows": 12,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/disclosure_date/year=2013/data.parquet",
+    "rows": 12,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/disclosure_date/year=2014/data.parquet",
+    "rows": 12,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/disclosure_date/year=2015/data.parquet",
+    "rows": 12,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/disclosure_date/year=2016/data.parquet",
+    "rows": 12,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/disclosure_date/year=2017/data.parquet",
+    "rows": 12,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/disclosure_date/year=2018/data.parquet",
+    "rows": 13,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/disclosure_date/year=2019/data.parquet",
+    "rows": 14,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/disclosure_date/year=2020/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/disclosure_date/year=2021/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/disclosure_date/year=2022/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/disclosure_date/year=2023/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/disclosure_date/year=2024/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/disclosure_date/year=2025/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/disclosure_date/year=2026/data.parquet",
+    "rows": 8,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/express/year=2004/data.parquet",
+    "rows": 1,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/express/year=2005/data.parquet",
+    "rows": 1,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/express/year=2006/data.parquet",
+    "rows": 2,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/express/year=2007/data.parquet",
+    "rows": 1,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/express/year=2008/data.parquet",
+    "rows": 1,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/express/year=2009/data.parquet",
+    "rows": 2,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/express/year=2010/data.parquet",
+    "rows": 2,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/express/year=2011/data.parquet",
+    "rows": 2,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/express/year=2012/data.parquet",
+    "rows": 2,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/express/year=2013/data.parquet",
+    "rows": 2,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/express/year=2014/data.parquet",
+    "rows": 2,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/express/year=2015/data.parquet",
+    "rows": 2,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/express/year=2016/data.parquet",
+    "rows": 2,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/express/year=2017/data.parquet",
+    "rows": 2,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/express/year=2018/data.parquet",
+    "rows": 3,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/express/year=2019/data.parquet",
+    "rows": 4,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/express/year=2020/data.parquet",
+    "rows": 2,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/express/year=2021/data.parquet",
+    "rows": 3,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/express/year=2022/data.parquet",
+    "rows": 4,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/express/year=2023/data.parquet",
+    "rows": 3,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/express/year=2024/data.parquet",
+    "rows": 3,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/express/year=2025/data.parquet",
+    "rows": 3,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/express/year=2026/data.parquet",
+    "rows": 1,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/fina_audit/year=1999/data.parquet",
+    "rows": 2,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/fina_audit/year=2000/data.parquet",
+    "rows": 2,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/fina_audit/year=2001/data.parquet",
+    "rows": 3,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/fina_audit/year=2002/data.parquet",
+    "rows": 4,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/fina_audit/year=2003/data.parquet",
+    "rows": 4,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/fina_audit/year=2004/data.parquet",
+    "rows": 4,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/fina_audit/year=2005/data.parquet",
+    "rows": 3,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/fina_audit/year=2006/data.parquet",
+    "rows": 5,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/fina_audit/year=2007/data.parquet",
+    "rows": 5,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/fina_audit/year=2008/data.parquet",
+    "rows": 5,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/fina_audit/year=2009/data.parquet",
+    "rows": 5,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/fina_audit/year=2010/data.parquet",
+    "rows": 5,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/fina_audit/year=2011/data.parquet",
+    "rows": 4,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/fina_audit/year=2012/data.parquet",
+    "rows": 4,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/fina_audit/year=2013/data.parquet",
+    "rows": 3,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/fina_audit/year=2014/data.parquet",
+    "rows": 3,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/fina_audit/year=2015/data.parquet",
+    "rows": 3,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/fina_audit/year=2016/data.parquet",
+    "rows": 4,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/fina_audit/year=2017/data.parquet",
+    "rows": 4,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/fina_audit/year=2018/data.parquet",
+    "rows": 4,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/fina_audit/year=2019/data.parquet",
+    "rows": 4,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/fina_audit/year=2020/data.parquet",
+    "rows": 4,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/fina_audit/year=2021/data.parquet",
+    "rows": 4,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/fina_audit/year=2022/data.parquet",
+    "rows": 4,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/fina_audit/year=2023/data.parquet",
+    "rows": 4,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/fina_audit/year=2024/data.parquet",
+    "rows": 4,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/fina_audit/year=2025/data.parquet",
+    "rows": 4,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/fina_indicator/year=2009/data.parquet",
+    "rows": 3,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/fina_indicator/year=2010/data.parquet",
+    "rows": 12,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/fina_indicator/year=2011/data.parquet",
+    "rows": 12,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/fina_indicator/year=2012/data.parquet",
+    "rows": 12,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/fina_indicator/year=2013/data.parquet",
+    "rows": 12,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/fina_indicator/year=2014/data.parquet",
+    "rows": 12,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/fina_indicator/year=2015/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/fina_indicator/year=2016/data.parquet",
+    "rows": 26,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/fina_indicator/year=2017/data.parquet",
+    "rows": 26,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/fina_indicator/year=2018/data.parquet",
+    "rows": 30,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/fina_indicator/year=2019/data.parquet",
+    "rows": 32,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/fina_indicator/year=2020/data.parquet",
+    "rows": 32,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/fina_indicator/year=2021/data.parquet",
+    "rows": 32,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/fina_indicator/year=2022/data.parquet",
+    "rows": 32,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/fina_indicator/year=2023/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/fina_indicator/year=2024/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/fina_indicator/year=2025/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/fina_indicator/year=2026/data.parquet",
+    "rows": 6,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/forecast/year=2004/data.parquet",
+    "rows": 1,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/forecast/year=2006/data.parquet",
+    "rows": 3,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/forecast/year=2007/data.parquet",
+    "rows": 4,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/forecast/year=2008/data.parquet",
+    "rows": 8,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/forecast/year=2009/data.parquet",
+    "rows": 1,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/forecast/year=2011/data.parquet",
+    "rows": 4,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/forecast/year=2012/data.parquet",
+    "rows": 4,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/forecast/year=2013/data.parquet",
+    "rows": 4,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/forecast/year=2014/data.parquet",
+    "rows": 4,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/forecast/year=2015/data.parquet",
+    "rows": 5,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/forecast/year=2016/data.parquet",
+    "rows": 4,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/forecast/year=2017/data.parquet",
+    "rows": 4,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/forecast/year=2018/data.parquet",
+    "rows": 4,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/forecast/year=2019/data.parquet",
+    "rows": 6,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/forecast/year=2020/data.parquet",
+    "rows": 3,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/forecast/year=2023/data.parquet",
+    "rows": 2,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/forecast/year=2024/data.parquet",
+    "rows": 5,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/forecast/year=2025/data.parquet",
+    "rows": 3,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/forecast/year=2026/data.parquet",
+    "rows": 1,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2014/month=201411/data.parquet",
+    "rows": 10,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2014/month=201412/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2015/month=201501/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2015/month=201502/data.parquet",
+    "rows": 13,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2015/month=201503/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2015/month=201504/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2015/month=201505/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2015/month=201506/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2015/month=201507/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2015/month=201508/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2015/month=201509/data.parquet",
+    "rows": 15,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2015/month=201510/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2015/month=201511/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2015/month=201512/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2016/month=201601/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2016/month=201602/data.parquet",
+    "rows": 14,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2016/month=201603/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2016/month=201604/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2016/month=201605/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2016/month=201606/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2016/month=201607/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2016/month=201608/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2016/month=201609/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2016/month=201610/data.parquet",
+    "rows": 14,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2016/month=201611/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2016/month=201612/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2017/month=201701/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2017/month=201702/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2017/month=201703/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2017/month=201704/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2017/month=201705/data.parquet",
+    "rows": 17,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2017/month=201706/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2017/month=201707/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2017/month=201708/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2017/month=201709/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2017/month=201710/data.parquet",
+    "rows": 17,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2017/month=201711/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2017/month=201712/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2018/month=201801/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2018/month=201802/data.parquet",
+    "rows": 13,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2018/month=201803/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2018/month=201804/data.parquet",
+    "rows": 13,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2018/month=201805/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2018/month=201806/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2018/month=201807/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2018/month=201808/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2018/month=201809/data.parquet",
+    "rows": 14,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2018/month=201810/data.parquet",
+    "rows": 17,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2018/month=201811/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2018/month=201812/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2019/month=201901/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2019/month=201902/data.parquet",
+    "rows": 14,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2019/month=201903/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2019/month=201904/data.parquet",
+    "rows": 17,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2019/month=201905/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2019/month=201906/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2019/month=201907/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2019/month=201908/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2019/month=201909/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2019/month=201910/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2019/month=201911/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2019/month=201912/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2020/month=202001/data.parquet",
+    "rows": 14,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2020/month=202002/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2020/month=202003/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2020/month=202004/data.parquet",
+    "rows": 14,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2020/month=202005/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2020/month=202006/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2020/month=202007/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2020/month=202008/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2020/month=202009/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2020/month=202010/data.parquet",
+    "rows": 14,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2020/month=202011/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2020/month=202012/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2021/month=202101/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2021/month=202102/data.parquet",
+    "rows": 13,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2021/month=202103/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2021/month=202104/data.parquet",
+    "rows": 17,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2021/month=202105/data.parquet",
+    "rows": 17,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2021/month=202106/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2021/month=202107/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2021/month=202108/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2021/month=202109/data.parquet",
+    "rows": 15,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2021/month=202110/data.parquet",
+    "rows": 14,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2021/month=202111/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2021/month=202112/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2022/month=202201/data.parquet",
+    "rows": 17,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2022/month=202202/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2022/month=202203/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2022/month=202204/data.parquet",
+    "rows": 13,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2022/month=202205/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2022/month=202206/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2022/month=202207/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2022/month=202208/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2022/month=202209/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2022/month=202210/data.parquet",
+    "rows": 15,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2022/month=202211/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2022/month=202212/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2023/month=202301/data.parquet",
+    "rows": 14,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2023/month=202302/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2023/month=202303/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2023/month=202304/data.parquet",
+    "rows": 17,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2023/month=202305/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2023/month=202306/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2023/month=202307/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2023/month=202308/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2023/month=202309/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2023/month=202310/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2023/month=202311/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2023/month=202312/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2024/month=202401/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2024/month=202402/data.parquet",
+    "rows": 15,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2024/month=202403/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2024/month=202404/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2024/month=202405/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2024/month=202406/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2024/month=202407/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2024/month=202408/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2024/month=202409/data.parquet",
+    "rows": 17,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2024/month=202410/data.parquet",
+    "rows": 17,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2024/month=202411/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2024/month=202412/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2025/month=202501/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2025/month=202502/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2025/month=202503/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2025/month=202504/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2025/month=202505/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2025/month=202506/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2025/month=202507/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2025/month=202508/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2025/month=202509/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2025/month=202510/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2025/month=202511/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2025/month=202512/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2026/month=202601/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2026/month=202602/data.parquet",
+    "rows": 14,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2026/month=202603/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2026/month=202604/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2026/month=202605/data.parquet",
+    "rows": 17,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2026/month=202606/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2026/month=202607/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/ggt_daily/year=2026/month=202608/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/income/year=2004/data.parquet",
+    "rows": 1,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/income/year=2005/data.parquet",
+    "rows": 7,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/income/year=2006/data.parquet",
+    "rows": 9,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/income/year=2007/data.parquet",
+    "rows": 9,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/income/year=2008/data.parquet",
+    "rows": 10,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/income/year=2009/data.parquet",
+    "rows": 12,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/income/year=2010/data.parquet",
+    "rows": 12,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/income/year=2011/data.parquet",
+    "rows": 12,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/income/year=2012/data.parquet",
+    "rows": 12,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/income/year=2013/data.parquet",
+    "rows": 12,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/income/year=2014/data.parquet",
+    "rows": 12,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/income/year=2015/data.parquet",
+    "rows": 12,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/income/year=2016/data.parquet",
+    "rows": 14,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/income/year=2017/data.parquet",
+    "rows": 17,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/income/year=2018/data.parquet",
+    "rows": 25,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/income/year=2019/data.parquet",
+    "rows": 26,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/income/year=2020/data.parquet",
+    "rows": 30,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/income/year=2021/data.parquet",
+    "rows": 27,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/income/year=2022/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/income/year=2023/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/income/year=2024/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/income/year=2025/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/income/year=2026/data.parquet",
+    "rows": 11,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_basic/snapshot=20260827/data.parquet",
+    "rows": 1,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2012/month=201201/data.parquet",
+    "rows": 15,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2012/month=201202/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2012/month=201203/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2012/month=201204/data.parquet",
+    "rows": 17,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2012/month=201205/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2012/month=201206/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2012/month=201207/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2012/month=201208/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2012/month=201209/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2012/month=201210/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2012/month=201211/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2012/month=201212/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2013/month=201301/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2013/month=201302/data.parquet",
+    "rows": 15,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2013/month=201303/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2013/month=201304/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2013/month=201305/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2013/month=201306/data.parquet",
+    "rows": 17,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2013/month=201307/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2013/month=201308/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2013/month=201309/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2013/month=201310/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2013/month=201311/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2013/month=201312/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2014/month=201401/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2014/month=201402/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2014/month=201403/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2014/month=201404/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2014/month=201405/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2014/month=201406/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2014/month=201407/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2014/month=201408/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2014/month=201409/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2014/month=201410/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2014/month=201411/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2014/month=201412/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2015/month=201501/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2015/month=201502/data.parquet",
+    "rows": 15,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2015/month=201503/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2015/month=201504/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2015/month=201505/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2015/month=201506/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2015/month=201507/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2015/month=201508/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2015/month=201509/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2015/month=201510/data.parquet",
+    "rows": 17,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2015/month=201511/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2015/month=201512/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2016/month=201601/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2016/month=201602/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2016/month=201603/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2016/month=201604/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2016/month=201605/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2016/month=201606/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2016/month=201607/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2016/month=201608/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2016/month=201609/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2016/month=201610/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2016/month=201611/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2016/month=201612/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2017/month=201701/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2017/month=201702/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2017/month=201703/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2017/month=201704/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2017/month=201705/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2017/month=201706/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2017/month=201707/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2017/month=201708/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2017/month=201709/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2017/month=201710/data.parquet",
+    "rows": 17,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2017/month=201711/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2017/month=201712/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2018/month=201801/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2018/month=201802/data.parquet",
+    "rows": 15,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2018/month=201803/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2018/month=201804/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2018/month=201805/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2018/month=201806/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2018/month=201807/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2018/month=201808/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2018/month=201809/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2018/month=201810/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2018/month=201811/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2018/month=201812/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2019/month=201901/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2019/month=201902/data.parquet",
+    "rows": 15,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2019/month=201903/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2019/month=201904/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2019/month=201905/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2019/month=201906/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2019/month=201907/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2019/month=201908/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2019/month=201909/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2019/month=201910/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2019/month=201911/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2019/month=201912/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2020/month=202001/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2020/month=202002/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2020/month=202003/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2020/month=202004/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2020/month=202005/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2020/month=202006/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2020/month=202007/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2020/month=202008/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2020/month=202009/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2020/month=202010/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2020/month=202011/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2020/month=202012/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2021/month=202101/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2021/month=202102/data.parquet",
+    "rows": 15,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2021/month=202103/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2021/month=202104/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2021/month=202105/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2021/month=202106/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2021/month=202107/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2021/month=202108/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2021/month=202109/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2021/month=202110/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2021/month=202111/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2021/month=202112/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2022/month=202201/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2022/month=202202/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2022/month=202203/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2022/month=202204/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2022/month=202205/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2022/month=202206/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2022/month=202207/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2022/month=202208/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2022/month=202209/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2022/month=202210/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2022/month=202211/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2022/month=202212/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2023/month=202301/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2023/month=202302/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2023/month=202303/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2023/month=202304/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2023/month=202305/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2023/month=202306/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2023/month=202307/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2023/month=202308/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2023/month=202309/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2023/month=202310/data.parquet",
+    "rows": 17,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2023/month=202311/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2023/month=202312/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2024/month=202401/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2024/month=202402/data.parquet",
+    "rows": 15,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2024/month=202403/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2024/month=202404/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2024/month=202405/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2024/month=202406/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2024/month=202407/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2024/month=202408/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2024/month=202409/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2024/month=202410/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2024/month=202411/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2024/month=202412/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2025/month=202501/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2025/month=202502/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2025/month=202503/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2025/month=202504/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2025/month=202505/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2025/month=202506/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2025/month=202507/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2025/month=202508/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2025/month=202509/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2025/month=202510/data.parquet",
+    "rows": 17,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2025/month=202511/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily/ts_code=000300.SH/year=2025/month=202512/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2012/month=201201/data.parquet",
+    "rows": 15,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2012/month=201202/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2012/month=201203/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2012/month=201204/data.parquet",
+    "rows": 17,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2012/month=201205/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2012/month=201206/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2012/month=201207/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2012/month=201208/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2012/month=201209/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2012/month=201210/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2012/month=201211/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2012/month=201212/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2013/month=201301/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2013/month=201302/data.parquet",
+    "rows": 15,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2013/month=201303/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2013/month=201304/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2013/month=201305/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2013/month=201306/data.parquet",
+    "rows": 17,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2013/month=201307/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2013/month=201308/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2013/month=201309/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2013/month=201310/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2013/month=201311/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2013/month=201312/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2014/month=201401/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2014/month=201402/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2014/month=201403/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2014/month=201404/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2014/month=201405/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2014/month=201406/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2014/month=201407/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2014/month=201408/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2014/month=201409/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2014/month=201410/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2014/month=201411/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2014/month=201412/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2015/month=201501/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2015/month=201502/data.parquet",
+    "rows": 15,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2015/month=201503/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2015/month=201504/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2015/month=201505/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2015/month=201506/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2015/month=201507/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2015/month=201508/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2015/month=201509/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2015/month=201510/data.parquet",
+    "rows": 17,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2015/month=201511/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2015/month=201512/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2016/month=201601/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2016/month=201602/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2016/month=201603/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2016/month=201604/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2016/month=201605/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2016/month=201606/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2016/month=201607/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2016/month=201608/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2016/month=201609/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2016/month=201610/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2016/month=201611/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2016/month=201612/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2017/month=201701/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2017/month=201702/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2017/month=201703/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2017/month=201704/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2017/month=201705/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2017/month=201706/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2017/month=201707/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2017/month=201708/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2017/month=201709/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2017/month=201710/data.parquet",
+    "rows": 17,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2017/month=201711/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2017/month=201712/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2018/month=201801/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2018/month=201802/data.parquet",
+    "rows": 15,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2018/month=201803/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2018/month=201804/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2018/month=201805/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2018/month=201806/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2018/month=201807/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2018/month=201808/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2018/month=201809/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2018/month=201810/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2018/month=201811/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2018/month=201812/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2019/month=201901/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2019/month=201902/data.parquet",
+    "rows": 15,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2019/month=201903/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2019/month=201904/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2019/month=201905/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2019/month=201906/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2019/month=201907/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2019/month=201908/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2019/month=201909/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2019/month=201910/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2019/month=201911/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2019/month=201912/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2020/month=202001/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2020/month=202002/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2020/month=202003/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2020/month=202004/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2020/month=202005/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2020/month=202006/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2020/month=202007/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2020/month=202008/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2020/month=202009/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2020/month=202010/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2020/month=202011/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2020/month=202012/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2021/month=202101/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2021/month=202102/data.parquet",
+    "rows": 15,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2021/month=202103/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2021/month=202104/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2021/month=202105/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2021/month=202106/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2021/month=202107/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2021/month=202108/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2021/month=202109/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2021/month=202110/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2021/month=202111/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2021/month=202112/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2022/month=202201/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2022/month=202202/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2022/month=202203/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2022/month=202204/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2022/month=202205/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2022/month=202206/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2022/month=202207/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2022/month=202208/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2022/month=202209/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2022/month=202210/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2022/month=202211/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2022/month=202212/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2023/month=202301/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2023/month=202302/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2023/month=202303/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2023/month=202304/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2023/month=202305/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2023/month=202306/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2023/month=202307/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2023/month=202308/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2023/month=202309/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2023/month=202310/data.parquet",
+    "rows": 17,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2023/month=202311/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2023/month=202312/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2024/month=202401/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2024/month=202402/data.parquet",
+    "rows": 15,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2024/month=202403/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2024/month=202404/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/index_daily_benchmarks/index=000001.SH/year=2024/month=202405/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2012/month=201201/data.parquet",
+    "rows": 30,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2012/month=201202/data.parquet",
+    "rows": 42,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2012/month=201203/data.parquet",
+    "rows": 44,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2012/month=201204/data.parquet",
+    "rows": 34,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2012/month=201205/data.parquet",
+    "rows": 44,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2012/month=201206/data.parquet",
+    "rows": 40,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2012/month=201207/data.parquet",
+    "rows": 44,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2012/month=201208/data.parquet",
+    "rows": 46,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2012/month=201209/data.parquet",
+    "rows": 40,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2012/month=201210/data.parquet",
+    "rows": 36,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2012/month=201211/data.parquet",
+    "rows": 44,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2012/month=201212/data.parquet",
+    "rows": 42,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2013/month=201301/data.parquet",
+    "rows": 40,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2013/month=201302/data.parquet",
+    "rows": 30,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2013/month=201303/data.parquet",
+    "rows": 42,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2013/month=201304/data.parquet",
+    "rows": 36,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2013/month=201305/data.parquet",
+    "rows": 44,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2013/month=201306/data.parquet",
+    "rows": 34,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2013/month=201307/data.parquet",
+    "rows": 46,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2013/month=201308/data.parquet",
+    "rows": 44,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2013/month=201309/data.parquet",
+    "rows": 38,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2013/month=201310/data.parquet",
+    "rows": 36,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2013/month=201311/data.parquet",
+    "rows": 42,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2013/month=201312/data.parquet",
+    "rows": 44,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2014/month=201401/data.parquet",
+    "rows": 42,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2014/month=201402/data.parquet",
+    "rows": 32,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2014/month=201403/data.parquet",
+    "rows": 42,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2014/month=201404/data.parquet",
+    "rows": 42,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2014/month=201405/data.parquet",
+    "rows": 40,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2014/month=201406/data.parquet",
+    "rows": 40,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2014/month=201407/data.parquet",
+    "rows": 46,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2014/month=201408/data.parquet",
+    "rows": 42,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2014/month=201409/data.parquet",
+    "rows": 42,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2014/month=201410/data.parquet",
+    "rows": 36,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2014/month=201411/data.parquet",
+    "rows": 40,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2014/month=201412/data.parquet",
+    "rows": 46,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2015/month=201501/data.parquet",
+    "rows": 40,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2015/month=201502/data.parquet",
+    "rows": 30,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2015/month=201503/data.parquet",
+    "rows": 44,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2015/month=201504/data.parquet",
+    "rows": 42,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2015/month=201505/data.parquet",
+    "rows": 40,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2015/month=201506/data.parquet",
+    "rows": 42,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2015/month=201507/data.parquet",
+    "rows": 46,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2015/month=201508/data.parquet",
+    "rows": 42,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2015/month=201509/data.parquet",
+    "rows": 40,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2015/month=201510/data.parquet",
+    "rows": 34,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2015/month=201511/data.parquet",
+    "rows": 42,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2015/month=201512/data.parquet",
+    "rows": 46,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2016/month=201601/data.parquet",
+    "rows": 40,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2016/month=201602/data.parquet",
+    "rows": 32,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2016/month=201603/data.parquet",
+    "rows": 46,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2016/month=201604/data.parquet",
+    "rows": 40,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2016/month=201605/data.parquet",
+    "rows": 42,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2016/month=201606/data.parquet",
+    "rows": 40,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2016/month=201607/data.parquet",
+    "rows": 42,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2016/month=201608/data.parquet",
+    "rows": 46,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2016/month=201609/data.parquet",
+    "rows": 40,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2016/month=201610/data.parquet",
+    "rows": 32,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2016/month=201611/data.parquet",
+    "rows": 44,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2016/month=201612/data.parquet",
+    "rows": 44,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2017/month=201701/data.parquet",
+    "rows": 36,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2017/month=201702/data.parquet",
+    "rows": 36,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2017/month=201703/data.parquet",
+    "rows": 46,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2017/month=201704/data.parquet",
+    "rows": 36,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2017/month=201705/data.parquet",
+    "rows": 40,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2017/month=201706/data.parquet",
+    "rows": 44,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2017/month=201707/data.parquet",
+    "rows": 42,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2017/month=201708/data.parquet",
+    "rows": 46,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2017/month=201709/data.parquet",
+    "rows": 42,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2017/month=201710/data.parquet",
+    "rows": 34,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2017/month=201711/data.parquet",
+    "rows": 44,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2017/month=201712/data.parquet",
+    "rows": 42,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2018/month=201801/data.parquet",
+    "rows": 44,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2018/month=201802/data.parquet",
+    "rows": 30,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2018/month=201803/data.parquet",
+    "rows": 44,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2018/month=201804/data.parquet",
+    "rows": 36,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2018/month=201805/data.parquet",
+    "rows": 44,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2018/month=201806/data.parquet",
+    "rows": 40,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2018/month=201807/data.parquet",
+    "rows": 44,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2018/month=201808/data.parquet",
+    "rows": 46,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2018/month=201809/data.parquet",
+    "rows": 38,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2018/month=201810/data.parquet",
+    "rows": 36,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2018/month=201811/data.parquet",
+    "rows": 44,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2018/month=201812/data.parquet",
+    "rows": 40,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2019/month=201901/data.parquet",
+    "rows": 44,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2019/month=201902/data.parquet",
+    "rows": 30,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2019/month=201903/data.parquet",
+    "rows": 42,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2019/month=201904/data.parquet",
+    "rows": 42,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2019/month=201905/data.parquet",
+    "rows": 40,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2019/month=201906/data.parquet",
+    "rows": 38,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2019/month=201907/data.parquet",
+    "rows": 46,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2019/month=201908/data.parquet",
+    "rows": 44,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2019/month=201909/data.parquet",
+    "rows": 40,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2019/month=201910/data.parquet",
+    "rows": 36,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2019/month=201911/data.parquet",
+    "rows": 42,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2019/month=201912/data.parquet",
+    "rows": 44,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2020/month=202001/data.parquet",
+    "rows": 32,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2020/month=202002/data.parquet",
+    "rows": 40,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2020/month=202003/data.parquet",
+    "rows": 44,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2020/month=202004/data.parquet",
+    "rows": 42,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2020/month=202005/data.parquet",
+    "rows": 36,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2020/month=202006/data.parquet",
+    "rows": 40,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2020/month=202007/data.parquet",
+    "rows": 46,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2020/month=202008/data.parquet",
+    "rows": 42,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2020/month=202009/data.parquet",
+    "rows": 44,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2020/month=202010/data.parquet",
+    "rows": 32,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2020/month=202011/data.parquet",
+    "rows": 42,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2020/month=202012/data.parquet",
+    "rows": 46,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2021/month=202101/data.parquet",
+    "rows": 40,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2021/month=202102/data.parquet",
+    "rows": 30,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2021/month=202103/data.parquet",
+    "rows": 46,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2021/month=202104/data.parquet",
+    "rows": 42,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2021/month=202105/data.parquet",
+    "rows": 36,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2021/month=202106/data.parquet",
+    "rows": 42,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2021/month=202107/data.parquet",
+    "rows": 44,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2021/month=202108/data.parquet",
+    "rows": 44,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2021/month=202109/data.parquet",
+    "rows": 40,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2021/month=202110/data.parquet",
+    "rows": 32,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2021/month=202111/data.parquet",
+    "rows": 44,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2021/month=202112/data.parquet",
+    "rows": 46,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2022/month=202201/data.parquet",
+    "rows": 38,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2022/month=202202/data.parquet",
+    "rows": 32,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2022/month=202203/data.parquet",
+    "rows": 46,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2022/month=202204/data.parquet",
+    "rows": 38,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2022/month=202205/data.parquet",
+    "rows": 38,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2022/month=202206/data.parquet",
+    "rows": 42,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2022/month=202207/data.parquet",
+    "rows": 42,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2022/month=202208/data.parquet",
+    "rows": 46,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2022/month=202209/data.parquet",
+    "rows": 42,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2022/month=202210/data.parquet",
+    "rows": 32,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2022/month=202211/data.parquet",
+    "rows": 44,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2022/month=202212/data.parquet",
+    "rows": 44,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2023/month=202301/data.parquet",
+    "rows": 32,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/margin/year=2024/month=202402/data.parquet",
+    "rows": 45,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2012/month=201208/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2012/month=201209/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2012/month=201210/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2012/month=201211/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2012/month=201212/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2013/month=201301/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2013/month=201302/data.parquet",
+    "rows": 15,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2013/month=201303/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2013/month=201304/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2013/month=201305/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2013/month=201306/data.parquet",
+    "rows": 17,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2013/month=201307/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2013/month=201308/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2013/month=201309/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2013/month=201310/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2013/month=201311/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2013/month=201312/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2014/month=201401/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2014/month=201402/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2014/month=201403/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2014/month=201404/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2014/month=201405/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2014/month=201406/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2014/month=201407/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2014/month=201408/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2014/month=201409/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2014/month=201410/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2014/month=201411/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2014/month=201412/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2015/month=201501/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2015/month=201502/data.parquet",
+    "rows": 15,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2015/month=201503/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2015/month=201504/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2015/month=201505/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2015/month=201506/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2015/month=201507/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2015/month=201508/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2015/month=201509/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2015/month=201510/data.parquet",
+    "rows": 17,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2015/month=201511/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2015/month=201512/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2016/month=201601/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2016/month=201602/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2016/month=201603/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2016/month=201604/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2016/month=201605/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2016/month=201606/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2016/month=201607/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2016/month=201608/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2016/month=201609/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2016/month=201610/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2016/month=201611/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2016/month=201612/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2017/month=201701/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2017/month=201702/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2017/month=201703/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2017/month=201704/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2017/month=201705/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2017/month=201706/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2017/month=201707/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2017/month=201708/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2017/month=201709/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2017/month=201710/data.parquet",
+    "rows": 17,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2017/month=201711/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2017/month=201712/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2018/month=201801/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2018/month=201802/data.parquet",
+    "rows": 15,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2018/month=201803/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2018/month=201804/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2018/month=201805/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2018/month=201806/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2018/month=201807/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2018/month=201808/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2018/month=201809/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2018/month=201810/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2018/month=201811/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2018/month=201812/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2019/month=201901/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2019/month=201902/data.parquet",
+    "rows": 15,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2019/month=201903/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2019/month=201904/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2019/month=201905/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2019/month=201906/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2019/month=201907/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2019/month=201908/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2019/month=201909/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2019/month=201910/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2019/month=201911/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2019/month=201912/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2020/month=202001/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2020/month=202002/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2020/month=202003/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2020/month=202004/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2020/month=202005/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2020/month=202006/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2020/month=202007/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2020/month=202008/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2020/month=202009/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2020/month=202010/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2020/month=202011/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2020/month=202012/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2021/month=202101/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2021/month=202102/data.parquet",
+    "rows": 15,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2021/month=202103/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2021/month=202104/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2021/month=202105/data.parquet",
+    "rows": 18,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2021/month=202106/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2021/month=202107/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2021/month=202108/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2021/month=202109/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2021/month=202110/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2021/month=202111/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2021/month=202112/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2022/month=202201/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2022/month=202202/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2022/month=202203/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2022/month=202204/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2022/month=202205/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2022/month=202206/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2022/month=202207/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2022/month=202208/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2022/month=202209/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2022/month=202210/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2022/month=202211/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2022/month=202212/data.parquet",
+    "rows": 22,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2023/month=202301/data.parquet",
+    "rows": 16,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2023/month=202302/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2023/month=202303/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2023/month=202304/data.parquet",
+    "rows": 19,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2023/month=202305/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2023/month=202306/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2023/month=202307/data.parquet",
+    "rows": 21,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2023/month=202308/data.parquet",
+    "rows": 23,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2023/month=202309/data.parquet",
+    "rows": 20,
+    "reason": "below 50 rows"
+  },
+  {
+    "path": "data/raw/sw_daily/year=2023/month=202310/data.parquet",
+    "rows": 17,
+    "reason": "below 50 rows"
+  }
+]
+```

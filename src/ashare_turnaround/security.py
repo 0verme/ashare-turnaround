@@ -5,9 +5,8 @@ from __future__ import annotations
 import re
 
 _URL = re.compile(r"https?://[^\s'\"<>\]\[)]+", re.IGNORECASE)
-_AUTHORIZATION = re.compile(
-    r"(?i)\b(?:proxy-)?authorization\s*[:=]\s*(?:bearer\s+)?\S+"
-)
+_AUTHORIZATION = re.compile(r"(?i)\b(?:proxy-)?authorization\s*[:=]\s*(?:bearer\s+)?\S+")
+_HOST = re.compile(r"(?i)(\bhost\s*=\s*['\"]?)[^,'\")\s]+")
 
 
 def redact_text(value: object, secret: str | None = None) -> str:
@@ -22,4 +21,5 @@ def redact_text(value: object, secret: str | None = None) -> str:
     if secret:
         text = text.replace(secret, "<redacted>")
     text = _AUTHORIZATION.sub("<redacted-authorization>", text)
+    text = _HOST.sub(r"\1<redacted-host>", text)
     return _URL.sub("<redacted-url>", text)

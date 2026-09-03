@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import time
 from collections.abc import Callable
-from threading import Lock
+from threading import Lock, local
 
 
 class RateLimiter:
@@ -30,6 +30,7 @@ class RateLimiter:
         self._clock = clock
         self._sleep = sleep
         self._lock = Lock()
+        self._thread_state = local()
         self._next_allowed = 0.0
         self._request_count = 0
 
@@ -41,6 +42,12 @@ class RateLimiter:
     def request_count(self) -> int:
         with self._lock:
             return self._request_count
+
+    @property
+    def current_thread_request_count(self) -> int:
+        """Return requests acquired by the calling worker thread."""
+
+        return int(getattr(self._thread_state, "request_count", 0))
 
     def acquire(self) -> None:
         """Wait for and reserve one request slot."""
@@ -56,3 +63,4 @@ class RateLimiter:
 
         with self._lock:
             self._request_count += 1
+        self._thread_state.request_count = self.current_thread_request_count + 1

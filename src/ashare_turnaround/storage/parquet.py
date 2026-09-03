@@ -150,6 +150,47 @@ class RawParquetStore:
         )
         return [self._atomic_write(path, output)]
 
+    def write_partition(
+        self,
+        dataset: str,
+        partition: str,
+        frame: pd.DataFrame,
+        *,
+        retrieved_at: str | None = None,
+        source: str | None = None,
+        source_api: str | None = None,
+    ) -> list[StoredFile]:
+        """Atomically write an explicitly planned raw partition.
+
+        Historical harvest datasets do not all fit the small fixed
+        ``DatasetSpec`` set used by the scanner.  The harvest planner owns the
+        partition key, but still uses this store's same-directory temporary
+        file, Parquet metadata, rename, and directory fsync guarantees.
+        Partition components are deliberately restricted to simple path
+        segments so a provider response can never escape ``raw/<dataset>``.
+        """
+
+        self._validate_dataset(dataset)
+        if not partition or partition.startswith("/") or ".." in partition.split("/"):
+            raise ValueError(f"invalid raw partition: {partition!r}")
+        components = partition.split("/")
+        if any(not re.fullmatch(r"[A-Za-z0-9_.=-]+", component) for component in components):
+            raise ValueError(f"invalid raw partition: {partition!r}")
+        if not isinstance(frame, pd.DataFrame):
+            raise TypeError("frame must be a pandas DataFrame")
+
+        output = frame.reset_index(drop=True).copy()
+        if retrieved_at is not None:
+            output["retrieved_at"] = retrieved_at
+        if source is not None:
+            output["source"] = source
+        if source_api is not None:
+            output["source_api"] = source_api
+        if output.empty:
+            return []
+        path = self.dataset_dir(dataset).joinpath(*components) / "data.parquet"
+        return [self._atomic_write(path, output)]
+
     def write_incremental(
         self,
         dataset: str,
