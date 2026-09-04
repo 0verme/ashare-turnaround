@@ -31,9 +31,9 @@ The exact Layer-2 configuration is tracked in
 
 ## Acceptance-criteria audit
 
-The audit below maps the original Issue #32 checklist to the implementation and
-the current execution evidence. `PARTIAL` means the contract exists but the
-representative full-sample execution or human sign-off is not yet complete.
+The audit below is the original scope-freeze snapshot. Its historical `PARTIAL`
+rows describe the pre-execution state; the final execution evidence and decision
+are recorded in the execution-closure addendum at the end of this document.
 
 | Criterion | Current status | Evidence | Gap | Required action |
 | --- | --- | --- | --- | --- |
@@ -182,9 +182,21 @@ exclusions, scores, confidence/coverage/unknown groups, formal and diagnostic
 rankings, manifests, versions, warnings, and PIT checks. Compression or content
 addressing is a physical representation only; evidence deletion is forbidden.
 
-The final decision remains `ISSUE32_SAMPLE_EXECUTION_REQUIRED` until the ten
-remaining frozen members have either produced complete passing artifacts or
-been explicitly recorded as unavailable under this contract, and the declared
-manual-review checklist has been completed. Evaluation #17 and Ablation #18
-remain out of scope and may start only after Issue #32 is accepted and PR #41
-is merged.
+The pre-execution disposition above is superseded by the execution closure
+below.
+
+## Execution closure addendum
+
+The ten non-2025-06 frozen members now have complete passing local production
+artifacts, checkpoints, and machine audits. The retained 2025-06 resource-gate-v3
+baseline/repeat remains `EXISTING_VALIDATED` and was not rerun. The final
+acceptance decision is:
+
+```text
+ISSUE32_READY_TO_CLOSE
+```
+
+The final schedule counts/digest, per-snapshot checksums and resource metrics,
+manual-review sign-off, and the no-tuning scope guard are recorded in
+[`issue32-pit-replay-validation-closure.md`](issue32-pit-replay-validation-closure.md).
+Evaluation #17 and Ablation #18 remain out of scope and were not run.
