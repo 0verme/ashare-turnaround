@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import asdict, dataclass, field, fields, replace
 from typing import Any
 
 from ..pit.comparable import COMPARABLE_PERIOD_CONTRACT_VERSION
@@ -74,8 +74,12 @@ class FeatureEvidence:
     # surfaces so the independently versioned feature contracts compose.
     metadata: dict[str, Any] = field(default_factory=dict)
 
-    def as_dict(self) -> dict[str, Any]:
-        payload = asdict(self)
+    def as_dict(self, *, deep_copy: bool = True) -> dict[str, Any]:
+        payload = (
+            asdict(self)
+            if deep_copy
+            else {item.name: getattr(self, item.name) for item in fields(FeatureEvidence)}
+        )
         # Keep the structured components authoritative while exposing the
         # contract's endpoint keys at the artifact boundary as well.
         for key in (
@@ -291,7 +295,9 @@ class FeatureVector:
             "comparable_period_contract_version": self.comparable_period_contract_version,
             "trend_contract_version": self.trend_contract_version,
             "values": dict(self.values),
-            "evidence": {key: value.as_dict() for key, value in self.evidence.items()},
+            "evidence": {
+                key: value.as_dict(deep_copy=False) for key, value in self.evidence.items()
+            },
             "risk_flags": list(self.risk_flags),
             "rejected_reasons": list(self.rejected_reasons),
             "unknown_features": list(self.unknown_features),

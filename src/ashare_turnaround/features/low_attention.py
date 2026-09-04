@@ -40,6 +40,7 @@ from typing import Any
 import pandas as pd
 
 from ..dates import normalize_date_series
+from ..replay_cache import current_replay_cache
 from ..scanner.contracts import FeatureVector
 from .common import add_known, new_vector, numeric
 
@@ -217,6 +218,8 @@ def _deduplicate_session_rows(frame: pd.DataFrame) -> pd.DataFrame:
 
     if frame.empty or not {"ts_code", "_date"}.issubset(frame.columns):
         return frame
+    if not frame.duplicated(["ts_code", "_date"], keep=False).any():
+        return frame
     result = frame.copy()
     result["_row_completeness"] = result.notna().sum(axis=1)
     result["_row_key"] = result.apply(_stable_row_key, axis=1)
@@ -246,12 +249,23 @@ def _session_rows(
 
     if frame is None or frame.empty or "trade_date" not in frame.columns:
         return pd.DataFrame()
-    result = frame.copy()
     as_of_timestamp = _as_of_timestamp(as_of)
     if code is not None:
-        if "ts_code" not in result.columns:
+        if "ts_code" not in frame.columns:
             return pd.DataFrame()
-        result = result.loc[result["ts_code"].astype("string").eq(str(code))].copy()
+        # Filter before copying: production replay invokes this helper once
+        # per candidate, while the cross-sectional population is prepared once
+        # per snapshot below.  A replay-local code index avoids scanning the
+        # complete market frame for every candidate.
+        cache = current_replay_cache()
+        indexed = cache.market_for_code(frame, code) if cache is not None else None
+        result = (
+            indexed
+            if indexed is not None
+            else frame.loc[frame["ts_code"].astype("string").eq(str(code))].copy()
+        )
+    else:
+        result = frame.copy()
     dates = normalize_date_series(result["trade_date"])
     result = result.loc[dates.notna() & dates.le(as_of_timestamp)].copy()
     if result.empty:
@@ -371,10 +385,9 @@ def build_cross_section_population(
     settings = config or CrossSectionConfig()
     as_of = _as_of_timestamp(as_of_date)
     visible = _session_rows(frame, as_of)
-    sessions = _effective_session_dates(frame, as_of)
-    if not sessions:
+    if visible.empty or "_date" not in visible.columns:
         return pd.DataFrame()
-    session = max(sessions)
+    session = visible["_date"].max().strftime("%Y%m%d")
     populated = visible.loc[visible["_date"].dt.strftime("%Y%m%d").eq(session)].copy()
     if settings.population_scope == "investable_universe":
         if investable_codes is None:
@@ -572,6 +585,7 @@ def compute_low_attention_v2(
     config: LowAttentionConfig | None = None,
     list_date: str | date | datetime | pd.Timestamp | None = None,
     investable_codes: Container[str] | None = None,
+    population_frame: pd.DataFrame | None = None,
 ) -> FeatureVector:
     """Compute the Low Attention v2 self/cross-sectional/abnormal evidence.
 
@@ -615,8 +629,13 @@ def compute_low_attention_v2(
     history = _session_rows(frame, as_of, code=code)
     if parsed_list_date is not None and not history.empty:
         history = history.loc[history["_date"] >= parsed_list_date].reset_index(drop=True)
-    sessions = _effective_session_dates(frame, as_of)
-    effective_session = max(sessions) if sessions else None
+    if population_frame is not None and not population_frame.empty:
+        declared_session = population_frame.attrs.get("population_session")
+        effective_session = str(declared_session) if declared_session is not None else None
+        sessions = {effective_session} if effective_session is not None else set()
+    else:
+        sessions = _effective_session_dates(frame, as_of)
+        effective_session = max(sessions) if sessions else None
     listing_age_days: int | None = (
         int((as_of - parsed_list_date).days) if parsed_list_date is not None else None
     )
@@ -926,11 +945,15 @@ def compute_low_attention_v2(
     )
 
     # cross-sectional proxies -----------------------------------------------
-    population = build_cross_section_population(
-        frame,
-        as_of_date=as_of,
-        config=cross_cfg,
-        investable_codes=investable_codes,
+    population = (
+        population_frame
+        if population_frame is not None
+        else build_cross_section_population(
+            frame,
+            as_of_date=as_of,
+            config=cross_cfg,
+            investable_codes=investable_codes,
+        )
     )
     cross_turnover, cross_turnover_reason, cross_turnover_pop = _cross_sectional_percentile(
         population, code, "turnover_rate", cfg=cross_cfg

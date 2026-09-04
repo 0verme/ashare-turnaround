@@ -278,9 +278,10 @@ current fields are explicitly snapshot-only.
 2. `namechange` needs a source response with a stable exposed source identity
 or a separately validated identity/version contract before it can be used as a
 historical state table.
-3. `suspend_d` is stored and complete, but the existing `UniverseConfig`/
-scanner path has not been changed in this data-foundation phase to consume it;
-that integration belongs to a later explicitly scoped universe/replay change.
+3. `suspend_d` has dated trade-day semantics but does not expose a separate
+publication timestamp. The #32 historical replay mode consumes an exact
+`suspend_d.trade_date == as_of` observation only; it does not infer a longer
+suspension interval from current status fields.
 4. `index_daily` is ready as a separate benchmark series.  #30 must explicitly
 join it for excess-return features; this phase does not modify #30 strategy
 logic.

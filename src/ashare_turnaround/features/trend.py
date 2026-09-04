@@ -20,18 +20,17 @@ import pandas as pd
 from ..pit.comparable import (
     COMPARABLE_PERIOD_CONTRACT_VERSION,
     DerivedMetric,
+    PreparedComparableSeries,
     growth_from_match,
     margin_from_row,
-    match_comparable_period,
+    match_comparable_period_series,
     period_identity,
-    ttm_from_series,
+    ttm_from_series_batch,
 )
+from ..replay_cache import current_replay_cache
 from ..scanner.contracts import TURNAROUND_TREND_CONTRACT_VERSION, FeatureVector
-from .common import (
-    canonical_history,
-    new_vector,
-    single_quarter_history,
-)
+from .common import new_vector, single_quarter_history
+from .financial_context import FinancialSemanticContext
 
 TREND_CONTRACT_VERSION = TURNAROUND_TREND_CONTRACT_VERSION
 
@@ -185,6 +184,12 @@ class TrendSummary:
     comparable_period_contract_version: str = COMPARABLE_PERIOD_CONTRACT_VERSION
     trend_contract_version: str = TREND_CONTRACT_VERSION
     provenance: Mapping[str, Any] = field(default_factory=dict)
+    _serialized: dict[str, Any] | None = field(
+        default=None,
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     @property
     def level_unit(self) -> str:
@@ -236,7 +241,10 @@ class TrendSummary:
         raise KeyError(f"unknown trend component: {name}")
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        cached = self._serialized
+        if cached is not None:
+            return dict(cached)
+        payload = {
             "metric": self.metric,
             "value_kind": self.value_kind,
             "unit": self.unit,
@@ -292,15 +300,20 @@ class TrendSummary:
             "trend_contract_version": self.trend_contract_version,
             "provenance": dict(self.provenance),
         }
+        object.__setattr__(self, "_serialized", payload)
+        return dict(payload)
 
 
 def _finite(value: Any) -> float | None:
     if value is None:
         return None
-    parsed = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
-    if pd.isna(parsed):
-        return None
-    result = float(parsed)
+    try:
+        result = float(value)
+    except (TypeError, ValueError, OverflowError):
+        parsed = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+        if pd.isna(parsed):
+            return None
+        result = float(parsed)
     return result if math.isfinite(result) else None
 
 
@@ -984,26 +997,59 @@ def _choose_series(
 ) -> tuple[pd.DataFrame, str | None]:
     """Select one unambiguous semantic series; never combine report families."""
 
-    del dataset
     if frame.empty or "report_period" not in frame.columns:
         return pd.DataFrame(), "missing_observation"
+    cache = current_replay_cache()
+    cache_key = (id(frame), dataset)
+    if cache is not None:
+        cached = cache.trend_series.get(cache_key)
+        if cached is not None:
+            return cached
     dated = frame.loc[pd.to_datetime(frame["report_period"], errors="coerce").notna()].copy()
     if dated.empty:
         return pd.DataFrame(), "unsupported_report_period"
     dated["report_period"] = pd.to_datetime(dated["report_period"], errors="coerce")
     latest = dated["report_period"].max()
     latest_rows = dated.loc[dated["report_period"].eq(latest)]
-    keys = {_semantic_key(row.to_dict()) for _, row in latest_rows.iterrows()}
-    if len(keys) != 1:
-        return pd.DataFrame(), "ambiguous_period_chain"
-    key = next(iter(keys))
-    selected = dated.loc[
-        dated.apply(lambda row: _semantic_key(row.to_dict()) == key, axis=1)
-    ].copy()
+    identity_columns = (
+        "report_family",
+        "statement_type",
+        "duration_semantics",
+        "scope",
+        "unit",
+        "accounting_semantics",
+    )
+    if all(column in dated.columns for column in identity_columns):
+        # Canonical financial histories already carry the exact identity
+        # produced by period_identity().  Compare those columns in bulk rather
+        # than rebuilding row dictionaries and period identities in apply().
+        latest_keys = latest_rows.loc[:, identity_columns].astype("string").drop_duplicates()
+        if len(latest_keys) != 1:
+            return pd.DataFrame(), "ambiguous_period_chain"
+        key_row = latest_keys.iloc[0]
+        mask = pd.Series(True, index=dated.index)
+        for column in identity_columns:
+            mask &= dated[column].astype("string").eq(key_row[column]).fillna(False)
+        selected = dated.loc[mask].copy()
+    else:
+        keys = {_semantic_key(row.to_dict()) for _, row in latest_rows.iterrows()}
+        if len(keys) != 1:
+            return pd.DataFrame(), "ambiguous_period_chain"
+        key = next(iter(keys))
+        selected = dated.loc[
+            dated.apply(lambda row: _semantic_key(row.to_dict()) == key, axis=1)
+        ].copy()
     duplicate_periods = selected["report_period"].duplicated(keep=False)
     if bool(duplicate_periods.any()):
-        return pd.DataFrame(), "ambiguous_period_chain"
-    return selected.sort_values("report_period", kind="stable").reset_index(drop=True), None
+        result = (pd.DataFrame(), "ambiguous_period_chain")
+    else:
+        result = (
+            selected.sort_values("report_period", kind="stable").reset_index(drop=True),
+            None,
+        )
+    if cache is not None:
+        cache.trend_series[cache_key] = result
+    return result
 
 
 def _reason_status(result: DerivedMetric) -> tuple[str, str | None]:
@@ -1139,22 +1185,23 @@ def _yoy_observations(
             status=UNKNOWN_STATUS,
         )
     observations: list[ValidatedTrendObservation] = []
-    for _, row in source.iterrows():
-        match = match_comparable_period(
-            history,
-            row,
-            comparison="yoy",
-            dataset="income",
-            value_column=field_name,
-            as_of_date=as_of_date,
-        )
+    rows = source.to_dict(orient="records")
+    matches = match_comparable_period_series(
+        history,
+        rows,
+        comparison="yoy",
+        dataset="income",
+        value_column=field_name,
+        as_of_date=as_of_date,
+    )
+    for row, match in zip(rows, matches, strict=True):
         result = growth_from_match(match, metric=metric)
         observations.append(
             _result_observation(
                 result,
                 metric=metric,
                 value_kind="rate",
-                fallback_row=row.to_dict(),
+                fallback_row=row,
                 source_fields=(field_name,),
             )
         )
@@ -1167,6 +1214,8 @@ def _qoq_observations(
     *,
     metric: str,
     as_of_date: str | date | datetime | pd.Timestamp,
+    prepared_quarters: tuple[pd.DataFrame, Mapping[str, str]] | None = None,
+    prepared_endpoints: PreparedComparableSeries | None = None,
 ) -> list[ValidatedTrendObservation]:
     if field_name is None:
         return [_invalid_observation(metric=metric, reason="missing_value")]
@@ -1177,14 +1226,33 @@ def _qoq_observations(
             reason="invalid_comparable_period_contract",
             status=UNSUPPORTED,
         )
-    source, columns = single_quarter_history(
+    source, columns = prepared_quarters or single_quarter_history(
         history,
         "income",
         (field_name,),
         as_of_date=as_of_date,
     )
-    if source.empty or not columns:
+    if source.empty or not columns or field_name not in columns:
         return [_invalid_observation(metric=metric, reason="qoq_requires_validated_single_quarter")]
+    # Standalone callers may provide the wide frame directly; replay passes a
+    # cached immutable field projection shared with TTM.
+    value_column = columns[field_name]
+    if value_column != "comparable_value":
+        source = source.copy()
+        source["comparable_value"] = source[value_column]
+        source["comparable_raw_value"] = source[f"{value_column}_raw"]
+        source["comparable_status"] = source[f"{value_column}_status"]
+        source["comparable_reason"] = source[f"{value_column}_reason"]
+        source["comparable_source_field"] = field_name
+        for provenance_column in (
+            "single_quarter_source_periods",
+            "single_quarter_source_versions",
+            "single_quarter_source_values",
+            "single_quarter_availability_dates",
+        ):
+            source[provenance_column] = source[
+                f"{value_column}_{provenance_column}"
+            ]
     source, series_reason = _choose_series(source, dataset="income")
     if series_reason is not None:
         return _invalid_series_observations(
@@ -1193,22 +1261,24 @@ def _qoq_observations(
             reason=series_reason,
         )
     observations: list[ValidatedTrendObservation] = []
-    for _, row in source.iterrows():
-        match = match_comparable_period(
-            source,
-            row,
-            comparison="qoq",
-            dataset="income",
-            value_column="comparable_value",
-            as_of_date=as_of_date,
-        )
+    rows = source.to_dict(orient="records")
+    matches = match_comparable_period_series(
+        source,
+        rows,
+        comparison="qoq",
+        dataset="income",
+        value_column="comparable_value",
+        as_of_date=as_of_date,
+        prepared_series=prepared_endpoints,
+    )
+    for row, match in zip(rows, matches, strict=True):
         result = growth_from_match(match, metric=metric)
         observations.append(
             _result_observation(
                 result,
                 metric=metric,
                 value_kind="rate",
-                fallback_row=row.to_dict(),
+                fallback_row=row,
                 source_fields=(field_name,),
             )
         )
@@ -1239,7 +1309,7 @@ def _margin_observations(
             reason=series_reason,
         )
     observations: list[ValidatedTrendObservation] = []
-    for _, row in source.iterrows():
+    for row in source.to_dict(orient="records"):
         result = margin_from_row(
             row,
             dataset="income",
@@ -1252,7 +1322,7 @@ def _margin_observations(
                 result,
                 metric=metric,
                 value_kind="rate",
-                fallback_row=row.to_dict(),
+                fallback_row=row,
                 source_fields=(numerator_field, denominator_field),
             )
         )
@@ -1265,6 +1335,8 @@ def _ttm_observations(
     *,
     metric: str,
     as_of_date: str | date | datetime | pd.Timestamp,
+    prepared_quarters: tuple[pd.DataFrame, Mapping[str, str]] | None = None,
+    prepared_endpoints: PreparedComparableSeries | None = None,
 ) -> list[ValidatedTrendObservation]:
     if field_name is None:
         return [_invalid_observation(metric=metric, reason="missing_value")]
@@ -1275,14 +1347,31 @@ def _ttm_observations(
             reason="invalid_comparable_period_contract",
             status=UNSUPPORTED,
         )
-    source, columns = single_quarter_history(
+    source, columns = prepared_quarters or single_quarter_history(
         history,
         "income",
         (field_name,),
         as_of_date=as_of_date,
     )
-    if source.empty or not columns:
+    if source.empty or not columns or field_name not in columns:
         return [_invalid_observation(metric=metric, reason="ttm_requires_validated_single_quarter")]
+    value_column = columns[field_name]
+    if value_column != "comparable_value":
+        source = source.copy()
+        source["comparable_value"] = source[value_column]
+        source["comparable_raw_value"] = source[f"{value_column}_raw"]
+        source["comparable_status"] = source[f"{value_column}_status"]
+        source["comparable_reason"] = source[f"{value_column}_reason"]
+        source["comparable_source_field"] = field_name
+        for provenance_column in (
+            "single_quarter_source_periods",
+            "single_quarter_source_versions",
+            "single_quarter_source_values",
+            "single_quarter_availability_dates",
+        ):
+            source[provenance_column] = source[
+                f"{value_column}_{provenance_column}"
+            ]
     source, series_reason = _choose_series(source, dataset="income")
     if series_reason is not None:
         return _invalid_series_observations(
@@ -1291,21 +1380,23 @@ def _ttm_observations(
             reason=series_reason,
         )
     observations: list[ValidatedTrendObservation] = []
-    for _, row in source.iterrows():
-        result = ttm_from_series(
-            source,
-            dataset="income",
-            value_column="comparable_value",
-            end=row,
-            as_of_date=as_of_date,
-            metric=metric,
-        )
+    rows = source.to_dict(orient="records")
+    results = ttm_from_series_batch(
+        source,
+        dataset="income",
+        value_column="comparable_value",
+        ends=rows,
+        as_of_date=as_of_date,
+        metric=metric,
+        prepared_series=prepared_endpoints,
+    )
+    for row, result in zip(rows, results, strict=True):
         observations.append(
             _result_observation(
                 result,
                 metric=metric,
                 value_kind="absolute",
-                fallback_row=row.to_dict(),
+                fallback_row=row,
                 source_fields=(field_name,),
             )
         )
@@ -1330,9 +1421,10 @@ def _add_summary(
         ("state", f"{prefix}_state"),
         ("turnaround_evidence", f"{prefix}_turnaround_evidence"),
     )
+    base_provenance = summary.as_dict()
     for component, name in components:
         value, status, reason = summary.component(component)
-        provenance = summary.as_dict()
+        provenance = dict(base_provenance)
         provenance.update(
             {
                 "component": component,
@@ -1432,6 +1524,8 @@ def compute_trend_features(
     financial_frames: dict[str, pd.DataFrame],
     code: str,
     as_of_date: str | date | datetime | pd.Timestamp,
+    *,
+    _semantic_context: FinancialSemanticContext | None = None,
 ) -> FeatureVector:
     """Compute the versioned trend contract from validated #27 primitives.
 
@@ -1444,7 +1538,10 @@ def compute_trend_features(
     vector = new_vector(code, as_of_date)
     raw_income = financial_frames.get("income")
     input_contract_invalid = _declared_contract_is_invalid(raw_income)
-    income = canonical_history("income", raw_income, code, as_of_date)
+    context = _semantic_context or FinancialSemanticContext.prepare(
+        financial_frames, code, as_of_date
+    )
+    income = context.history("income")
     if input_contract_invalid and not income.empty:
         # ``canonicalize_financial_frame`` necessarily writes the current
         # #27 version.  Preserve an explicitly supplied incompatible version
@@ -1456,6 +1553,29 @@ def compute_trend_features(
     profit_field = _field(income, "n_income_attr_p", "n_income", "net_profit")
     operating_field = _field(income, "operate_profit", "operating_profit")
     gross_field = _field(income, "gross_profit")
+    quarter_fields = tuple(
+        dict.fromkeys(
+            field_name
+            for field_name in (revenue_field, profit_field, operating_field)
+            if field_name is not None
+        )
+    )
+    prepared_quarters = (
+        context.single_quarter_history("income", quarter_fields)
+        if quarter_fields and not input_contract_invalid
+        else None
+    )
+    quarter_projections = (
+        {
+            field_name: (
+                context.single_quarter_projection(prepared_quarters, field_name),
+                {field_name: "comparable_value"},
+            )
+            for field_name in quarter_fields
+        }
+        if prepared_quarters is not None
+        else {}
+    )
 
     yoy_specs = (
         ("revenue_yoy", revenue_field),
@@ -1490,6 +1610,7 @@ def compute_trend_features(
                 field_name,
                 metric=metric,
                 as_of_date=as_of_date,
+                prepared_quarters=quarter_projections.get(field_name),
             )
             if not income.empty
             else [_invalid_observation(metric=metric, reason="no PIT income history")]
@@ -1530,6 +1651,7 @@ def compute_trend_features(
                 field_name,
                 metric=metric,
                 as_of_date=as_of_date,
+                prepared_quarters=quarter_projections.get(field_name),
             )
             if not income.empty
             else [_invalid_observation(metric=metric, reason="no PIT income history")]

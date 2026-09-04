@@ -1,5 +1,27 @@
 """Point-in-time scanner contracts and research workflows."""
 
+from .artifacts import (
+    ARTIFACT_LAYOUT_VERSION,
+    DIGEST_CONTRACT_VERSION,
+    NORMALIZED_ARTIFACT_LAYOUT_VERSION,
+    PIT_REPLAY_ARTIFACT_LAYOUT_VERSION,
+    ChunkedContentAddressedStore,
+    ContentAddressedStore,
+    assert_lossless_expansion,
+    attribute_feature_vector_size,
+    deterministic_replay_digests,
+    expand_normalized_replay_artifact,
+    expand_normalized_snapshot,
+    expand_normalized_vector,
+    measure_feature_vector_sizes,
+    measure_replay_artifact_sizes,
+    normalize_feature_vector,
+    normalize_feature_vectors,
+    normalize_replay_artifact,
+    normalize_snapshot_payload,
+    semantic_digest,
+    semantic_sequence_digest,
+)
 from .contracts import FeatureEvidence, FeatureVector, flatten_feature_vectors
 from .evidence import (
     EVIDENCE_CONFIDENCE_CONTRACT_VERSION,
@@ -14,15 +36,37 @@ from .evidence import (
     assess_evidence_coverage,
 )
 from .universe import (
+    HISTORICAL_UNIVERSE_CONTRACT_VERSION,
     UniverseConfig,
     UniverseDecision,
     UniverseResult,
+    build_historical_investable_universe,
     build_investable_universe,
 )
 
 __all__ = [
     "FeatureEvidence",
     "FeatureVector",
+    "ARTIFACT_LAYOUT_VERSION",
+    "NORMALIZED_ARTIFACT_LAYOUT_VERSION",
+    "PIT_REPLAY_ARTIFACT_LAYOUT_VERSION",
+    "DIGEST_CONTRACT_VERSION",
+    "ContentAddressedStore",
+    "ChunkedContentAddressedStore",
+    "normalize_feature_vector",
+    "normalize_feature_vectors",
+    "normalize_replay_artifact",
+    "normalize_snapshot_payload",
+    "expand_normalized_vector",
+    "expand_normalized_replay_artifact",
+    "expand_normalized_snapshot",
+    "assert_lossless_expansion",
+    "attribute_feature_vector_size",
+    "measure_feature_vector_sizes",
+    "measure_replay_artifact_sizes",
+    "semantic_digest",
+    "semantic_sequence_digest",
+    "deterministic_replay_digests",
     "EvidenceAssessment",
     "EvidenceConfidenceConfig",
     "FeatureGroupSpec",
@@ -33,9 +77,11 @@ __all__ = [
     "FEATURE_GROUP_REGISTRY_VERSION",
     "UNKNOWN_EVIDENCE_STATUSES",
     "assess_evidence_coverage",
+    "HISTORICAL_UNIVERSE_CONTRACT_VERSION",
     "UniverseConfig",
     "UniverseDecision",
     "UniverseResult",
+    "build_historical_investable_universe",
     "build_investable_universe",
     "flatten_feature_vectors",
 ]

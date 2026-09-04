@@ -1,0 +1,194 @@
+{
+  "contract_version": "pit-replay-validation-sample-v1",
+  "selection_rule_version": "representative-regime-strata-v1",
+  "target_range": {
+    "start": "2017-01",
+    "end": "2026-12"
+  },
+  "monthly_target_schedule": {
+    "contract_version": "pit-replay-monthly-target-schedule-v1",
+    "selection_rule_version": "monthly-anchor-15-v1",
+    "anchor_day": 15,
+    "calendar_source": "trade_cal",
+    "calendar_exchange": "SSE",
+    "same_month_only": true,
+    "future_substitution": false,
+    "current_universe_substitution": false,
+    "unavailable_statuses": [
+      "UNAVAILABLE_DATA",
+      "UNAVAILABLE_FUTURE",
+      "INCOMPLETE_CURRENT_MONTH"
+    ]
+  },
+  "history_bands": [
+    {
+      "name": "early",
+      "start": "2017-01",
+      "end": "2019-12"
+    },
+    {
+      "name": "middle",
+      "start": "2020-01",
+      "end": "2022-12"
+    },
+    {
+      "name": "late",
+      "start": "2023-01",
+      "end": "2025-12"
+    }
+  ],
+  "selection_inputs": [
+    "calendar_position",
+    "as_of_market_regime",
+    "data_availability",
+    "declared_boundary_coverage"
+  ],
+  "forbidden_inputs": [
+    "forward_returns",
+    "scanner_scores",
+    "Top-N_membership",
+    "post_as_of_observations",
+    "future_selection_or_evaluation_outcomes"
+  ],
+  "stratum_rule": "one midpoint per available (history_band, regime) stratum; the first member is used for the early-range and middle-range boundary strata; append the fixed existing validation member and latest complete target",
+  "frozen_members": [
+    {
+      "target_month": "2017-01",
+      "selected_trading_date": "20170116",
+      "regime_label": "range",
+      "history_band": "early",
+      "selection_reason": "early range data boundary",
+      "execution_status": "FULL_EVIDENCE_REQUIRED"
+    },
+    {
+      "target_month": "2018-10",
+      "selected_trading_date": "20181015",
+      "regime_label": "bear",
+      "history_band": "early",
+      "selection_reason": "early bear stratum midpoint",
+      "execution_status": "FULL_EVIDENCE_REQUIRED"
+    },
+    {
+      "target_month": "2019-03",
+      "selected_trading_date": "20190315",
+      "regime_label": "bull",
+      "history_band": "early",
+      "selection_reason": "early bull stratum midpoint",
+      "execution_status": "FULL_EVIDENCE_REQUIRED"
+    },
+    {
+      "target_month": "2020-01",
+      "selected_trading_date": "20200115",
+      "regime_label": "range",
+      "history_band": "middle",
+      "selection_reason": "middle calendar-year boundary",
+      "execution_status": "FULL_EVIDENCE_REQUIRED"
+    },
+    {
+      "target_month": "2020-09",
+      "selected_trading_date": "20200915",
+      "regime_label": "bull",
+      "history_band": "middle",
+      "selection_reason": "middle bull stratum midpoint",
+      "execution_status": "FULL_EVIDENCE_REQUIRED"
+    },
+    {
+      "target_month": "2022-05",
+      "selected_trading_date": "20220516",
+      "regime_label": "bear",
+      "history_band": "middle",
+      "selection_reason": "middle bear stratum midpoint",
+      "execution_status": "FULL_EVIDENCE_REQUIRED"
+    },
+    {
+      "target_month": "2023-12",
+      "selected_trading_date": "20231215",
+      "regime_label": "bear",
+      "history_band": "late",
+      "selection_reason": "late bear stratum midpoint",
+      "execution_status": "FULL_EVIDENCE_REQUIRED"
+    },
+    {
+      "target_month": "2024-05",
+      "selected_trading_date": "20240515",
+      "regime_label": "range",
+      "history_band": "late",
+      "selection_reason": "late range stratum midpoint",
+      "execution_status": "FULL_EVIDENCE_REQUIRED"
+    },
+    {
+      "target_month": "2024-11",
+      "selected_trading_date": "20241115",
+      "regime_label": "bull",
+      "history_band": "late",
+      "selection_reason": "late bull stratum midpoint",
+      "execution_status": "FULL_EVIDENCE_REQUIRED"
+    },
+    {
+      "target_month": "2025-06",
+      "selected_trading_date": "20250616",
+      "regime_label": "range",
+      "history_band": "late",
+      "selection_reason": "EXISTING_VALIDATED: reuse resource-gate-v3 evidence; do not rerun",
+      "execution_status": "EXISTING_VALIDATED"
+    },
+    {
+      "target_month": "2025-12",
+      "selected_trading_date": "20251215",
+      "regime_label": "range",
+      "history_band": "late",
+      "selection_reason": "latest complete target at the current-data coverage boundary",
+      "execution_status": "FULL_EVIDENCE_REQUIRED"
+    }
+  ],
+  "boundary_coverage": {
+    "financial_disclosure": "synthetic exact T-1/T boundary and revised-disclosure fixtures",
+    "calendar_year": "2020-01 target",
+    "current_data_coverage": "2025-12 latest available target plus 2026 data/future statuses in Layer 1",
+    "delisted_and_status": "synthetic delisted/status fixture plus historical-universe decisions in full artifacts",
+    "missing_reference_data": "synthetic missing-benchmark/insufficient-history fixtures; no silent fallback"
+  },
+  "manual_review": {
+    "contract_version": "manual-review-sample-v2",
+    "target_months": [
+      "2019-03",
+      "2022-05",
+      "2025-06"
+    ],
+    "selection_rule": "fixed before replay; one bull, one bear, one range member",
+    "per_snapshot": [
+      "Top-3 formal candidates",
+      "one diagnostic high-score ineligible candidate",
+      "one unknown-heavy diagnostic candidate",
+      "one excluded universe boundary case when present"
+    ],
+    "human_fields": [
+      "why included/excluded",
+      "visible disclosures",
+      "feature evidence",
+      "unknown groups",
+      "coverage/confidence",
+      "score breakdown",
+      "PIT boundary",
+      "ranking reason"
+    ],
+    "ui_required": false
+  },
+  "artifact_policy": {
+    "monthly_schedule": [
+      "validation-targets.json",
+      "validation-targets.csv",
+      "manifest.json",
+      "summary.json",
+      "summary.md"
+    ],
+    "full_evidence": "only frozen_members marked FULL_EVIDENCE_REQUIRED plus the retained EXISTING_VALIDATED artifact",
+    "evidence_loss_allowed": false,
+    "raw_mutation_allowed": false
+  },
+  "determinism_policy": {
+    "full_production_pair": "retained 2025-06 baseline #1 and identical determinism #2",
+    "other_members": "same frozen deterministic path plus synthetic fixtures and bounded duplicate checks",
+    "per_member_double_run_required": false
+  }
+}
