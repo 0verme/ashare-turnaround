@@ -13,11 +13,29 @@ _INTEGER_FLOAT = re.compile(r"^(\d+)\.0+$")
 
 
 def _parsed_series(values: pd.Series, *, format: str | None = None) -> pd.Series:
-    parsed = pd.to_datetime(values, format=format, errors="coerce", utc=True)
-    result = pd.Series(parsed, index=values.index)
-    if isinstance(result.dtype, pd.DatetimeTZDtype):
-        result = result.dt.tz_localize(None)
-    return result.dt.normalize()
+    """Parse values into nanosecond dates without leaking out-of-bounds sentinels."""
+
+    try:
+        parsed = pd.to_datetime(values, format=format, errors="coerce", utc=True)
+    except (TypeError, ValueError, OverflowError):
+        return pd.Series(pd.NaT, index=values.index, dtype="datetime64[ns]")
+
+    normalized: list[pd.Timestamp | pd.NaT] = []
+    for value in pd.Series(parsed, index=values.index):
+        try:
+            if pd.isna(value):
+                normalized.append(pd.NaT)
+                continue
+            timestamp = pd.Timestamp(value)
+            if timestamp.tzinfo is not None:
+                timestamp = timestamp.tz_localize(None)
+            if timestamp < pd.Timestamp.min or timestamp > pd.Timestamp.max:
+                normalized.append(pd.NaT)
+            else:
+                normalized.append(timestamp.normalize())
+        except (TypeError, ValueError, OverflowError):
+            normalized.append(pd.NaT)
+    return pd.Series(normalized, index=values.index, dtype="datetime64[ns]")
 
 
 def normalize_date_series(values: pd.Series) -> pd.Series:
@@ -37,9 +55,7 @@ def normalize_date_series(values: pd.Series) -> pd.Series:
     result = pd.Series(pd.NaT, index=values.index, dtype="datetime64[ns]")
     eight_digit = present & text.str.fullmatch(_EIGHT_DIGIT.pattern, na=False)
     if eight_digit.any():
-        result.loc[eight_digit] = _parsed_series(
-            text.loc[eight_digit], format="%Y%m%d"
-        )
+        result.loc[eight_digit] = _parsed_series(text.loc[eight_digit], format="%Y%m%d")
 
     remaining = present & ~eight_digit
     if remaining.any():

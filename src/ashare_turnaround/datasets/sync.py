@@ -183,7 +183,13 @@ def _call_page(
 
 
 def _duplicate_identity_count(dataset: str, frame: pd.DataFrame) -> int:
-    spec = get_dataset_spec(dataset)
+    try:
+        spec = get_dataset_spec(dataset)
+    except KeyError:
+        # The generic harvest catalog intentionally contains APIs that are not
+        # part of the scanner's fixed financial/market DatasetSpec registry.
+        # Harvest applies its own catalog identity checks after pagination.
+        return 0
     if not spec.primary_keys or not set(spec.primary_keys).issubset(frame.columns):
         return 0
     return int(frame.duplicated(list(spec.primary_keys), keep=False).sum())

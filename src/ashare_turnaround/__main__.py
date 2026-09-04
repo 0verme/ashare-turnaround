@@ -44,6 +44,29 @@ from .datasets.production import (
 from .datasets.specs import get_dataset_spec
 from .datasets.sync import sample_request_plan, sync_daily, sync_sample
 from .dates import normalize_date_series
+from .harvest import (
+    ARTIFACT_DIR,
+    HARD_FREE_SPACE,
+    HARVEST_SPECS,
+    SOFT_FREE_SPACE,
+    DeadlineGuard,
+    DiskGuard,
+    build_coverage,
+    build_download_plan,
+    build_raw_integrity,
+    load_api_inventory,
+    load_download_plan,
+    probe_api_inventory,
+    render_final_report,
+    run_harvest,
+    write_api_inventory,
+    write_checkpoint_failures,
+    write_coverage_artifacts,
+    write_download_plan,
+    write_failures,
+    write_final_report,
+    write_raw_integrity_artifacts,
+)
 from .pit.comparable import COMPARABLE_PERIOD_CONTRACT_VERSION
 from .pit.financial import (
     canonicalize_financial_frame,
@@ -52,6 +75,7 @@ from .pit.financial import (
     query_financial_as_of,
     validate_revision_candidate,
 )
+from .providers.rate_limit import RateLimiter
 from .providers.tushare import TushareProvider
 from .scanner.artifacts import (
     ARTIFACT_LAYOUT_VERSION,
@@ -271,6 +295,48 @@ def _parser() -> argparse.ArgumentParser:
     inventory.add_argument("--manifest", default="data/state/raw-manifest.json")
     inventory.add_argument("--coverage", default="data/state/data-coverage.json")
     inventory.add_argument("--as-of", default=None, help="bound expected trading-date coverage")
+
+    harvest_inventory = subparsers.add_parser(
+        "harvest-inventory", help="probe candidate APIs without historical downloads"
+    )
+    harvest_inventory.add_argument("--data-dir", default=None)
+    harvest_inventory.add_argument("--artifact-dir", default=str(ARTIFACT_DIR))
+    harvest_inventory.add_argument("--requests-per-minute", type=float, default=None)
+
+    harvest_plan = subparsers.add_parser(
+        "harvest-plan", help="build a no-remote-download RAW harvest plan"
+    )
+    harvest_plan.add_argument("--data-dir", default=None)
+    harvest_plan.add_argument("--inventory", default=str(ARTIFACT_DIR / "api-inventory.json"))
+    harvest_plan.add_argument("--artifact-dir", default=str(ARTIFACT_DIR))
+    harvest_plan.add_argument("--start-date", default="20120101")
+    harvest_plan.add_argument("--end-date", default=None)
+    harvest_plan.add_argument("--workers", type=int, default=4)
+    harvest_plan.add_argument("--requests-per-minute", type=float, default=None)
+    harvest_plan.add_argument("--soft-free-gib", type=int, default=120)
+    harvest_plan.add_argument("--hard-free-gib", type=int, default=80)
+
+    harvest_run = subparsers.add_parser(
+        "harvest-run", help="run the resumable RAW cold archive from a saved plan"
+    )
+    harvest_run.add_argument("--data-dir", default=None)
+    harvest_run.add_argument("--inventory", default=str(ARTIFACT_DIR / "api-inventory.json"))
+    harvest_run.add_argument("--plan", default=str(ARTIFACT_DIR / "download-plan.json"))
+    harvest_run.add_argument("--artifact-dir", default=str(ARTIFACT_DIR))
+    harvest_run.add_argument("--page-size", type=int, default=5000)
+    harvest_run.add_argument("--max-pages", type=int, default=500)
+    harvest_run.add_argument("--workers", type=int, default=None)
+    harvest_run.add_argument("--requests-per-minute", type=float, default=None)
+    harvest_run.add_argument("--deadline", default=None)
+
+    harvest_audit = subparsers.add_parser(
+        "harvest-audit", help="audit RAW coverage, checkpoints, and Parquet integrity"
+    )
+    harvest_audit.add_argument("--data-dir", default=None)
+    harvest_audit.add_argument("--inventory", default=str(ARTIFACT_DIR / "api-inventory.json"))
+    harvest_audit.add_argument("--plan", default=str(ARTIFACT_DIR / "download-plan.json"))
+    harvest_audit.add_argument("--artifact-dir", default=str(ARTIFACT_DIR))
+
 
     daily = subparsers.add_parser("sync-daily", help="synchronize one requested trading date")
     daily.add_argument("--date", dest="requested_date", default=None)
@@ -660,6 +726,239 @@ def _bootstrap_financials(args: argparse.Namespace) -> int:
         f"rows={summary.row_count} elapsed={summary.elapsed_seconds:.3f}s"
     )
     return 2 if failed else 0
+
+
+def _harvest_data_dir(args: argparse.Namespace, settings: Settings) -> Path:
+    return Path(args.data_dir).expanduser() if args.data_dir else settings.data_dir
+
+
+def _disk_dict(guard: DiskGuard) -> dict[str, object]:
+    check = guard.check()
+    return {
+        "path": str(guard.path),
+        "free_bytes": check.free_bytes,
+        "soft_guard": guard.soft_free_bytes,
+        "hard_guard": guard.hard_free_bytes,
+        "action": check.action,
+        "reason": check.reason,
+    }
+
+
+def _harvest_inventory(args: argparse.Namespace) -> int:
+    settings = load_settings()
+    data_dir = _harvest_data_dir(args, settings)
+    rpm = (
+        settings.requests_per_minute
+        if args.requests_per_minute is None
+        else args.requests_per_minute
+    )
+    provider = None
+    if settings.token_configured:
+        limiter = RateLimiter(rpm)
+        provider = TushareProvider(
+            settings.token or "",
+            settings.base_url,
+            timeout=settings.timeout,
+            max_retries=settings.max_retries,
+            backoff_seconds=settings.backoff_seconds,
+            backoff_jitter_seconds=settings.backoff_jitter_seconds,
+            rate_limiter=limiter,
+        )
+    inventory = probe_api_inventory(
+        provider,
+        data_dir,
+        specs=HARVEST_SPECS,
+        deadline=os.getenv("ASHARE_HARVEST_DEADLINE"),
+    )
+    json_path, md_path = write_api_inventory(inventory, args.artifact_dir)
+    print(f"api_inventory_json={json_path}")
+    print(f"api_inventory_md={md_path}")
+    print(
+        f"apis={len(inventory.apis)} reachable={sum(item.reachable for item in inventory.apis)} "
+        f"permission_ok={sum(item.permission_ok is True for item in inventory.apis)} "
+        f"permission_denied={sum(item.result == 'PERMISSION_DENIED' for item in inventory.apis)} "
+        f"unsupported={sum(item.result == 'UNSUPPORTED' for item in inventory.apis)}"
+    )
+    return 0 if settings.token_configured else 2
+
+
+def _harvest_plan(args: argparse.Namespace) -> int:
+    settings = load_settings()
+    data_dir = _harvest_data_dir(args, settings)
+    inventory = None
+    inventory_path = Path(args.inventory)
+    if inventory_path.exists():
+        inventory = load_api_inventory(inventory_path)
+    rpm = (
+        settings.requests_per_minute
+        if args.requests_per_minute is None
+        else args.requests_per_minute
+    )
+    plan = build_download_plan(
+        data_dir,
+        inventory=inventory,
+        start_date=args.start_date,
+        end_date=args.end_date,
+        workers=args.workers,
+        rate_limit=rpm,
+        soft_free_space=args.soft_free_gib * 1024**3,
+        hard_free_space=args.hard_free_gib * 1024**3,
+    )
+    json_path, md_path = write_download_plan(plan, args.artifact_dir)
+    print(f"download_plan_json={json_path}")
+    print(f"download_plan_md={md_path}")
+    print(
+        f"datasets={len(plan.datasets)} "
+        f"ready={sum(item.status == 'READY' for item in plan.datasets)} "
+        f"remaining_units={sum(item.remaining_units for item in plan.datasets)} "
+        f"estimated_requests={sum(item.estimated_requests for item in plan.datasets)} "
+        f"estimated_size_bytes={sum(item.estimated_size_bytes for item in plan.datasets)}"
+    )
+    print("remote_requests=false raw_writes=false checkpoint_mutation=false")
+    return 0
+
+
+def _harvest_run(args: argparse.Namespace) -> int:
+    settings = load_settings()
+    if not settings.token_configured:
+        print("TUSHARE_TOKEN is not configured; harvest was not run", file=sys.stderr)
+        return 2
+    inventory_path = Path(args.inventory)
+    plan = load_download_plan(args.plan)
+    inventory = load_api_inventory(inventory_path) if inventory_path.exists() else None
+    data_dir = _harvest_data_dir(args, settings)
+    if str(data_dir) != plan.data_dir:
+        print(
+            f"harvest data-dir mismatch: plan={plan.data_dir} requested={data_dir}; "
+            "rebuild harvest-plan before running",
+            file=sys.stderr,
+        )
+        return 2
+    settings.ensure_data_dirs()
+    guard = DiskGuard(
+        data_dir,
+        soft_free_bytes=plan.soft_free_space,
+        hard_free_bytes=plan.hard_free_space,
+    )
+    disk_before = _disk_dict(guard)
+    print(
+        f"free_bytes={disk_before['free_bytes']} action={disk_before['action']} "
+        f"soft_guard={plan.soft_free_space} hard_guard={plan.hard_free_space}"
+    )
+    limiter = RateLimiter(
+        settings.requests_per_minute
+        if args.requests_per_minute is None
+        else args.requests_per_minute
+    )
+    provider = TushareProvider(
+        settings.token or "",
+        settings.base_url,
+        timeout=settings.timeout,
+        max_retries=settings.max_retries,
+        backoff_seconds=settings.backoff_seconds,
+        backoff_jitter_seconds=settings.backoff_jitter_seconds,
+        rate_limiter=limiter,
+    )
+    deadline = DeadlineGuard(args.deadline)
+    print(f"deadline_mode={deadline.mode} deadline_configured={deadline.deadline is not None}")
+    try:
+        summary = run_harvest(
+            provider,
+            plan,
+            inventory=inventory,
+            page_size=args.page_size,
+            max_pages=args.max_pages,
+            workers=args.workers,
+            rate_limiter=limiter,
+            deadline=deadline,
+            progress=lambda message: print(message, flush=True),
+        )
+    except KeyboardInterrupt:
+        print("harvest interrupted; resume using the same plan/checkpoint", file=sys.stderr)
+        return 130
+    checkpoint_path = data_dir / "state" / "harvest-checkpoints.json"
+    write_failures(summary, checkpoint_path, Path(args.artifact_dir) / "failures.json")
+    coverage = build_coverage(
+        data_dir,
+        inventory=inventory,
+        plan=plan,
+        checkpoint_path=checkpoint_path,
+    )
+    integrity = build_raw_integrity(data_dir, checkpoint_path=checkpoint_path)
+    write_coverage_artifacts(coverage, args.artifact_dir)
+    write_raw_integrity_artifacts(integrity, args.artifact_dir)
+    disk_after = _disk_dict(guard)
+    baseline = {
+        "command": "harvest-run",
+        "data_dir": data_dir,
+        "deadline_mode": deadline.mode,
+        "existing_raw_is_protected": True,
+    }
+    write_final_report(
+        render_final_report(
+            baseline=baseline,
+            inventory=inventory,
+            plan=plan,
+            summary=summary,
+            coverage=coverage,
+            integrity=integrity,
+            disk_before=disk_before,
+            disk_after=disk_after,
+        ),
+        Path(args.artifact_dir) / "final-report.md",
+    )
+    print(
+        f"harvest_complete requests={summary.api_requests} rows={summary.rows} "
+        f"size_bytes={summary.size_bytes} failures={len(summary.failures)} "
+        f"integrity={integrity['status']}"
+    )
+    return 2 if summary.failures else 0
+
+
+def _harvest_audit(args: argparse.Namespace) -> int:
+    settings = load_settings()
+    data_dir = _harvest_data_dir(args, settings)
+    inventory_path = Path(args.inventory)
+    plan_path = Path(args.plan)
+    inventory = load_api_inventory(inventory_path) if inventory_path.exists() else None
+    plan = load_download_plan(plan_path) if plan_path.exists() else None
+    checkpoint_path = data_dir / "state" / "harvest-checkpoints.json"
+    write_checkpoint_failures(checkpoint_path, Path(args.artifact_dir) / "failures.json")
+    coverage = build_coverage(
+        data_dir,
+        inventory=inventory,
+        plan=plan,
+        checkpoint_path=checkpoint_path,
+    )
+    integrity = build_raw_integrity(data_dir, checkpoint_path=checkpoint_path)
+    write_coverage_artifacts(coverage, args.artifact_dir)
+    write_raw_integrity_artifacts(integrity, args.artifact_dir)
+    guard = DiskGuard(
+        data_dir,
+        soft_free_bytes=plan.soft_free_space if plan else SOFT_FREE_SPACE,
+        hard_free_bytes=plan.hard_free_space if plan else HARD_FREE_SPACE,
+    )
+    write_final_report(
+        render_final_report(
+            baseline={"command": "harvest-audit", "data_dir": data_dir},
+            inventory=inventory,
+            plan=plan,
+            summary=None,
+            coverage=coverage,
+            integrity=integrity,
+            disk_before=_disk_dict(guard),
+            disk_after=_disk_dict(guard),
+        ),
+        Path(args.artifact_dir) / "final-report.md",
+    )
+    print(
+        f"coverage={args.artifact_dir}/coverage.json "
+        f"integrity={integrity['status']} files={integrity['files']} "
+        f"rows={integrity['rows']} size_bytes={integrity['size_bytes']}"
+    )
+    return 0 if integrity["status"] == "PASS" else 2
+
+
 
 
 def _market_dataset_selection(values: list[str]) -> tuple[str, ...]:
@@ -1704,6 +2003,10 @@ def main(argv: list[str] | None = None) -> int:
         "market-capacity-plan": _market_capacity_plan,
         "verify-market": _verify_market,
         "inventory": _inventory,
+        "harvest-inventory": _harvest_inventory,
+        "harvest-plan": _harvest_plan,
+        "harvest-run": _harvest_run,
+        "harvest-audit": _harvest_audit,
         "sync-daily": _sync_daily,
         "replay": _replay,
         "replay-variants": _replay_variants,

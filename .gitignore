@@ -51,6 +51,10 @@ data/state/*
 !examples/sample/
 !examples/sample/**
 
+# Local harvest execution logs/pid; reports and manifests remain reviewable.
+artifacts/data-harvest/harvest-run.log
+artifacts/data-harvest/harvest-run.pid
+
 # Python
 __pycache__/
 *.py[cod]
