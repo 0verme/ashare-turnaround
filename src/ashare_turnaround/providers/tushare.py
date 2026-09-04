@@ -119,6 +119,7 @@ def _classify_error(exc: BaseException) -> str:
             "权限",
             "积分",
             "token无效",
+            "token不对",
             "token invalid",
         )
     ):
@@ -131,13 +132,18 @@ def _classify_error(exc: BaseException) -> str:
             "invalid api",
             "接口不存在",
             "不存在该接口",
+            "请指定正确的接口名",
+            "请指定正确的接口",
             "404",
         )
     ):
         return "not_found"
     if isinstance(exc, (json.JSONDecodeError, KeyError, TypeError)):
         return "compatibility"
-    if any(term in text for term in ("json", "html", "字段", "响应格式", "response format")):
+    if any(
+        term in text
+        for term in ("json", "html", "字段", "必填参数", "响应格式", "response format")
+    ):
         return "compatibility"
     return "unknown"
 
