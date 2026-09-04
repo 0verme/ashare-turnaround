@@ -259,7 +259,7 @@
 
 ## Tests
 
-- pytest: `100 passed, 1 skipped (live integration intentionally skipped)`
+- pytest: `227 passed, 1 skipped (live integration intentionally skipped)`
 - ruff: `pass`
 - compileall: `pass`
 

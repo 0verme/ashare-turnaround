@@ -140,7 +140,7 @@
 
 - `raw-integrity.json`：`PASS`。zero-byte、temporary、unreadable Parquet、checkpoint/path mismatch、checkpoint/row-count mismatch 均为 0。
 - 审计仍报告既有/原始数据 warning：4 个 schema drift 数据集、558 个文件内重复 identity 行、1,081 个 suspicious-small partitions；均未静默删除或去重。
-- 全量测试：`100 passed, 1 skipped`；ruff、compileall 通过。
+- 全量测试：`227 passed, 1 skipped`；ruff、compileall 通过。
 - token 过期后没有远程重试；无 Score/Scanner/Feature 改动，无生产接入。
 - 详细机器可读登记：`coverage.json`；失败明细：`failures.json`；运行方法：`docs/data-harvest-runbook.md`。
 
