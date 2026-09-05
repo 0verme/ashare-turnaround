@@ -384,9 +384,9 @@ that the Scanner produces economic alpha.
 | branch | `research/baseline-evaluation-campaign` |
 | contract/audit commit | `9379ad8` |
 | outcome/provenance commits | `4cdc9e1`, `c089f18`, `329af39` |
-| report commit | generated with this research report; see `git log` |
-| push / PR | not performed yet in this local report state |
-| CI | not run remotely |
+| report commit | `3b64792` plus final provenance update (see `git log`) |
+| push / PR | PASS；PR #44: https://github.com/0verme/ashare-turnaround/pull/44 |
+| CI | PASS；Quality gates，2m26s |
 
 No automatic merge was performed. Baseline evaluation stops here; Feature
 Ablation / Stability #18 is not started.
