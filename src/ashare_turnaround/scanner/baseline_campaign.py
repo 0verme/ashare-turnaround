@@ -176,11 +176,20 @@ def _logical_path(path: Path, artifact_root: Path) -> str:
 
 def _artifact_sidecar(path: Path) -> dict[str, Any]:
     directory = path.parent.parent
+    merged: dict[str, Any] = {}
     for name in ("machine-audit.json", "summary.json", "driver-result.json"):
         sidecar = _json_object(directory / name)
-        if sidecar:
-            return sidecar
-    return {}
+        if not sidecar:
+            continue
+        for key, value in sidecar.items():
+            if key not in merged:
+                merged[key] = value
+        if isinstance(sidecar.get("summary"), dict):
+            summary = merged.setdefault("summary", {})
+            if isinstance(summary, dict):
+                for key, value in sidecar["summary"].items():
+                    summary.setdefault(key, value)
+    return merged
 
 
 def _sidecar_value(sidecar: dict[str, Any], *paths: tuple[str, ...]) -> Any:
@@ -297,11 +306,12 @@ def project_artifact_top_n(
             ("eligible_count",),
             ("summary", "ranking_eligible_count"),
         ),
-        "formal_top_n_count": _sidecar_value(
+        "source_formal_top_n_count": _sidecar_value(
             sidecar,
             ("formal_top_n_count",),
             ("summary", "top_n_candidate_count"),
         ),
+        "projected_top_n_count": len(rows),
         "pit_violations": len(audit.get("violations", [])) if isinstance(audit, dict) else 0,
         "input_manifest_id": _sidecar_value(sidecar, ("input_manifest_id",)),
         "artifact_status": "REUSED_COMPATIBLE_FULL_REPLAY",
@@ -408,7 +418,8 @@ def run_lightweight_snapshot_campaign(
                     "logical_artifact_reference": _logical_path(candidates[0], artifact_base),
                     "candidate_count": metadata.get("candidate_count"),
                     "ranking_eligible_count": metadata.get("ranking_eligible_count"),
-                    "formal_top_n_count": metadata.get("formal_top_n_count"),
+                    "source_formal_top_n_count": metadata.get("source_formal_top_n_count"),
+                    "projected_top_n_count": metadata.get("projected_top_n_count"),
                     "snapshot_id": str(frame["snapshot_id"].dropna().iloc[0])
                     if "snapshot_id" in frame and frame["snapshot_id"].notna().any()
                     else None,

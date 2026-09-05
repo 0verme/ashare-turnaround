@@ -692,11 +692,13 @@ def _market_cap_buckets(
         or not {"ts_code", "trade_date"}.issubset(exposures.columns)
     ):
         return result
-    frame = exposures.copy()
-    frame["_date"] = normalize_date_series(frame["trade_date"])
-    cap_column = "total_mv" if "total_mv" in frame.columns else "market_cap"
-    if cap_column not in frame.columns:
+    cap_column = "total_mv" if "total_mv" in exposures.columns else "market_cap"
+    if cap_column not in exposures.columns:
         return result
+    requested_dates = set(dates)
+    normalized_dates = normalize_date_series(exposures["trade_date"])
+    frame = exposures.loc[normalized_dates.isin(requested_dates), ["ts_code", cap_column]].copy()
+    frame["_date"] = normalized_dates.loc[frame.index].to_numpy()
     frame["_cap"] = pd.to_numeric(frame[cap_column], errors="coerce")
     frame = frame.loc[frame["_date"].notna() & frame["_cap"].notna() & frame["_cap"].gt(0)]
     for date_value in sorted(set(dates)):
@@ -712,6 +714,25 @@ def _market_cap_buckets(
             bucket = "small" if fraction <= 1 / 3 else "mid" if fraction <= 2 / 3 else "large"
             result[(str(row["ts_code"]), date_value)] = bucket
     return result
+
+
+def _exact_reference_row(
+    reference_data: pd.DataFrame | None, code: str, as_of: pd.Timestamp
+) -> pd.Series | None:
+    """Return only a reference observation recorded on the exact as-of date."""
+
+    if reference_data is None or reference_data.empty or "ts_code" not in reference_data.columns:
+        return None
+    matched = reference_data.loc[reference_data["ts_code"].astype("string").eq(code)].copy()
+    if matched.empty:
+        return None
+    for field_name in ("as_of_date", "trade_date", "effective_date"):
+        if field_name not in matched.columns:
+            continue
+        dates = normalize_date_series(matched[field_name])
+        exact = matched.loc[dates.eq(as_of)]
+        return exact.sort_index(kind="stable").iloc[-1] if not exact.empty else None
+    return matched.iloc[-1]
 
 
 def _metric_value(row: pd.Series | None, metric: str) -> float | None:
@@ -840,7 +861,22 @@ def build_fundamental_history(indicators: pd.DataFrame | None) -> pd.DataFrame:
 
     if indicators is None or indicators.empty or "ts_code" not in indicators.columns:
         return pd.DataFrame()
-    frame = indicators.copy()
+    required_columns = {
+        "ts_code",
+        "end_date",
+        "ann_date",
+        "update_flag",
+        "tr_yoy",
+        "or_yoy",
+        "netprofit_yoy",
+        "dt_netprofit_yoy",
+        "op_yoy",
+        "netprofit_margin",
+        "q_ocf_to_sales",
+        "ocf_to_sales",
+    }
+    columns = [column for column in indicators.columns if column in required_columns]
+    frame = indicators.loc[:, columns].copy()
     output = pd.DataFrame(index=frame.index)
     output["ts_code"] = frame["ts_code"]
     output["report_period"] = frame.get("end_date", pd.Series(pd.NaT, index=frame.index))
@@ -1513,6 +1549,18 @@ def evaluate_scans(
             )
     exposure_dates = [pd.Timestamp(value).normalize() for value in selected["_as_of"]]
     cap_buckets = _market_cap_buckets(exposures, exposure_dates)
+    exposure_lookup = exposures
+    if (
+        exposures is not None
+        and not exposures.empty
+        and "ts_code" in exposures.columns
+        and "trade_date" in exposures.columns
+    ):
+        exposure_dates_series = normalize_date_series(exposures["trade_date"])
+        exposure_mask = exposures["ts_code"].astype("string").isin(
+            codes
+        ) & exposure_dates_series.le(max(exposure_dates))
+        exposure_lookup = exposures.loc[exposure_mask].copy()
     fundamental_rows: list[dict[str, Any]] = []
     fundamental_by_key: dict[tuple[str, str], dict[str, Any]] = {}
     market_rows: list[dict[str, Any]] = []
@@ -1524,7 +1572,11 @@ def evaluate_scans(
         rank_value = pd.to_numeric(selection.get("rank"), errors="coerce")
         rank = int(rank_value) if pd.notna(rank_value) else None
         reference = _reference_row(stock_basic, code, as_of)
-        exposure_reference = _reference_row(exposures, code, as_of)
+        exposure_reference = (
+            _exact_reference_row(exposure_lookup, code, as_of)
+            if settings.market_cap_bucket_convention == "as_of_cross_section_tercile"
+            else _reference_row(exposure_lookup, code, as_of)
+        )
         universe_status = _historical_universe_status(selection, reference, as_of)
         industry, market_cap, industry_source, market_cap_source = _exposure_values(
             selection,
