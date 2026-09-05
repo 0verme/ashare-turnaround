@@ -1,80 +1,108 @@
-# Scanner evaluation contract
+# Scanner evaluation framework
 
-The evaluation workflow tests frozen scanner selections. It is not a trading
-backtest and does not tune the score from the same sample it reports.
+The shared `scanner.evaluation` module (`evaluation-v3`) evaluates frozen scanner
+selections. It is not a trading backtest and never tunes the score from the
+same observations it reports. The calibrated campaign freezes the more specific
+`baseline-evaluation-contract-v1`.
 
 ## Declared conventions
 
-`EvaluationConfig` is serialized into every report together with a stable
-fingerprint. The default contract is:
+`EvaluationConfig` is serialized with a stable fingerprint. The baseline
+configuration is:
 
-- 20, 60, 120, and 250 open-market-day horizons;
-- entry at the supplied close on the scan `as_of_date` and exit at the close on
-  the Nth subsequent market date;
-- candidate and benchmark use the same entry and exit dates, including when a
-  candidate is suspended;
-- each scan date is an independent, overlapping, equal-weight Top-N cohort;
-- hit rate means a positive candidate return;
-- turnover is Top-N Jaccard turnover between consecutive scan dates;
-- transaction cost is a declared round-trip basis-point deduction;
-- a security delisted inside the holding window receives the declared
-  `delisted_return` only when a dated delisting reference proves the event;
-- all other missing or failed observations remain missing with a reason code.
+- Top-20 formal rows with `ranking_eligible=true`;
+- 20, 60, 120, and 250 open SSE `trade_cal` sessions;
+- entry at the scanner `as_of` close;
+- exit at the close on the Nth strictly subsequent session;
+- benchmark `000300.SH` / CSI 300 from `index_daily`;
+- stock return from exact endpoint `close × adj_factor` values;
+- benchmark return from raw index close on the same endpoint dates;
+- 30 bps fixed round-trip total transaction-cost deduction;
+- independent, overlapping, equal-weight cohort summaries;
+- dated delisting inside a window receives the declared `delisted_return`;
+- all other unavailable observations remain in the output with a reason code.
 
-The report contains candidate and cohort return, net return, benchmark excess
-return, median, hit rate, price-path and cohort drawdown, candidate/sample
-counts, coverage, missingness, turnover, industry weights, market-cap
-distribution, and fundamental-improvement evidence.
+The output keeps separate `market_outcomes` and `fundamental_outcomes` tables.
+The older `observations` table remains a compatibility view; it is not a joint
+score or label.
 
 ## Required research inputs
 
-The scan Parquet files should be produced by `replay`, `replay-variants`, or
-`scan`. New artifacts carry `snapshot_id`, `run_id`, score configuration
-fingerprint, and frozen historical-universe membership on every selected row.
+Scan Parquet files should be produced by `replay`, `scan`, or the lightweight
+Issue #32 projection. A baseline row carries `snapshot_id`, `run_id`, score
+configuration fingerprint, contract versions, and `ranking_eligible`.
 
-Evaluation also consumes:
+The evaluator consumes:
 
-- `daily`, containing candidates and the declared benchmark code;
-- historical `stock_basic`, including listed, delisted, and pre-listing rows,
-  `list_date`, and `delist_date` where applicable;
-- dated `daily_basic` exposure rows, especially `total_mv`;
-- an optional PIT fundamental-feature history supplied with `--fundamentals`.
+- `daily` candidate prices;
+- `index_daily` for the fixed CSI 300 benchmark;
+- open-session `trade_cal`;
+- `adj_factor` for stock endpoint adjustment;
+- dated `stock_basic` list/delist reference and `daily_basic.total_mv` exposure;
+- optional `fina_indicator`-derived future fundamental history.
 
-The fundamental history must include `ts_code`, an availability field such as
-`actual_available_date` or `f_ann_date`, a report period, and the declared
-metrics. The default metrics are `revenue_yoy`, `net_profit_yoy`, and
-`operating_profit_yoy`. The first subsequently available report inside the
-holding window is compared with the frozen scan value (or the last PIT baseline
-available at the scan date). Price return and fundamental improvement remain
-separate outcomes.
+Current `stock_basic.industry` is not used as a historical baseline fallback;
+Issue #32 marks that state `UNSUPPORTED_PIT`. Industry is reported only when it
+comes from a frozen scan or dated exposure row.
 
-Daily reference synchronization fetches `stock_basic` for `L`, `D`, and `P`
-statuses. A security whose current status is `D` remains eligible in a replay
-strictly before its dated delisting. Missing dates or historical membership do
-not silently turn into a clean observation.
+## Price-adjustment gate
 
-## Reproducible command
+The baseline uses:
+
+```text
+adjusted_close = close × adj_factor
+adjusted_return = adjusted_close_exit / adjusted_close_entry - 1
+```
+
+Both exact endpoints require a finite positive factor. Missing or ambiguous
+factors produce `missing_adjustment_factor_*`, not a raw-close fallback. CSI
+300 is explicitly raw index level because no index adjustment-factor corpus is
+available. Synthetic split/dividend boundary tests protect this contract.
+
+## Fundamental follow-through
+
+`build_fundamental_history()` creates an evaluation-only projection from
+`fina_indicator`. It preserves report period, availability date, and disclosure
+version. The evaluator selects the first two **distinct report periods** whose
+initial availability is after the scanner snapshot; later revisions are
+recorded but are not used. It reports Revenue YoY, Profit YoY, margin,
+CFO/cash conversion, next-report follow-through, next-two-report persistence,
+and false-turnaround status with metric-level missing reasons.
+
+Future outcome rows cannot flow back into selection, ranking, score, or config.
+Missing reports and metrics are unavailable evidence, not failures.
+
+## Reproducible commands
+
+Generic evaluation remains available:
 
 ```bash
 python -m ashare_turnaround evaluate \
   --scans data/derived/replays/replay-20250630-fundamental_only.parquet \
-  --data-dir data \
-  --benchmark-code 000300.SH \
-  --horizons 20 60 120 250 \
-  --fundamentals data/derived/research/fundamental-history.parquet \
-  --report data/reports/evaluation-fundamental_only.json
+  --data-dir data --benchmark-code 000300.SH \
+  --horizons 20 60 120 250 --fundamentals data/derived/research/fundamental-history.parquet \
+  --report data/reports/evaluation.json
 ```
 
-The JSON report stores the full configuration, limitations, input digests,
-source snapshot/run ids, summaries, and reason-coded observations. `PASS` means
-all declared evidence was available. `PARTIAL` is an intentional research
-result when a benchmark window, historical-universe proof, exposure, price, or
-fundamental observation is incomplete.
+The frozen campaign uses one shared engine and a checkpointed lightweight
+snapshot projection:
 
-## Limitations
+```bash
+python -m ashare_turnaround baseline-evaluate \
+  --schedule data/reports/issue32-target-schedule/validation-targets.json \
+  --artifact-root <Issue-32-local-artifact-root> \
+  --data-dir data --output data/reports/baseline-evaluation-campaign \
+  --report data/reports/baseline-evaluation.json
+```
 
-Return quality depends on the supplied close series and its corporate-action
-adjustment. Overlapping cohorts are not a capital-constrained live portfolio.
-Static industry fallback values are identified as such. The framework reports
-evidence; it does not claim tradability, future performance, or investment
-suitability.
+`PASS`/`PARTIAL` describes outcome availability and input completeness, not a
+claim that the Scanner has economic alpha. The report always includes input
+digests, provenance, coverage, missingness, and limitations.
+
+## Scope boundary
+
+This framework does not implement Feature Ablation, Score v2 selection, weight
+or threshold tuning, Top-N search, holding-policy optimization, transaction-cost
+sensitivity, benchmark search, or live trading. Exit/holding rules such as
+three-month exit, next-quarter exit, and take-profit belong to a later,
+separately frozen study.
