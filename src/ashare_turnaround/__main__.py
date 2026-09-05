@@ -1494,6 +1494,15 @@ def _scan_compare(args: argparse.Namespace) -> int:
     return 0
 
 
+def _json_records(frame: pd.DataFrame) -> list[dict[str, object]]:
+    """Serialize a research frame with standards-compliant JSON nulls."""
+
+    if frame.empty:
+        return []
+    payload = json.loads(frame.to_json(orient="records", date_format="iso"))
+    return payload if isinstance(payload, list) else []
+
+
 def _evaluate(args: argparse.Namespace) -> int:
     try:
         scans = pd.concat(
@@ -1556,11 +1565,11 @@ def _evaluate(args: argparse.Namespace) -> int:
                     "configuration": result.configuration,
                     "limitations": list(result.limitations),
                     "provenance": result.provenance,
-                    "summary": result.summary.to_dict(orient="records"),
-                    "observations": result.observations.to_dict(orient="records"),
-                    "market_outcomes": result.market_outcomes.to_dict(orient="records"),
-                    "fundamental_outcomes": result.fundamental_outcomes.to_dict(orient="records"),
-                    "fundamental_summary": result.fundamental_summary.to_dict(orient="records"),
+                    "summary": _json_records(result.summary),
+                    "observations": _json_records(result.observations),
+                    "market_outcomes": _json_records(result.market_outcomes),
+                    "fundamental_outcomes": _json_records(result.fundamental_outcomes),
+                    "fundamental_summary": _json_records(result.fundamental_summary),
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -1634,10 +1643,10 @@ def _baseline_evaluate(args: argparse.Namespace) -> int:
                     "configuration": result.configuration,
                     "limitations": list(result.limitations),
                     "provenance": result.provenance,
-                    "summary": result.summary.to_dict(orient="records"),
-                    "market_outcomes": result.market_outcomes.to_dict(orient="records"),
-                    "fundamental_outcomes": result.fundamental_outcomes.to_dict(orient="records"),
-                    "fundamental_summary": result.fundamental_summary.to_dict(orient="records"),
+                    "summary": _json_records(result.summary),
+                    "market_outcomes": _json_records(result.market_outcomes),
+                    "fundamental_outcomes": _json_records(result.fundamental_outcomes),
+                    "fundamental_summary": _json_records(result.fundamental_summary),
                 },
                 ensure_ascii=False,
                 indent=2,

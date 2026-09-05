@@ -125,7 +125,24 @@ ordinary growth value is fabricated. Sign transitions are evidence, not an
 ordinary growth rate. Missing report, second report, or metric remains a
 reason-coded unavailable outcome and is not converted into failure.
 
-## 4. Exposure and segment contract
+## 4. Joint diagnostic contract
+
+The two branches are joined only for diagnosis, never for selection or a new
+score. For every fixed market horizon, use the gross
+`excess_return > 0` flag and the `next_report` `fundamental_improved` flag:
+
+```text
+A = fundamental+ and market excess+
+B = fundamental- and market excess+
+C = fundamental+ and market excess-
+D = fundamental- and market excess-
+```
+
+Rows missing either outcome are excluded from the quadrant denominator and are
+reported separately as unavailable. The matrix is reported per horizon; no
+horizon is selected as the winner.
+
+## 5. Exposure and segment contract
 
 - Market-cap exposure uses exact as-of `daily_basic.total_mv` and deterministic
   as-of cross-sectional terciles (`small`, `mid`, `large`).
@@ -136,7 +153,7 @@ reason-coded unavailable outcome and is not converted into failure.
   market-cap bucket, industry where available, and horizon. No segment may be
   used to alter the baseline.
 
-## 5. Availability and schema
+## 6. Availability and schema
 
 The output has separate `market_outcomes` and `fundamental_outcomes` tables.
 The compatibility `observations` view contains the same rows but does not merge
@@ -149,7 +166,7 @@ contract versions, calendar source, benchmark identity, adjustment convention,
 fundamental revision policy, and the explicit separation/future-evaluation
 flags.
 
-## 6. Scope guard
+## 7. Scope guard
 
 This campaign has no:
 

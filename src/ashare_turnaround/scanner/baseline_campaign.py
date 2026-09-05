@@ -390,7 +390,12 @@ def run_lightweight_snapshot_campaign(
         }:
             frame = pd.read_parquet(snapshot_path)
             scan_frames.append(frame)
-            records[month] = {**old, "status": old["status"], "reuse": "checkpoint"}
+            records[month] = {
+                **old,
+                "status": old["status"],
+                "reuse": "checkpoint",
+                "projected_top_n_count": len(frame),
+            }
             pit_violations += int(old.get("pit_violations", 0) or 0)
             continue
         candidates = [
@@ -453,6 +458,7 @@ def run_lightweight_snapshot_campaign(
             # Exact replay support is intentionally opt-in and imported lazily
             # so a projection-only campaign never initializes the scanner.
             from .replay import ReplayConfig, run_replay
+            from .replay_validation import validate_replay_pit
 
             try:
                 replay = run_replay(
@@ -462,6 +468,12 @@ def run_lightweight_snapshot_campaign(
                 )
                 if replay.status not in {"PASS", "PARTIAL"}:
                     raise RuntimeError(f"replay_status={replay.status}")
+                violations = validate_replay_pit(
+                    replay,
+                    benchmark_id="000300.SH",
+                )
+                if violations:
+                    raise RuntimeError("PIT violation: " + "; ".join(violations))
                 frame = replay.ranked.copy()
                 frame["target_month"] = month
                 frame["market_regime"] = regime
@@ -475,9 +487,7 @@ def run_lightweight_snapshot_campaign(
                     "snapshot_path": str(snapshot_path),
                     "snapshot_id": replay.snapshot_id,
                     "run_id": replay.run_id,
-                    "score_config_fingerprint": replay.configuration.get("score", {}).get(
-                        "fingerprint"
-                    ),
+                    "score_config_fingerprint": replay.config_fingerprint,
                     "pit_violations": 0,
                     "warnings": list(replay.warnings),
                 }
