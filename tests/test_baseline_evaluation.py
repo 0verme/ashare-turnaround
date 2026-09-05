@@ -217,7 +217,7 @@ def test_missing_benchmark_is_reason_coded_without_absolute_return_fallback() ->
     assert row["forward_return"] is not None
     assert row["benchmark_return"] is None
     assert row["excess_return"] is None
-    assert row["benchmark_status"] == "missing_price_history"
+    assert row["benchmark_status"] == "missing_benchmark_history"
     assert "benchmark_outcome_missing_for_some_candidates" in result.warnings
 
 

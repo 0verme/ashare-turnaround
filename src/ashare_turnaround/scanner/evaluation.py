@@ -294,16 +294,19 @@ def _forward_observation(
     *,
     require_adjustment: bool = False,
     suspended_dates: set[pd.Timestamp] | None = None,
+    missing_history_status: str = "missing_price_history",
+    missing_entry_status: str = "missing_entry_price",
+    missing_endpoint_status: str = "missing_horizon_price",
 ) -> _ForwardObservation:
     if target_date is None:
         return _ForwardObservation(
             None, None, None, "incomplete_market_window", "missing_market_window"
         )
     if history.empty:
-        return _ForwardObservation(None, _date_text(target_date), None, "missing_price_history")
+        return _ForwardObservation(None, _date_text(target_date), None, missing_history_status)
     start = history.loc[history["_date"].eq(as_of)]
     if start.empty:
-        return _ForwardObservation(None, _date_text(target_date), None, "missing_entry_price")
+        return _ForwardObservation(None, _date_text(target_date), None, missing_entry_status)
     start_row = start.iloc[-1]
     raw_start = _finite_number(start_row.get("_raw_close"))
     start_price = _finite_number(start_row.get("_close"))
@@ -326,7 +329,7 @@ def _forward_observation(
         status = (
             "suspended_at_exit"
             if suspended_dates and target_date in suspended_dates
-            else "missing_horizon_price"
+            else missing_endpoint_status
         )
         reason = "suspended_at_exit" if status == "suspended_at_exit" else None
         return _ForwardObservation(
@@ -1608,6 +1611,9 @@ def evaluate_scans(
                     as_of,
                     target_date,
                     require_adjustment=False,
+                    missing_history_status="missing_benchmark_history",
+                    missing_entry_status="missing_benchmark_entry",
+                    missing_endpoint_status="missing_benchmark_endpoint",
                 )
             else:
                 benchmark = _ForwardObservation(
@@ -1842,9 +1848,42 @@ def evaluate_scans(
     )
     status = "PARTIAL" if baseline_strict and warnings else "PASS"
     market_columns = [
-        column for column in market_frame.columns if not column.startswith("fundamental_")
+        "ts_code",
+        "as_of_date",
+        "rank",
+        "snapshot_id",
+        "run_id",
+        "score_version",
+        "score_config_fingerprint",
+        "snapshot_regime",
+        "horizon",
+        "holding_days",
+        "entry_date",
+        "end_date",
+        "forward_return",
+        "net_forward_return",
+        "raw_entry_price",
+        "raw_exit_price",
+        "adjusted_entry_price",
+        "adjusted_exit_price",
+        "benchmark_return",
+        "benchmark_entry_date",
+        "benchmark_end_date",
+        "excess_return",
+        "net_excess_return",
+        "forward_max_drawdown",
+        "observation_status",
+        "observation_reason",
+        "benchmark_status",
+        "benchmark_reason",
+        "historical_universe_status",
+        "industry",
+        "market_cap",
+        "market_cap_bucket",
+        "industry_source",
+        "market_cap_source",
     ]
-    market_outcomes = market_frame[market_columns].copy()
+    market_outcomes = market_frame.loc[:, market_columns].copy()
     fundamental_summary = _fundamental_summary(fundamental_frame, settings)
     provenance["market_outcome_rows"] = int(len(market_outcomes))
     provenance["fundamental_outcome_rows"] = int(len(fundamental_frame))
