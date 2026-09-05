@@ -1,0 +1,118 @@
+{
+  "contract_version": "baseline-evaluation-contract-v1",
+  "engine_version": "evaluation-v3",
+  "status": "PARTIAL",
+  "decision": "INSUFFICIENT_EVIDENCE",
+  "snapshot_campaign": {
+    "schedule_targets": 120,
+    "available_targets": 108,
+    "completed": 11,
+    "reused": 11,
+    "exact_new_replays": 0,
+    "unavailable_compatible": 97,
+    "failed": 0,
+    "pit_violations": 0,
+    "rows": 220
+  },
+  "return_semantics": {
+    "contract": "adjusted_close_adj_factor_v1",
+    "stock_formula": "(close_exit * adj_factor_exit) / (close_entry * adj_factor_entry) - 1",
+    "benchmark": "000300.SH raw index_daily.close",
+    "selected_endpoint_factors": "980/980 valid positive"
+  },
+  "market": [
+    {
+      "horizon": 20,
+      "eligible": 220,
+      "available": 199,
+      "coverage": 0.9045454545,
+      "mean": 0.0420144789,
+      "median": 0.0297392550,
+      "net_mean": 0.0390144789,
+      "benchmark_mean": 0.0199082832,
+      "excess_mean": 0.0222361785,
+      "absolute_hit_rate": 0.6231155779,
+      "excess_hit_rate": 0.5527638195,
+      "cohort_drawdown": -0.0646322108
+    },
+    {
+      "horizon": 60,
+      "eligible": 220,
+      "available": 200,
+      "coverage": 0.9090909091,
+      "mean": -0.0022569009,
+      "median": -0.0334802881,
+      "net_mean": -0.0052569009,
+      "benchmark_mean": 0.0158958617,
+      "excess_mean": -0.0181527625,
+      "absolute_hit_rate": 0.4100000000,
+      "excess_hit_rate": 0.3650000000,
+      "cohort_drawdown": -0.1757108972
+    },
+    {
+      "horizon": 120,
+      "eligible": 220,
+      "available": 199,
+      "coverage": 0.9045454545,
+      "mean": 0.0797781816,
+      "median": 0.0269438029,
+      "net_mean": 0.0767781816,
+      "benchmark_mean": 0.0922012645,
+      "excess_mean": -0.0123654736,
+      "absolute_hit_rate": 0.5276381900,
+      "excess_hit_rate": 0.4170854271,
+      "cohort_drawdown": -0.1222624867
+    },
+    {
+      "horizon": 250,
+      "eligible": 220,
+      "available": 180,
+      "coverage": 0.8181818182,
+      "mean": 0.0755886766,
+      "median": 0.0018473692,
+      "net_mean": 0.0725886766,
+      "benchmark_mean": 0.1421724342,
+      "excess_mean": -0.0665837576,
+      "absolute_hit_rate": 0.5055555556,
+      "excess_hit_rate": 0.3388888889,
+      "cohort_drawdown": -0.1128472829
+    }
+  ],
+  "fundamental": {
+    "next_report": {
+      "eligible": 220,
+      "available": 220,
+      "follow_through": 34,
+      "follow_through_rate": 0.1545454545,
+      "false_turnaround": 186,
+      "false_turnaround_rate": 0.8454545455
+    },
+    "next_two_reports": {
+      "eligible": 220,
+      "available": 200,
+      "missing": 20,
+      "persistence": 17,
+      "persistence_rate": 0.085
+    },
+    "metrics": {
+      "revenue_yoy_rate": 0.3636363636,
+      "profit_yoy_rate": 0.2409090909,
+      "margin_rate": 0.3772727273,
+      "cfo_cash_conversion_rate": 0.4748858447
+    }
+  },
+  "joint_diagnostic_gross_excess": [
+    {"horizon": 20, "n": 199, "A": 27, "B": 83, "C": 7, "D": 82},
+    {"horizon": 60, "n": 200, "A": 20, "B": 53, "C": 14, "D": 113},
+    {"horizon": 120, "n": 199, "A": 17, "B": 66, "C": 17, "D": 99},
+    {"horizon": 250, "n": 180, "A": 11, "B": 50, "C": 21, "D": 98}
+  ],
+  "scope_guard": {
+    "score_tuning": false,
+    "threshold_tuning": false,
+    "top_n_search": false,
+    "holding_period_search": false,
+    "ablation": false,
+    "new_score_v2": false
+  }
+}

@@ -87,13 +87,19 @@ from .scanner.artifacts import (
     serialized_json_bytes,
     size_comparison,
 )
+from .scanner.baseline_campaign import run_lightweight_snapshot_campaign
 from .scanner.daily import (
     compare_scan_snapshots,
     read_scan_snapshot,
     scan_data,
     write_scan_snapshot,
 )
-from .scanner.evaluation import EvaluationConfig, evaluate_scans
+from .scanner.evaluation import (
+    EvaluationConfig,
+    build_fundamental_history,
+    evaluate_scans,
+    frozen_baseline_evaluation_config,
+)
 from .scanner.replay import (
     ReplayConfig,
     ReplayDiagnostics,
@@ -337,7 +343,6 @@ def _parser() -> argparse.ArgumentParser:
     harvest_audit.add_argument("--plan", default=str(ARTIFACT_DIR / "download-plan.json"))
     harvest_audit.add_argument("--artifact-dir", default=str(ARTIFACT_DIR))
 
-
     daily = subparsers.add_parser("sync-daily", help="synchronize one requested trading date")
     daily.add_argument("--date", dest="requested_date", default=None)
     daily.add_argument("--page-size", type=int, default=5000)
@@ -427,15 +432,39 @@ def _parser() -> argparse.ArgumentParser:
     evaluate = subparsers.add_parser("evaluate", help="evaluate frozen scanner snapshots")
     evaluate.add_argument("--scans", nargs="+", required=True)
     evaluate.add_argument("--data-dir", default="data")
-    evaluate.add_argument("--benchmark-code", default=None)
+    evaluate.add_argument("--benchmark-code", default=DEFAULT_BENCHMARK_CODE)
     evaluate.add_argument("--horizons", nargs="+", type=int, default=[20, 60, 120, 250])
     evaluate.add_argument("--top", type=int, default=20)
-    evaluate.add_argument("--transaction-cost-bps", type=float, default=0.0)
+    evaluate.add_argument(
+        "--transaction-cost-bps",
+        type=float,
+        default=30.0,
+        help="fixed round-trip deduction in basis points (baseline default: 30)",
+    )
     evaluate.add_argument("--delisted-return", type=float, default=-1.0)
     evaluate.add_argument("--historical-universe", default=None)
     evaluate.add_argument("--exposures", default=None)
     evaluate.add_argument("--fundamentals", default=None)
     evaluate.add_argument("--report", default="data/reports/evaluation.json")
+
+    baseline_evaluate = subparsers.add_parser(
+        "baseline-evaluate",
+        help="run the frozen Top-20 baseline campaign and independent outcomes",
+    )
+    baseline_evaluate.add_argument(
+        "--schedule",
+        default="data/reports/issue32-target-schedule/validation-targets.json",
+    )
+    baseline_evaluate.add_argument(
+        "--artifact-root",
+        default="data/reports",
+        help="local/external root containing reusable Issue #32 full artifacts",
+    )
+    baseline_evaluate.add_argument("--data-dir", default="data")
+    baseline_evaluate.add_argument("--output", default="data/reports/baseline-evaluation-campaign")
+    baseline_evaluate.add_argument("--report", default="data/reports/baseline-evaluation.json")
+    baseline_evaluate.add_argument("--run-missing", action="store_true")
+    baseline_evaluate.add_argument("--max-new-snapshots", type=int, default=0)
 
     ablate = subparsers.add_parser(
         "ablate", help="analyze feature stability from saved variant evaluations"
@@ -959,8 +988,6 @@ def _harvest_audit(args: argparse.Namespace) -> int:
     return 0 if integrity["status"] == "PASS" else 2
 
 
-
-
 def _market_dataset_selection(values: list[str]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(DEFAULT_MARKET_BOOTSTRAP_DATASETS if "all" in values else values))
 
@@ -1268,9 +1295,7 @@ def _artifact_audit(args: argparse.Namespace) -> int:
         attribution = audit_feature_vectors(vectors, top_n=args.top)
         legacy_bytes = len(serialized_json_bytes(legacy))
         normalized_bytes = len(serialized_json_bytes(normalized))
-        normalized_replay = (
-            normalized.get("replay") if "replay" in normalized else normalized
-        )
+        normalized_replay = normalized.get("replay") if "replay" in normalized else normalized
         size = size_comparison(
             replay,
             normalized_replay,
@@ -1360,9 +1385,7 @@ def _replay_profile(args: argparse.Namespace) -> int:
     print(f"candidate_seconds_per_candidate={performance.get('candidate_seconds_per_candidate')}")
     print(f"full_replay_eta_seconds={performance.get('full_replay_eta_seconds')}")
     resource_summary = result.summary.get("resource", {})
-    print(
-        f"peak_rss_diagnostic_bytes={resource_summary.get('peak_rss_diagnostic_bytes')}"
-    )
+    print(f"peak_rss_diagnostic_bytes={resource_summary.get('peak_rss_diagnostic_bytes')}")
     print(f"sampled_rss_bytes={performance.get('rss_peak_bytes')}")
     # A bounded diagnostic is intentionally not a validation PASS.  The
     # command succeeds when the bounded run itself has no hard failure.
@@ -1471,6 +1494,15 @@ def _scan_compare(args: argparse.Namespace) -> int:
     return 0
 
 
+def _json_records(frame: pd.DataFrame) -> list[dict[str, object]]:
+    """Serialize a research frame with standards-compliant JSON nulls."""
+
+    if frame.empty:
+        return []
+    payload = json.loads(frame.to_json(orient="records", date_format="iso"))
+    return payload if isinstance(payload, list) else []
+
+
 def _evaluate(args: argparse.Namespace) -> int:
     try:
         scans = pd.concat(
@@ -1485,20 +1517,42 @@ def _evaluate(args: argparse.Namespace) -> int:
         exposures = (
             _read_research_frame(args.exposures) if args.exposures else store.read("daily_basic")
         )
-        fundamentals = _read_research_frame(args.fundamentals) if args.fundamentals else None
+        daily = store.read("daily")
+        index_daily = store.read("index_daily")
+        trade_calendar = store.read("trade_cal")
+        adj_factor = store.read("adj_factor")
+        fundamentals = (
+            _read_research_frame(args.fundamentals)
+            if args.fundamentals
+            else build_fundamental_history(store.read("fina_indicator"))
+        )
+        # Empty optional frames are passed as ``None`` only for the old small
+        # compatibility fixtures.  A real evaluation with adjustment data
+        # keeps an explicitly empty benchmark/calendar frame fail-closed.
+        explicit_inputs = not adj_factor.empty
         result = evaluate_scans(
             scans,
-            store.read("daily"),
+            daily,
             config=EvaluationConfig(
                 horizons=tuple(args.horizons),
                 top_n=args.top,
                 benchmark_code=args.benchmark_code,
                 transaction_cost_bps=args.transaction_cost_bps,
                 delisted_return=args.delisted_return,
+                price_adjustment_convention=(
+                    "adjusted_close_adj_factor_v1" if explicit_inputs else "raw_close_legacy"
+                ),
+                require_adjustment_factor=explicit_inputs,
             ),
             stock_basic=stock_basic,
             exposures=exposures,
             fundamentals=fundamentals,
+            index_daily=(index_daily if not index_daily.empty or explicit_inputs else None),
+            trade_calendar=(
+                trade_calendar if not trade_calendar.empty or explicit_inputs else None
+            ),
+            adj_factor=(adj_factor if not adj_factor.empty else None),
+            suspensions=store.read("suspend_d"),
         )
         destination = Path(args.report)
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -1511,8 +1565,11 @@ def _evaluate(args: argparse.Namespace) -> int:
                     "configuration": result.configuration,
                     "limitations": list(result.limitations),
                     "provenance": result.provenance,
-                    "summary": result.summary.to_dict(orient="records"),
-                    "observations": result.observations.to_dict(orient="records"),
+                    "summary": _json_records(result.summary),
+                    "observations": _json_records(result.observations),
+                    "market_outcomes": _json_records(result.market_outcomes),
+                    "fundamental_outcomes": _json_records(result.fundamental_outcomes),
+                    "fundamental_summary": _json_records(result.fundamental_summary),
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -1548,6 +1605,65 @@ def _read_research_frame(path: str | Path) -> pd.DataFrame:
             raise ValueError(f"JSON research frame must contain an array: {source}")
         return pd.DataFrame(payload)
     raise ValueError(f"unsupported research frame: {source}")
+
+
+def _baseline_evaluate(args: argparse.Namespace) -> int:
+    try:
+        campaign = run_lightweight_snapshot_campaign(
+            schedule_path=args.schedule,
+            artifact_root=args.artifact_root,
+            output_dir=args.output,
+            data_dir=args.data_dir,
+            top_n=20,
+            run_missing=args.run_missing,
+            max_new_snapshots=args.max_new_snapshots,
+        )
+        store = RawParquetStore(args.data_dir)
+        result = evaluate_scans(
+            campaign.scans,
+            store.read("daily"),
+            config=frozen_baseline_evaluation_config(),
+            stock_basic=store.read("stock_basic"),
+            exposures=store.read("daily_basic"),
+            fundamentals=build_fundamental_history(store.read("fina_indicator")),
+            index_daily=store.read("index_daily"),
+            trade_calendar=store.read("trade_cal"),
+            adj_factor=store.read("adj_factor"),
+            suspensions=store.read("suspend_d"),
+        )
+        destination = Path(args.report)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(
+            json.dumps(
+                {
+                    "campaign": campaign.as_dict(),
+                    "config_version": result.config_version,
+                    "status": result.status,
+                    "warnings": list(result.warnings),
+                    "configuration": result.configuration,
+                    "limitations": list(result.limitations),
+                    "provenance": result.provenance,
+                    "summary": _json_records(result.summary),
+                    "market_outcomes": _json_records(result.market_outcomes),
+                    "fundamental_outcomes": _json_records(result.fundamental_outcomes),
+                    "fundamental_summary": _json_records(result.fundamental_summary),
+                },
+                ensure_ascii=False,
+                indent=2,
+                default=str,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    except (OSError, ValueError, KeyError, RuntimeError, TypeError) as exc:
+        print(f"baseline-evaluate failed: {exc}", file=sys.stderr)
+        return 2
+    print(
+        f"baseline_evaluation_status={result.status} "
+        f"snapshots={campaign.completed_count}/{campaign.available_target_count} "
+        f"report={args.report}"
+    )
+    return 0 if result.status in {"PASS", "PARTIAL"} else 2
 
 
 def _ablate(args: argparse.Namespace) -> int:
@@ -2016,6 +2132,7 @@ def main(argv: list[str] | None = None) -> int:
         "scan": _scan,
         "scan-compare": _scan_compare,
         "evaluate": _evaluate,
+        "baseline-evaluate": _baseline_evaluate,
         "ablate": _ablate,
         "report": _report,
     }
